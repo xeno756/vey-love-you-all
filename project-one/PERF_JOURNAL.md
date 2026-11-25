@@ -112,6 +112,40 @@ en 120 s. Le relais gagne environ 10 % : il reste une option.
 `vitesse:2` vaut donc environ 40 % de temps d'image en moins, mais n'est pas utilisable : il
 reste une copie de mémoire du jeu libérée alors que la carte s'en sert encore.
 
+### Pipelines refusés : 0 (25/11, 16 h 12 et 16 h 32)
+
+La carte n'a pas de barycentriques (`BarycentricsSupported` lu faux au démarrage). Depuis
+`12e7c2b`, un pixel shader qui les lit est traduit une seconde fois pour les lire dans des
+entrées ordinaires, et le pipeline reçoit un geometry shader généré qui les écrit.
+
+| Mesure, profil `rapide` | Avant | Après |
+|---|---|---|
+| Pipelines refusés par lancement | 3 à 8 | **0** (4 faits avec l'étage) |
+| Dessins laissés de côté pour refus, par image | 42 (34 cheveux, 4 peau, 4 halo) | 0 |
+| Temps d'image médian, mêmes plans | 335 ms | 334 ms |
+| 99 % des images sous | 1 138 ms | 839 ms |
+| Carte perdue | non | non |
+
+Les cheveux sont maintenant dessinés, mais mal : une masse pâle et morcelée autour de la tête
+(images enregistrées par le runtime, `..\victory-captures\essai-bary`). Ce qui vient de
+l'étage et ce qui vient de l'éclairage des cheveux du jeu, qui s'appuie sur son lancer de
+rayons, n'est pas établi. `VICTORY_BARYCENTRIC_GS=0` rend l'état d'avant (tête sans cheveux).
+
+### Le contrat de 20 images par seconde
+
+Pas tenu : 3 images par seconde en régime établi. Ce qui l'empêche, mesuré sur le lancement
+de 16 h 32 (moyennes par image) : processeur **113 ms**, carte **168 ms**, recopie **55 ms**.
+Le processeur et la recopie font à eux seuls 168 ms, plus de trois fois les 50 ms d'une image
+à 20 par seconde : même une carte infiniment rapide laisserait 6 images par seconde. Baisser
+encore la charge de la carte (résolution, effets) ne peut donc pas tenir le contrat ; c'est
+le travail du processeur qu'il faut réduire d'abord (préparation des soumissions, copies de
+la mémoire du jeu, recopie de ce que les shaders écrivent : `vitesse:2` en retire 40 %, mais
+perd encore la carte, BLOCKERS 11).
+
+Banc d'essai versionné : `project-one\banc.ps1` (lance, appuie jusqu'au monde, mesure 300 s,
+résume : médiane, 95e et 99e centiles, images de plus de 50 et de 200 ms, pipelines refusés,
+carte perdue).
+
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
@@ -129,4 +163,5 @@ premier `rapide`, 335 ms maintenant.
 | 25/11 | `9967d6a` | 4, réglages bas du jeu | ne pas donner `qualite-s` | 506 à 515 ms par image, 18,5 Go demandés | 440 ms, 14,9 Go | image non vérifiée ; une seule mesure |
 | 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
 | 25/11 | `2d8ba5a` | 5, recopie | ne pas donner `vitesse:2` | image noire avec `VICTORY_COPY_BACK_ONLY_READBACK` | image présente avec `VICTORY_COPY_BACK_SMALL_KB=1024`, environ 250 ms contre 400 | carte perdue une fois après 72 s : expérimental |
+| 25/11 | `12e7c2b` | 3, pipelines | `VICTORY_BARYCENTRIC_GS=0` | 3 à 8 pipelines refusés, 42 dessins par image perdus | 0 refusé, aucun dessin perdu pour refus ; même temps d'image | cheveux dessinés mais mal rendus |
 | 25/11 | `fd37912` | 2, figement | `sortie:960x540` le redonne | `maximum` : resté sur l'écran des licences | **non mesuré** ; `maximum` demande 1280 × 720, la taille vue en jeu | `maximum` laisse 8 groupes d'effets de côté : image possiblement fausse |

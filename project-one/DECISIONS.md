@@ -14,4 +14,6 @@ Prises le 25/11/2026 pour avancer sans poser de question. Chacune se change en l
 | 6 | Garde-t-on 960 × 540 ? | Non, plus aucun profil ne le demande. | Le jeu n'a pas dépassé l'écran des licences à cette taille. |
 | 7 | Préréglage bas du jeu (qualité Series S, mémoire Series X) ? | Oui : option `qualite-s`, écrite et mesurée le 25/11 à 14 h 21. Elle reste une option tant que l'image n'est pas vérifiée. | Le monde se charge en 150 s sans blocage et quatre lancements de suite ont tenu 300 s : les conditions de l'ordre des lots étaient remplies. |
 | 8 | Un chemin Vulkan pour les barycentriques ? | Non. | Ce runtime ne parle que D3D12. |
+| 12 | Le « gouverneur » qui baisse la qualité jusqu'à tenir 20 images par seconde ? | Pas écrit. | Sa propre règle de sortie s'applique déjà : même au plus bas, le processeur et la recopie dépassent 50 ms par image (168 ms mesurées). Il ne tiendrait rien ; le travail va au processeur. |
+| 13 | Un affichage dans l'image ? | Toujours la barre de titre et le CSV (décision 3). | Inchangé. |
 | 9 | Ordre des commits des lots 0 et 1 | Le lot 1 avant le lot 0. | Le fichier par image lit les compteurs que le lot 1 ajoute. La mesure de départ, elle, vient des journaux des lancements déjà faits. |
