@@ -57,8 +57,8 @@ rem
 rem Profils (les options ci-dessus deja reglees pour ce PC) :
 rem   lancer.cmd series-x rapide            720p et textures:2 : 4 fois moins de
 rem                                         pixels a calculer, textures 16 fois plus
-rem                                         legeres. Aucun effet n'est laisse de
-rem                                         cote : l'image doit rester juste
+rem                                         legeres ; sans l'eclairage indirect, qui
+rem                                         tachait l'image de rose et de bleu
 rem   lancer.cmd series-x maximum           720p, textures:3 et tous les groupes
 rem                                         d'effets sauf volumetrie (sans elle
 rem                                         l'image peut etre noire) : reflets,
@@ -281,6 +281,11 @@ rem 2 Go, 30 000 textures en attente de place).
 set "PROFIL=rapide"
 call :size 1280x720
 if not defined TEXTURES set "TEXTURES=2"
+rem L'eclairage indirect du jeu repose sur son lancer de rayons, que le runtime
+rem n'execute pas encore : calcule sans lui, il couvre l'image de taches roses et
+rem bleues (captures du 25/11, 14 h 31). Laisse de cote, les taches partent, les
+rem murs restent, les interieurs sont plus sombres, et la carte gagne 90 ms.
+call :without "eclairage-indirect"
 goto :eof
 
 rem Le profil maximum : tout ce qui peut etre reduit sans retirer un dessin.
