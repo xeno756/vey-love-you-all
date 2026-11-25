@@ -49,6 +49,10 @@ calculs sont laissés de côté, comme le fait déjà le groupe `eclairage-indir
 
 C'est aussi ce programme qui avait fait durer la préparation de cette branche 18 min 47 s.
 
+**Correction du même jour.** Ce programme laissé de côté, vos lancements de 8 h 59 et 9 h 00
+ont perdu la carte au même instant. La mémoire qu'il prend est réelle et reproduite, mais ce
+n'est pas lui qui faisait perdre la carte : la cause est en section 4.
+
 ## 3. Introduction : ma première explication était fausse
 
 J'avais attribué les saccades à la présentation des images sans calage sur l'écran. Vos
@@ -80,21 +84,75 @@ Ce que le compteur vidéo a montré par ailleurs :
 
 Le calage sur l'écran reste en place : il ne coûte rien et sert sur un écran à 60 Hz.
 
-## 4. La meilleure version
+## 4. Lancements de 8 h 59 et 9 h 00 : la carte perdue à la première image du monde
 
-C'est la branche fusionnée (`project-one/scarlettport`, dossier `..\victory-scarlettport`) avec
-ces corrections : elle a l'introduction fluide, traduit tous les shaders du jeu, compile
-d'avance les pipelines graphiques et contient tout ce que PROJECT ONE avait ajouté.
-
-Elle se lance par `project-one/meilleure.cmd`, avec les mêmes options que `lancer.cmd` :
-
-| Commande | Effet |
+| Fait | Source |
 |---|---|
-| `meilleure.cmd series-x` | la définition du jeu (rendu 3D en 2560 × 1440), sans le programme que le pilote ne compile pas |
-| `meilleure.cmd series-x 1080p` | image et rendu 3D en 1920 × 1080 |
-| `meilleure.cmd series-x 720p minimal` | 1280 × 720, textures et effets réduits |
+| Les deux lancements de la branche fusionnée (normal et `1080p`) passent l'introduction et le chargement, puis perdent la carte à la première image du monde, 65 s après le démarrage | ligne `host GPU device removed` ; la dernière ligne `fps` est celle de l'écran de chargement |
+| La carte a gardé la soumission 54 ms (7 ms en `1080p`) : pas un dépassement de temps, une commande qu'elle ne peut pas exécuter | même ligne, code `0x887A0006` |
+| `1080p` ne s'arrête plus sur la vérification du jeu | journal de 9 h 00 |
+| La branche stable, elle, entre dans le monde et y tourne (lancement de 8 h 20, modèles 3D visibles) | son journal |
 
-Mesuré hors jeu sur cette version : 756 tests réussis, 0 échec ; préparation des shaders en 15 à
-20 secondes, cache chaud, 0 pipeline refusé ; 24 801 pipelines graphiques du jeu déjà compilés.
+La cause est une erreur de ma fusion, pas un défaut de ScarlettPort ni de la carte.
 
-La branche stable est recompilée avec les mêmes corrections et reste en secours (`lancer.cmd`).
+Le traducteur de ScarlettPort donne à presque tous les shaders une table que le runtime doit
+leur brancher (les « mots des descripteurs » : tailles, niveaux et adresses des vues, que le
+jeu lit comme des nombres). Elle porte le numéro d'emplacement 252. Notre code des programmes
+mesh exécutés en calcul utilisait déjà ce numéro 252 pour son tampon d'enregistrements, et dit
+au runtime : « l'emplacement 252 n'est pas à brancher ici, le dessin mesh s'en charge ». Dans
+la branche stable ce numéro était libre. Dans la fusion, la table de ScarlettPort n'était donc
+**jamais branchée, pour aucun shader** : chaque shader qui la lisait lisait une adresse
+quelconque.
+
+| Mesure, hors jeu | Valeur |
+|---|---|
+| Shaders du jeu qui demandent cette table | 23 935 sur 25 563 (94 %) |
+| Parmi les 1 171 shaders que vos deux lancements ont utilisés | 468 de calcul sur 468, 178 mesh sur 178, 357 pixel sur 399, 93 de sommets sur 126 |
+| Dans l'arbre de ScarlettPort | la table est branchée à chaque dessin et chaque calcul |
+| Dans la fusion | le test « 252 = tampon mesh, on passe » était placé avant : le branchement n'était jamais atteint |
+
+Ces nombres viennent de la lecture du cache de shaders de la branche fusionnée (chaque
+traduction y garde la liste de ses emplacements) et de la comparaison des deux fichiers
+`draw.rs`.
+
+Correction : le tampon mesh prend l'emplacement 251, et la compilation échoue désormais si ce
+numéro rejoint un jour ceux du traducteur. Un second numéro partagé (le mot « premier groupe »
+d'un calcul découpé, `0x104`) désignait la même chose des deux côtés : il est maintenant un
+seul nom, sans changement d'effet.
+
+Un second défaut est apparu en cherchant : sur la branche fusionnée, **la préparation ne
+servait pas au jeu**. La clé du cache contient une limite que le runtime demande à la carte ;
+en jeu elle était calculée avant cette demande, en préparation après. Le jeu rangeait donc ses
+traductions dans un autre dossier et retraduisait tout : les 1 171 shaders de vos lancements
+ont été refaits, identiques octet pour octet à ceux déjà préparés. La clé est maintenant
+calculée après la demande dans les deux cas, et le journal écrit le nom du dossier utilisé
+(`shader cache: this build's translations`).
+
+Ce qui n'est pas prouvé : que cette table non branchée soit bien la commande qui a fait
+perdre la carte. C'est une lecture du code appuyée par des mesures, cohérente avec le moment
+du plantage (la première image qui utilise ces shaders en masse) et avec son code d'erreur ;
+seul un lancement le confirmera. Si la carte est encore perdue, `meilleure.cmd series-x profil`
+(version diagnostic) écrit dans le journal la dernière commande exécutée.
+
+## 5. Quelle version lancer
+
+Deux versions existent côte à côte. Ce qui est vu en jeu, à 9 h 30 :
+
+| Version | Commande | Vu en jeu |
+|---|---|---|
+| Branche stable | `lancer.cmd series-x` | entre dans le monde et y tourne, modèles 3D visibles, 0,3 à 2,5 images par seconde pendant les 25 secondes de monde du lancement de 8 h 20 ; introduction saccadée à ce lancement, corrigée depuis sans nouvel essai |
+| Branche fusionnée avec ScarlettPort | `meilleure.cmd series-x` | introduction fluide ; carte perdue à la première image du monde (8 h 26, 8 h 59, 9 h 00) ; l'erreur de fusion de la section 4 est corrigée, pas encore réessayée |
+
+`lancer.cmd` et `meilleure.cmd` sont dans `project-one` et prennent les mêmes options (`1080p`,
+`720p`, `minimal`, `profil`…).
+
+Mesuré hors jeu sur la branche fusionnée corrigée (`30cba67`) : 756 tests réussis, 0 échec ;
+préparation des shaders à froid en 5 min 18 s : 25 563 shaders traduits sur 25 563, 10 498 pipelines (calcul et moitié calcul des programmes mesh) dans la bibliothèque, 0 refusé par la carte.
+
+Ce que la correction change pour les fichiers déjà préparés : les pipelines graphiques du jeu
+compilés d'avance le matin (`preparer-graphiques`, 24 801) sont à refaire pour les programmes
+mesh, puisque le shader de sommets qui lit leur tampon a changé (déduit de la façon dont la
+bibliothèque nomme ses pipelines, pas mesuré). Ces pipelines se compilent en jeu à leur
+premier usage, comme sur la branche stable : à la première entrée dans le monde, des objets
+manquent puis apparaissent pendant quelques minutes ; le lancement suivant les relit.
+`preparer-graphiques` les refait d'avance.

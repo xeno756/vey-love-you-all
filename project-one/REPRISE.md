@@ -9,14 +9,18 @@ Mis à jour le 25/11/2026.
 |---|---|
 | `project-one/integration` | **branche stable**, celle que le lanceur utilise. Tout ce qui y est commité compile et passe les tests |
 | `project-one/before-scarlettport` | étiquette : l'état avant la mission du 25/11 (retour arrière possible) |
-| `project-one/scarlettport` | la pile VIctory de ScarlettPort fusionnée avec PROJECT ONE, dans le dossier `..\victory-scarlettport`. Compilée et testée hors jeu, **pas encore essayée en jeu** |
+| `project-one/scarlettport` | la pile VIctory de ScarlettPort fusionnée avec PROJECT ONE, dans le dossier `..\victory-scarlettport`. Essayée en jeu le 25/11 : introduction fluide, puis carte perdue à la première image du monde (erreur de fusion, corrigée à 9 h 30, **pas encore réessayée**) |
 
 ## La meilleure version aujourd'hui
 
-La branche fusionnée (`project-one/scarlettport`), lancée par `project-one/meilleure.cmd` avec
-les mêmes options que `lancer.cmd`. Les trois défauts des essais du 25/11 au matin y sont
-corrigés (causes et preuves : [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md)) ;
-aucune de ces corrections n'a encore tourné avec le jeu.
+Deux candidates, tant que la correction de 9 h 30 n'a pas tourné en jeu :
+
+| Version | Commande | Ce qui est vu en jeu |
+|---|---|---|
+| Branche stable | `project-one/lancer.cmd series-x` | entre dans le monde et y tourne, modèles 3D visibles, 0,3 à 2,5 images par seconde pendant les 25 secondes de monde du lancement de 8 h 20 ; introduction saccadée à ce lancement, corrigée depuis sans nouvel essai |
+| Branche fusionnée | `project-one/meilleure.cmd series-x` | introduction fluide ; carte perdue à la première image du monde aux lancements de 8 h 26, 8 h 59 et 9 h 00 ; cause trouvée et corrigée (`30cba67`), pas encore réessayée |
+
+Causes et preuves : [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
 
 Si un lancement se ferme encore, chercher dans son journal, dans cet ordre : `resolution: a
 check of the title's own…` (une vérification du jeu franchie, avec sa position), `first-chance
@@ -50,10 +54,22 @@ leurs caches l'une l'autre.
 | `7a8a970` | la fusion : 113 fichiers de ScarlettPort, 20 conflits résolus, nos fonctions gardées |
 | `60bd4da` | une seule commande de préparation (`prepare`), qui peut aussi compiler les pipelines graphiques du cache du jeu |
 | `1fdb0bf` | mélange à deux sources gardé sur la première cible seulement : 1 868 pipelines de plus acceptés par la carte |
-| `da761fb` | le programme que le pilote AMD ne finit pas de compiler n'est plus compilé (carte perdue à l'entrée du monde) |
+| `da761fb` | le programme que le pilote AMD ne finit pas de compiler n'est plus compilé (ce n'était pas la cause de la carte perdue) |
+| `30cba67` | **l'erreur de fusion qui perdait la carte au monde** : le tampon mesh ne partage plus l'emplacement 252 avec la table que 94 % des shaders lisent ; la clé du cache de shaders est la même en préparation et en jeu |
 
-État : compile, **752 tests réussis, 0 échec**, lint propre avec et sans la fonction
-`diagnostics`, politique du dépôt respectée. **Pas encore lancée avec le jeu.**
+État à `30cba67` : compile, **756 tests réussis, 0 échec**, lint propre avec et sans la fonction
+`diagnostics`, politique du dépôt respectée. La correction de 9 h 30 n'a pas encore tourné
+avec le jeu.
+
+### Le piège de cette fusion, à ne pas refaire
+
+Notre code et celui de ScarlettPort réservent chacun des numéros : emplacements de shader
+(251 à 255), codes des mots calculés par le runtime (`0x100` et suivants), clés par liste.
+Deux numéros identiques ne donnent aucune erreur de compilation ni de test : le premier test
+rencontré gagne et l'autre fonction disparaît en silence. Avant toute nouvelle fusion de leur
+arbre : comparer ces numéros des deux côtés, et comparer chaque fichier fusionné à **leur**
+fichier (pas seulement au nôtre) pour voir ce que nos ajouts placent devant leur code.
+L'emplacement du tampon mesh est maintenant vérifié à la compilation.
 
 ### Comment les conflits ont été résolus
 
@@ -80,7 +96,8 @@ leurs caches l'une l'autre.
 
 ### Ce qui reste à faire sur cette branche
 
-1. Un lancement par l'utilisateur (la branche n'a jamais tourné avec le jeu).
+1. Un lancement par l'utilisateur avec la correction `30cba67`. Si la carte est encore perdue :
+   `meilleure.cmd series-x profil` (version diagnostic) écrit la dernière commande exécutée.
 2. Les 403 pipelines refusés faute de barycentriques sur la RX 5600 XT : faire porter les poids
    des trois coins par une sortie interpolée du shader de sommets généré pour les programmes
    mesh, et lire cette sortie dans le pixel shader à la place de `SV_Barycentrics`.
