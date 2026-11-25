@@ -29,6 +29,7 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | 8. Branche `project-one/scarlettport` (fusion ScarlettPort) | `60bd4da` | 0 avertissement | **752** | **0** | 12 |
 | 9. Branche stable après les corrections du 25/11 au matin | `c6e9908` | 0 avertissement | **545** | **0** | 9 |
 | 10. **Meilleure version** (branche fusionnée corrigée) | `4c88086` | 0 avertissement | **756** | **0** | 12 |
+| 11. Branche fusionnée après la correction de l'erreur de fusion (9 h 30) | `30cba67` | 0 avertissement | **756** | **0** | 12 |
 
 Mesure 7 : un test de cadencement du fork (`waits_end_on_ticks_and_count_frames`, des tops de
 5 ms) a échoué une fois pendant qu'une préparation de shaders occupait tous les cœurs ; relancé

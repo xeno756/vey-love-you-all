@@ -4,6 +4,22 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (9 h 30) — la branche fusionnée perdait la carte au monde : une erreur de fusion
+
+Cause et mesures : section 4 de [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
+Cette correction n'a pas encore tourné avec PROJECT GAME.
+
+- **Ce qui a cassé l'entrée du monde, c'est ma fusion.** ScarlettPort donne à 94 % des shaders
+  du jeu une table que le runtime doit leur brancher à l'emplacement 252. Notre code des
+  programmes mesh utilisait ce même numéro et empêchait ce branchement : la table n'était
+  branchée pour aucun shader. Le tampon mesh passe à l'emplacement 251, et la compilation
+  refuse désormais que les deux numéros se rejoignent.
+- **Le programme AMD laissé de côté le matin n'était pas la cause** de la perte de la carte
+  (elle a continué sans lui). Il reste laissé de côté : la mémoire qu'il prend est réelle.
+- **La préparation ne servait pas au jeu** sur cette branche : le jeu rangeait ses shaders
+  dans un autre dossier que la préparation et retraduisait tout. Corrigé.
+- La branche stable n'est pas touchée : elle n'a jamais eu cette table, ni ce défaut.
+
 ## 25/11/2026 (matin) — les trois défauts de vos essais
 
 Causes et preuves : [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
