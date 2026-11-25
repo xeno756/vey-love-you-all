@@ -1342,7 +1342,8 @@ fn hosted_as(this: This, make: bool, whole: bool) -> Option<Made> {
         let skip = if r.host.whole.load(Relaxed) {
             0
         } else {
-            lowered_levels(&r.desc, skip_levels())
+            // The run's setting, or more as the pool fills (`pressure`).
+            lowered_levels(&r.desc, skip_levels().max(PRESSURE.load(Relaxed)))
         };
         let Some(texture) = host_texture(&lowered(&r.desc, skip), r.host.state, clear) else {
             r.host.refused.store(true, Relaxed);
@@ -1413,13 +1414,13 @@ pub(crate) fn host_made<'a>(
 pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
     use std::sync::atomic::Ordering::Relaxed;
     const WITHOUT_BUDGET: u64 = 4 << 30;
-    static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    let limit = *LIMIT.get_or_init(|| {
-        let mb = std::env::var("VICTORY_TEXTURE_BUDGET_MB").ok()?;
-        mb.trim().parse::<u64>().ok().map(|mb| mb << 20)
-    });
+    if stream_pool_on() {
+        // (PROJECT ONE) By what these copies take of a pool of their own,
+        // not by all the card holds: see `pool_budget`.
+        return room_in(pool_now(memory));
+    }
     let filled = KINDS[1].load(Relaxed);
-    if let Some(limit) = limit {
+    if let Some(limit) = texture_limit() {
         return filled < limit;
     }
     if filled < TEXTURE_FLOOR.get().copied().unwrap_or(FLOOR_MOST) {
@@ -1430,6 +1431,97 @@ pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
         None => filled < WITHOUT_BUDGET,
     }
 }
+
+/// `VICTORY_TEXTURE_BUDGET_MB=<n>`: the bytes host copies of textures the
+/// title fills may take, whatever the card says.
+#[cfg(windows)]
+fn texture_limit() -> Option<u64> {
+    static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let mb = std::env::var("VICTORY_TEXTURE_BUDGET_MB").ok()?;
+        mb.trim().parse::<u64>().ok().map(|mb| mb << 20)
+    })
+}
+
+/// The pool of host copies of textures the title fills, as the card's
+/// `memory` (its budget and our use of it) sizes it now ([`pool_budget`]).
+/// A pass that makes copies as it goes asks once and then [`room_in`] for
+/// each: what it makes is not in `memory` yet.
+#[cfg(windows)]
+pub(crate) fn pool_now(memory: Option<[u64; 4]>) -> u64 {
+    const WITHOUT_BUDGET: u64 = 4 << 30;
+    if let Some(limit) = texture_limit() {
+        return limit;
+    }
+    match memory {
+        Some([budget, used, ..]) => pool_budget(budget, used, KINDS[1].load(std::sync::atomic::Ordering::Relaxed)),
+        None => WITHOUT_BUDGET,
+    }
+}
+
+/// Whether a pool of `pool` bytes ([`pool_now`]) has room for one more
+/// host copy now; and notes what the next copy leaves out ([`PRESSURE`]).
+#[cfg(windows)]
+pub(crate) fn room_in(pool: u64) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let filled = KINDS[1].load(Relaxed);
+    POOL[0].store(pool, Relaxed);
+    POOL[1].store(filled, Relaxed);
+    PRESSURE.store(pressure(filled, pool), Relaxed);
+    filled < pool
+}
+
+/// `VICTORY_STREAM_POOL=0`: [`room`] by the card's whole use, as before
+/// (no texture made while the card is past nine tenths of its budget).
+#[cfg(windows)]
+pub(crate) fn stream_pool_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_STREAM_POOL").is_none_or(|v| v != "0"))
+}
+
+/// The least the pool of host copies of textures the title fills is.
+const POOL_LEAST: u64 = 512 << 20;
+
+/// The bytes host copies of textures the title fills may take in all (the
+/// pool [`room`] fills): nine tenths of the card's `budget`, as before,
+/// less what we hold there that cannot be let go (`used` less those
+/// copies' `filled` bytes: targets, buffers, upload memory); and
+/// [`POOL_LEAST`] at least. The tenth left is the card's headroom (460 to
+/// 530 MB of the 4.6 to 5.3 GB this card is given). Within the budget this
+/// is the rule before, said of the copies alone: the run of 25/11, 10:08
+/// (1280x720, 4246 MB used of 4753) keeps the 730 MB it had.
+///
+/// The rule before compared all of `used` with the budget. At 2560x1440
+/// what cannot be let go is itself past the budget of a 6 GB card (run of
+/// 25/11, 9:41: 5.5 to 6.5 GB used for 4.6), so no texture was made for
+/// minutes on end: one in seven in seven and a half minutes, and nothing a
+/// texture could do brought the use back under.
+pub(crate) fn pool_budget(budget: u64, used: u64, filled: u64) -> u64 {
+    let fixed = used.saturating_sub(filled);
+    (budget / 10 * 9).saturating_sub(fixed).max(POOL_LEAST)
+}
+
+/// How many of their first levels new host copies leave out for the room
+/// left in a pool of `pool` bytes holding `filled`: none in its first
+/// quarter, then one more by quarter, three in the last and past it. Each
+/// level is a quarter of the bytes, so the pool's quarters hold 1, 4, 16
+/// and 64 times their own size of the title's textures: a pool of 512 MiB
+/// takes 10.9 GiB of them, coarser as it fills, where it took 512 MiB and
+/// then nothing.
+pub(crate) fn pressure(filled: u64, pool: u64) -> u32 {
+    (filled.saturating_mul(4) / pool.max(1)).min(PRESSURE_MOST as u64) as u32
+}
+
+/// The most levels [`pressure`] leaves out.
+pub(crate) const PRESSURE_MOST: u32 = 3;
+
+/// The pool's size and what it holds, as [`room`] last found them.
+pub(crate) static POOL: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// [`pressure`] as [`room`] last found it: what [`hosted_as`] leaves out of
+/// a host copy it makes, where the run's own setting ([`skip_levels`]) asks
+/// for less.
+pub(crate) static PRESSURE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// [`room`]'s floor at most: what it was for every card.
 const FLOOR_MOST: u64 = 2 << 30;
@@ -4148,6 +4240,43 @@ float4 lit() : SV_Target { return 1.0; }
         // The resource keeps the heap alive.
         assert_eq!(slot::<Release>(heap, 0x10)(heap), 1);
         assert_eq!(slot::<Release>(placed, 0x10)(placed), 0);
+    }
+
+    #[test]
+    fn the_texture_pool_is_what_the_budget_leaves_and_never_under_its_least() {
+        const MIB: u64 = 1 << 20;
+        // A card within its budget: nine tenths of it, less what is not
+        // textures.
+        assert_eq!(pool_budget(8000 * MIB, 3000 * MIB, 1000 * MIB), (7200 - 2000) * MIB);
+        // The run of 25/11, 9:41: 6245 MiB used for a budget of 4625, the
+        // rule before made nothing; the pool keeps its least.
+        assert_eq!(pool_budget(4625 * MIB, 6245 * MIB, 1200 * MIB), POOL_LEAST);
+        assert_eq!(pressure(1200 * MIB, POOL_LEAST), PRESSURE_MOST, "full: the copies made from here on are the coarsest");
+        // The run of 25/11, 10:08 (1280x720, textures lowered): 4246 used,
+        // within the budget, and the pool is what the rule before left.
+        let within = pool_budget(4753 * MIB, 4246 * MIB, 700 * MIB);
+        assert!((731 * MIB..732 * MIB).contains(&within), "{within}");
+        // No budget told, or nothing used yet.
+        assert_eq!(pool_budget(0, 0, 0), POOL_LEAST);
+        let empty = pool_budget(5335 * MIB, 400 * MIB, 0);
+        assert!((4401 * MIB..4402 * MIB).contains(&empty), "{empty}");
+    }
+
+    #[test]
+    fn new_copies_get_coarser_as_the_pool_fills() {
+        const MIB: u64 = 1 << 20;
+        let pool = 512 * MIB;
+        assert_eq!(pressure(0, pool), 0);
+        assert_eq!(pressure(127 * MIB, pool), 0);
+        assert_eq!(pressure(128 * MIB, pool), 1);
+        assert_eq!(pressure(256 * MIB, pool), 2);
+        assert_eq!(pressure(384 * MIB, pool), 3);
+        assert_eq!(pressure(4096 * MIB, pool), PRESSURE_MOST, "past the pool, no coarser than the coarsest");
+        assert_eq!(pressure(1, 0), PRESSURE_MOST, "no pool at all");
+        // What the quarters hold of the title's textures: 1 + 4 + 16 + 64
+        // quarters of the pool.
+        let held: u64 = (0..4).map(|q| (pool / 4) << (2 * q)).sum();
+        assert_eq!(held, 10_880 * MIB);
     }
 
     #[test]

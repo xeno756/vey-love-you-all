@@ -534,6 +534,52 @@ pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
 /// (`crate::resource::room`), for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
 
+/// The textures picked by index a frame makes whatever their pool says,
+/// and the bytes staged for them at most: the progress every frame is owed.
+const PROGRESS: [u64; 2] = [16, 8 << 20];
+/// Those made so in this frame and their bytes; and in all.
+static FORCED: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+/// Slots that waited for room in this frame.
+static WAITED: AtomicU64 = AtomicU64::new(0);
+/// Frames in a row in which slots waited for room and no texture was
+/// uploaded; the longest such run; and the runs that reached
+/// [`STALL_FRAMES`].
+pub(crate) static NO_UPLOAD: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+/// The frames without an upload that make a stall.
+const STALL_FRAMES: u64 = 30;
+
+/// A frame of the texture queue is over: counts it as one without an
+/// upload if slots waited for room and none was uploaded, and says so once
+/// when [`STALL_FRAMES`] of them follow each other.
+fn stream_frame_over() {
+    static UPLOADED: AtomicU64 = AtomicU64::new(0);
+    let now = HEAP_TEXTURES.load(Ordering::Relaxed);
+    let uploaded = now.saturating_sub(UPLOADED.swap(now, Ordering::Relaxed));
+    let waited = WAITED.swap(0, Ordering::Relaxed);
+    FORCED[0].store(0, Ordering::Relaxed);
+    FORCED[1].store(0, Ordering::Relaxed);
+    let run = no_upload_run(NO_UPLOAD[0].load(Ordering::Relaxed), waited, uploaded);
+    NO_UPLOAD[0].store(run, Ordering::Relaxed);
+    NO_UPLOAD[1].fetch_max(run, Ordering::Relaxed);
+    if run == STALL_FRAMES {
+        NO_UPLOAD[2].fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(
+            frames = run,
+            waiting = waited,
+            pool_mb = crate::resource::POOL[0].load(Ordering::Relaxed) >> 20,
+            held_mb = crate::resource::POOL[1].load(Ordering::Relaxed) >> 20,
+            "STREAM STALL: textures picked by index waited for room and none was uploaded"
+        );
+    }
+}
+
+/// The run of frames without an upload after a frame in which `waited`
+/// slots waited for room and `uploaded` textures were uploaded, `run`
+/// being the run before it.
+fn no_upload_run(run: u64, waited: u64, uploaded: u64) -> u64 {
+    if waited > 0 && uploaded == 0 { run + 1 } else { 0 }
+}
+
 /// Frames after a whole upload of a texture picked by index at which its
 /// memory is looked at again, each counted from the look before.
 const RECHECK_FRAMES: [u64; 5] = [4, 12, 40, 120, 400];
@@ -1746,18 +1792,26 @@ impl State {
         let frame = crate::frame::current();
         if FRAME.swap(frame, Ordering::Relaxed) != frame {
             SPENT.store(0, Ordering::Relaxed);
+            stream_frame_over();
         }
-        // No more of them are made while the card has no room
+        // No more of them are made while their pool has no room
         // (`resource::room`): by what is alive now, not by what was ever
         // staged (4 GB in all, after which later textures stayed empty for
         // the run). The ones nothing names any more are let go, which
         // makes room again: so the slots are still looked at (the pass
         // returned here, and a slot whose texture had been streamed out
         // kept its host copy for as long as the card was full).
-        let room = crate::resource::room(memory);
-        if !room {
+        // (PROJECT ONE) The pool is sized once for the pass and asked for
+        // each texture: the copies get coarser as the pass fills it
+        // (`resource::pressure`), and what the pass makes counts at once.
+        let pool = crate::resource::stream_pool_on().then(|| crate::resource::pool_now(memory));
+        let room_now = || match pool {
+            Some(pool) => crate::resource::room_in(pool),
+            None => crate::resource::room(memory),
+        };
+        if !room_now() {
             HEAP_TEXTURES_FULL.fetch_add(1, Ordering::Relaxed);
-            once!("textures picked by index: the card has no room for more; they wait");
+            once!("textures picked by index: their pool on the card is full; a few a frame are still made, at their coarsest");
         }
         let mut refused = 0;
         // Slots whose texture's memory the runtime mapped, unmapped or
@@ -1888,12 +1942,24 @@ impl State {
             }
             // From here on a host texture is made: not without room. The
             // slot stays due.
-            if !room {
-                refused += 1;
-                if refused > 256 {
-                    break;
+            // (PROJECT ONE) Without room a frame still makes a few
+            // (`PROGRESS`), which the pool's pressure makes as coarse as
+            // copies get: with none made at all the world stayed without
+            // its textures for as long as the card was past its budget,
+            // and nothing a texture did could bring it back under.
+            let owed = !room_now();
+            if owed {
+                let progress = pool.is_some()
+                    && FORCED[0].load(Ordering::Relaxed) < PROGRESS[0]
+                    && FORCED[1].load(Ordering::Relaxed) < PROGRESS[1];
+                if !progress {
+                    WAITED.fetch_add(1, Ordering::Relaxed);
+                    refused += 1;
+                    if refused > 256 {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
             }
             let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
             let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
@@ -1966,6 +2032,11 @@ impl State {
             SPENT.fetch_add(bytes, Ordering::Relaxed);
             HEAP_TEXTURE_BYTES.fetch_add(bytes, Ordering::Relaxed);
             HEAP_TEXTURES.fetch_add(1, Ordering::Relaxed);
+            if owed {
+                FORCED[0].fetch_add(1, Ordering::Relaxed);
+                FORCED[1].fetch_add(bytes, Ordering::Relaxed);
+                FORCED[2].fetch_add(1, Ordering::Relaxed);
+            }
             match memory {
                 // Whole and uploaded: looked at again (see above).
                 Some((at, len)) => {
@@ -3614,6 +3685,17 @@ fn t_is_light(texture: &ID3D12Resource) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_without_an_upload_is_one_where_slots_waited_and_none_was_made() {
+        use super::no_upload_run;
+        assert_eq!(no_upload_run(0, 12, 0), 1, "slots waited for room, nothing uploaded");
+        assert_eq!(no_upload_run(29, 1, 0), super::STALL_FRAMES, "the thirtieth in a row is a stall");
+        assert_eq!(no_upload_run(29, 12, 3), 0, "an upload ends the run");
+        assert_eq!(no_upload_run(5, 0, 0), 0, "nothing waited: the queue had nothing to make");
+        // What a frame is owed past its pool is small beside a frame's budget.
+        assert!(super::PROGRESS[1] <= super::staging_budget_per_frame(Some(4 << 30)) / 8);
+    }
 
     #[test]
     fn staging_budget_scales_with_vram_budget() {
