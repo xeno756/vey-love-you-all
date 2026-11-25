@@ -67,7 +67,19 @@ Rien de PROJECT GAME n'est stocké ici (voir `docs/asset-policy.md` à la racine
 ## Lancer
 
 `project-one\lancer.cmd` lance PROJECT GAME avec le runtime compilé dans ce dépôt
-(`target\release\victory.exe`), en Series X par défaut. `lancer.cmd series-s` choisit la
-Series S. `lancer.cmd series-x test` montre ce qui serait lancé, sans rien lancer. Le dossier
-du jeu vient de `victory.toml`, à la racine du dépôt (non suivi par git). Le journal va dans
-`%TEMP%\victory-err.log`.
+(`target\release\victory.exe`), en Series X par défaut.
+
+| Commande | Effet |
+|---|---|
+| `lancer.cmd` | Series X |
+| `lancer.cmd series-s` | Series S (reste sur un écran noir sur cette machine) |
+| `lancer.cmd series-x capture` | version diagnostic (`target\diag\victory.exe`) : enregistre des images de l'écran et des tampons internes du jeu (normales, profondeur, couleurs) dans `..\victory-captures`, hors du dépôt |
+| `lancer.cmd series-x test` | montre ce qui serait lancé, sans rien lancer |
+
+Le dossier du jeu vient de `victory.toml`, à la racine du dépôt (non suivi par git). Le journal
+va dans `%TEMP%\victory-err.log`.
+
+La version diagnostic se compile avec
+`cargo build --profile diag -p victory --features diagnostics`. Les tampons internes ne sont
+enregistrés que pour quelques images : la 2e, la 6e, la 30e et la 80e après la première image
+de 500 dessins ou plus.
