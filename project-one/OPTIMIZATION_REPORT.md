@@ -61,14 +61,14 @@ C'est la base pour mesurer au prochain lancement.
 | Fils de copie larges | un quart, 2 à 6 → 4, seulement avec `VICTORY_WIDE_*` | désactivés par défaut |
 | DirectStorage | 16 fils, tampon de 32 Mio | décompression ; mémoire fixe et faible |
 | Copies de tampons sur la carte | 16 à 512 Mio, seulement si 20 % du budget reste libre | déjà bornées par le budget |
-| Copies de textures | sur la carte seulement à la première utilisation (`VICTORY_LAZY_TEXTURES`) | celles des objets à mesh shaders, jamais dessinés ici, ne prennent pas de place |
+| Copies de textures | sur la carte seulement à la première utilisation (`VICTORY_LAZY_TEXTURES`) | jusqu'ici, celles des objets à mesh shaders ne prenaient pas de place, car ces objets n'étaient jamais dessinés. Avec le remplacement, ils le seront : il faut s'attendre à plus de mémoire vidéo utilisée |
 | Traduction des shaders | DXIL écrit directement, sans DXC | le problème de mémoire de DXC (XCL) n'existe pas ici |
 
 ## Pistes suivantes, chiffrées par les agents
 
 | Piste | Gain attendu ici | Effort |
 |---|---|---|
-| Remplacement des mesh shaders | le monde apparaît | ~1 100 lignes + 400 de tests |
+| Remplacement des mesh shaders | le monde apparaît | dessins directs écrits ; restent les dessins indirects et le regroupement |
 | Découpage des lots de calcul de plus de ~1 s en plusieurs listes | moins de réinitialisations (le calcul n'est préempté qu'entre deux listes sur cette carte) | moyen ; l'état des ressources entre listes est à traiter |
 | Limite de boucles adaptée (2^20 aujourd'hui en version normale) | moins de passes qui dépassent 2 s | 1 à 2 jours |
 | Render targets qui partagent les pages de mémoire vidéo, avec plafond | moins de mémoire vidéo | 1 à 2 semaines |

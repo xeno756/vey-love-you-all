@@ -6,6 +6,18 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 
 ## 24/11/2026
 
+- **Shaders : les programmes mesh en calcul** (`crates/victory-shader/src/emit/mesh_compute.rs`).
+  Le compilateur traduit un programme mesh de la console en compute shader. Celui-ci écrit,
+  pour chaque groupe, ses sommets puis ses triangles dans un tampon d'enregistrements. Un
+  vertex shader généré relit ces enregistrements et les dessine avec le pixel shader du jeu,
+  inchangé. Les triangles éliminés deviennent un point hors de l'écran.
+- **GPU : branchement du remplacement des mesh shaders.** Sur une carte sans mesh shaders
+  comme la RX 5600 XT (ou partout avec `VICTORY_MESH_COMPUTE=1`), chaque pipeline mesh du jeu
+  devient deux pipelines : un de calcul et un de dessin. Chaque `DispatchMesh` devient une
+  suite de tranches. Une tranche contient autant de groupes que le tampon de la liste en tient
+  (8 Mio par défaut, réglable par `VICTORY_MESH_RECORDS_MB`). Pour chaque tranche : calcul,
+  barrière, `DrawInstanced`, puis barrière. `VICTORY_MESH_COMPUTE=0` remet le refus d'avant.
+  Les dessins mesh indirects (`ExecuteIndirect`) restent sautés pour l'instant.
 - **Loader : retrait du code repris de XCL.** Les fichiers `console_insn.rs` et
   `console_insn_decode.rs` venaient de XCL, sous licence GPL-2.0-only, incompatible avec
   GPL-3.0. Le gestionnaire d'origine de VIctory couvre les mêmes instructions, et ce

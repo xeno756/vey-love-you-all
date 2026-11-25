@@ -23,8 +23,8 @@ chacune reste remplaçable et testable seule (`cargo test -p <crate>`).
 | Loader | `crates/victory-loader`, `crates/victory-pe` | 2 868 + 758 lignes | fork | oui : code venu de XCL retiré (licence) |
 | Compatibilité noyau / services | `crates/victory-hle` (kernel, xgameruntime, xmem, xuser…) | 18 163 | fork | non |
 | Gestionnaire mémoire | `victory-hle` `xmem` + `victory-gpu` `resource`, `shadow`, `host` | — | fork | oui : mémoire de transfert bornée, plancher de textures adapté |
-| Backend GPU | `crates/victory-gpu` | 37 067 | fork | oui : format R9G9B9E5, rapport de réinitialisation |
-| Compilateur de shaders | `crates/victory-shader` | 42 177 | fork | non (le remplacement des mesh shaders reste à faire) |
+| Backend GPU | `crates/victory-gpu` | 37 067 | fork | oui : format R9G9B9E5, rapport de réinitialisation, pipelines mesh en calcul + dessin |
+| Compilateur de shaders | `crates/victory-shader` | 42 177 | fork | oui : programmes mesh en calcul, vertex shader généré (`emit/mesh_compute.rs`) |
 | Textures | `crates/victory-formats` (tiling, BCPack) + `victory-gpu` `texture` | 4 365 | fork | non |
 | Ressources | `victory-gpu` `resource`, `descriptor` | — | fork | oui (voir GPU) |
 | Système de fichiers / streaming | `victory-hle` `files`, `dstorage` | — | fork | non |
@@ -48,8 +48,9 @@ chacune reste remplaçable et testable seule (`cargo test -p <crate>`).
 
 Dans l'ordre d'impact (détails dans `docs/technical/`) :
 
-1. **Remplacement des mesh shaders** (environ 1 100 lignes + 400 de tests, 6 étapes
-   vérifiables sur WARP) : sans lui, le monde reste noir sur la RX 5600 XT.
+1. **Fin du remplacement des mesh shaders.** Les dessins directs sont écrits (étapes 1, 2
+   et 4). Il reste les dessins indirects, la comparaison sur WARP, le regroupement des dessins
+   et l'essai en jeu.
 2. **Limite de boucles et découpage du travail de calcul**, pour rester sous les 2 s de
    Windows sur une carte plus lente que la RTX 4070 de l'auteur.
 3. **Partage des pages de mémoire vidéo entre render targets**, avec plafond (idée de XCL).

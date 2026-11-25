@@ -33,7 +33,9 @@ Dans les images du monde, 10 à 204 dessins passaient par image, contre 495 à 3
   - 4 à 71 valeurs par sommet (médiane ~27) ;
   - 1 563 utilisent des distances de découpe, 53 dépassent 32 Kio de sorties.
 
-## 3. Conception du remplacement (rien n'est écrit)
+## 3. Conception du remplacement
+
+L'état au 24/11/2026 est décrit en section 3 bis.
 
 - **Le mesh shader devient un calcul** :
   - il écrit, pour chaque groupe, 128 sommets puis 128 mots de triangle dans un tampon ;
@@ -63,6 +65,49 @@ Dans les images du monde, 10 à 204 dessins passaient par image, contre 495 à 3
   4. branchement derrière `VICTORY_MESH_COMPUTE=1` ;
   5. dessins indirects ;
   6. regroupement.
+
+## 3 bis. Ce qui est écrit (24/11/2026)
+
+| Étape | État | Où |
+|---|---|---|
+| 1. Variante calcul de l'émetteur | **faite**, testée sur la RX 5600 XT (le calcul n'a pas besoin de mesh shaders) | `victory-shader/src/emit/mesh_compute.rs`, `lower.rs` |
+| 2. Générateur de vertex shader | **fait**, validé et testé sur la carte (un enregistrement dessiné, triangle éliminé sauté) | `mesh_compute.rs` |
+| 3. Comparaison pixel à pixel avec le vrai chemin mesh sur WARP | **pas faite** (demande `VICTORY_CONSOLE_DXC`) | — |
+| 4. Branchement | **fait**, automatique sur une carte sans mesh shaders ; `VICTORY_MESH_COMPUTE=1` le force, `=0` le coupe | `victory-gpu/src/pipeline/host.rs`, `draw.rs`, `host.rs` |
+| 5. Dessins indirects | **pas faits** : ces dessins restent sautés, avec un message une fois | `draw.rs` (`execute_indirect`) |
+| 6. Regroupement des dessins | pas fait | — |
+
+Fonctionnement du branchement :
+
+- **Pipelines.** Chaque pipeline mesh du jeu en donne deux. Le premier est un pipeline de
+  calcul : le programme mesh traduit en calcul, avec le tampon d'enregistrements en UAV
+  racine `u252`. Le second est un pipeline graphique sans format d'entrée : le vertex shader
+  généré, qui lit les enregistrements en SRV racine `t252`, le pixel shader du jeu et l'état
+  graphique du jeu, en liste de triangles. Les deux sont rangés dans la bibliothèque de
+  pipelines sous des noms à eux.
+- **Liaisons.** Le calcul lit les valeurs racines graphiques que le jeu a posées pour son
+  dessin : tables, constantes, vues racines, mémoire par adresse. Il les pose avec les appels
+  de calcul. Le numéro du premier groupe de la tranche est une valeur calculée par l'hôte
+  (`USER_MESH_GROUP_BASE`), donc le jeu voit ses propres numéros de groupe.
+- **Tranches.** Le tampon appartient à la liste. Il grandit jusqu'à 8 Mio
+  (`VICTORY_MESH_RECORDS_MB`) et sert à toutes ses tranches. Les programmes du jeu font environ
+  14 Ko par groupe, donc environ 580 groupes par tranche. Les tranches suivantes ne changent
+  que le pipeline et le numéro du premier groupe.
+- **Barrières.** Le tampon passe d'UAV à lecture avant le dessin, puis revient en UAV. Ces
+  barrières font les deux vidages du pipeline par tranche prévus par la conception.
+- **Écart avec la conception.** Le tampon fait 8 Mio par défaut au lieu de 32, à cause des 6 Go
+  de mémoire vidéo de la carte. La contrepartie : plus de tranches, donc plus de barrières.
+
+Ce qui n'est **pas vérifié** :
+
+- l'ensemble sur un vrai programme du jeu : aucun test ne passe un conteneur de la console de
+  bout en bout ;
+- le rendu en jeu ;
+- le coût réel par image.
+
+Les tests couvrent le calcul (enregistrements écrits sur la carte), le vertex shader (dessin
+sur la carte) et le tampon de la liste (réutilisé, agrandi, gardé entre deux remises à zéro).
+Ils ne couvrent ni les liaisons ni les tranches dans `draw.rs`.
 
 ## 4. Verdict
 

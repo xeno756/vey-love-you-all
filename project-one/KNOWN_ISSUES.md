@@ -4,7 +4,7 @@ Classés du plus bloquant au moins bloquant, sur cette machine.
 
 | # | Problème | Effet | Cause | Statut |
 |---|---|---|---|---|
-| 1 | Pas de mesh shaders sur la RX 5600 XT | le monde (cinématique, jeu) reste noir ; 45 à 65 % des objets sautés par image dans les essais | toute la géométrie du monde de PROJECT GAME est en mesh shaders (8 214 contre 1 633 vertex shaders d'effets) | remplacement conçu, pas écrit |
+| 1 | Pas de mesh shaders sur la RX 5600 XT | le monde (cinématique, jeu) reste noir ; 45 à 65 % des objets sautés par image dans les essais | toute la géométrie du monde de PROJECT GAME est en mesh shaders (8 214 contre 1 633 vertex shaders d'effets) | remplacement écrit pour les dessins directs (calcul + vertex shader généré), **pas encore essayé en jeu** ; dessins indirects encore sautés ; coût : deux vidages du pipeline par tranche |
 | 2 | RAM : ~24 Go utilisés en jeu chez l'auteur du fork, 15,8 Go ici | fichier d'échange intensif, manque de mémoire possible | mémoire du jeu (13,5 Gio en Series X) + copies pour la carte | mémoire de transfert bornée ; le reste n'est pas réductible sans perte |
 | 3 | Mémoire vidéo : 6 Go | textures retenues près du budget, débordement en RAM | une copie par texture utilisée, render targets jamais partagés | plancher adapté ; partage des pages à faire |
 | 4 | Réinitialisation de la carte (TDR) | crash en entrant dans le monde, déjà vu deux fois | lots de calcul de 2,5 à 3 s, préemption du calcul par liste seulement | rapport amélioré (durée, préemption) ; découpage à faire. Le délai TDR de Windows n'est pas modifié. |

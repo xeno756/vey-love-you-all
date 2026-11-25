@@ -30,7 +30,7 @@ d'exceptions d'origine de VIctory (`emulate_amd_only`) couvre `clzero`, `monitor
 
 | Besoin | Carte | Conséquence | Traitement |
 |---|---|---|---|
-| Mesh shaders (toute la géométrie du monde) | **non** | géométrie du monde jamais dessinée | remplacement à faire (`docs/technical/04-shaders-ecran-noir.md`) |
+| Mesh shaders (toute la géométrie du monde) | **non** | sans remplacement, géométrie du monde jamais dessinée | **remplacement écrit** pour les dessins directs (calcul + vertex shader généré), pas encore essayé en jeu ; dessins indirects sautés (`docs/technical/04-shaders-ecran-noir.md`) |
 | Shader model 6.6 | oui | — | — |
 | Vagues de 64 | oui, natives | les programmes wave64 tournent tels quels | — |
 | R9G9B9E5 en render target + UAV (mode Series S) | **non** (`E_INVALIDARG`) | texture sans copie, passes qui l'écrivent vides | **corrigé** : R11G11B10_FLOAT, même taille mémoire |

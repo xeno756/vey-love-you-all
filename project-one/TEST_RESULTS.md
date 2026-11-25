@@ -20,9 +20,11 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 |---|---|---|---|---|---|
 | 1. Fork tel que cloné, sans `VICTORY_DXIL` | `7b0f736` | 111 s, 0 avertissement | 481 | 3 | 7 |
 | 2. Fork à jour, sans nos changements | `a803c87` | 88 s | 504 | 0 | 8 |
-| 3. **PROJECT ONE** | `a803c87` + 3 commits | 38 s (incrémentale), 0 avertissement | **511** | **0** | 8 |
+| 3. PROJECT ONE | `a803c87` + 3 commits | 38 s (incrémentale), 0 avertissement | 511 | 0 | 8 |
+| 4. **PROJECT ONE avec le remplacement des mesh shaders** | `a803c87` + 5 commits de code | incrémentale, 0 avertissement | **520** | **0** | 8 |
 
-- **Clippy** (`-D warnings`) sur les crates modifiées : aucune erreur.
+- **Clippy** (`-D warnings`) sur les crates modifiées (`victory-gpu`, aussi avec la fonction
+  `diagnostics`, `victory-shader`, `victory-loader`) : aucune erreur.
 - **Version de production** : `cargo build --release -p victory` réussit.
 
 ### Les 3 échecs de la mesure 1
@@ -33,7 +35,7 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | `emit::rect::tests::rectangles_are_drawn_whole` | validateur DXIL 1.6 du SDK Windows trop ancien | `VICTORY_DXIL` vers DXC 1.9 |
 | `emit::rect::tests::the_rectangle_stage_is_a_geometry_shader` | même cause | même chose |
 
-## Par module (mesure 2 → mesure 3)
+## Par module (mesure 2 → mesure 4)
 
 | Binaire de test | Fork à jour | PROJECT ONE | Écart |
 |---|---|---|---|
@@ -41,7 +43,7 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | victory_core | 11 | 11 | — |
 | victory_formats | 24 (+4 ignorés) | 24 (+4 ignorés) | — |
 | victory_game | 3 | 3 | — |
-| **victory_gpu** | 112 (+1 ignoré) | **121** (+1 ignoré) | **+9 tests ajoutés** |
+| **victory_gpu** | 112 (+1 ignoré) | **123** (+1 ignoré) | **+11 tests ajoutés** |
 | victory_hle | 96 | 96 | — |
 | no_dll_planting | 1 | 1 | — |
 | **victory_loader** | 24 | **22** | −2 : tests du code repris de XCL, retirés avec lui |
@@ -49,10 +51,10 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | title_dlls | 1 | 1 | — |
 | victory_pe | 7 | 7 | — |
 | victory_pipeline | 4 | 4 | — |
-| victory_shader | 214 (+3 ignorés) | 214 (+3 ignorés) | — |
+| **victory_shader** | 214 (+3 ignorés) | **221** (+3 ignorés) | **+7 tests ajoutés** |
 | xtask | 4 | 4 | — |
 
-## Les 9 tests ajoutés (victory-gpu)
+## Les 11 tests ajoutés (victory-gpu)
 
 | Test | Vérifie | Sur la carte ? |
 |---|---|---|
@@ -65,6 +67,20 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | `an_r9g9b9e5_target_gets_a_format_the_host_renders_to` | texture, vues, format de pipeline, effacement relu | oui |
 | `r9g9b9e5_views_of_a_target_take_its_stand_in` | vues UAV et de lecture | oui |
 | `the_removal_report_says_how_long_the_card_had_it` | rapport de perte de la carte | non |
+| `a_list_reuses_and_grows_its_mesh_records_up_to_the_cap` | tampon d'enregistrements mesh de la liste : réutilisé, agrandi jusqu'au plafond, gardé entre deux remises à zéro | oui |
+| `the_mesh_record_cap_defaults_to_8_mib` | plafond par défaut du tampon | non |
+
+## Les 7 tests ajoutés (victory-shader, remplacement des mesh shaders)
+
+| Test | Vérifie | Sur la carte ? |
+|---|---|---|
+| `a_mesh_program_lowers_to_a_compute_shader_with_its_record_slot` | un programme mesh devient un compute shader valide, avec son UAV `u252` | non (validateur DXIL) |
+| `a_mesh_program_as_compute_writes_its_records` | le calcul écrit les sommets et les triangles de deux groupes, au bon endroit | oui |
+| `a_record_holds_the_vertices_then_the_primitive_words` | disposition d'un enregistrement | non |
+| `draws_and_buffers_count_whole_groups` | nombre de sommets dessinés, groupes par tampon | non |
+| `primitive_words_pack_three_indices_or_cull` | mot de triangle (trois indices, ou « éliminé ») | non |
+| `the_vertex_shader_validates_and_declares_the_mesh_outputs` | le vertex shader généré est valide et déclare les sorties du programme mesh | non (validateur DXIL) |
+| `the_vertex_shader_draws_a_record_and_skips_culled_primitives` | le vertex shader dessine un enregistrement avec un vrai pixel shader et saute le triangle éliminé | oui |
 
 Les trois tests du format R9G9B9E5 échouent si on retire la correction : vérifié par l'agent 3.
 
@@ -73,4 +89,6 @@ Les trois tests du format R9G9B9E5 échouent si on retire la correction : vérif
 - **Le rendu en jeu** : un test unitaire réussi ne prouve pas que PROJECT GAME s'affiche.
 - **La mémoire réelle en jeu** : elle ne se mesure qu'en lançant le jeu.
 - **Les tests de charge** : aucun test de charge GPU ou mémoire reproductible n'existe encore.
-  À ajouter avec le remplacement des mesh shaders (comparaisons sur WARP).
+- **Le remplacement des mesh shaders de bout en bout** : aucun test ne passe un vrai programme
+  de la console par les liaisons et les tranches de `draw.rs`. La comparaison avec le vrai
+  chemin mesh sur WARP n'est pas faite (elle demande `VICTORY_CONSOLE_DXC`).
