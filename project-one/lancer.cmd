@@ -31,7 +31,10 @@ rem                                         (desarme par defaut)
 rem
 rem Graphismes reduits (chaque option se teste seule, puis se combine) :
 rem   lancer.cmd series-x textures:2        textures du jeu sans leurs 2 premiers
-rem                                         niveaux de detail (1 a 4)
+rem                                         niveaux de detail (1 a 6)
+rem   lancer.cmd series-x textures:6 plancher:32
+rem                                         textures les plus grossieres : jamais
+rem                                         sous 32 pixels de cote (128 par defaut)
 rem   lancer.cmd series-x sans:vent         laisse de cote un groupe d'effets ;
 rem                                         plusieurs : sans:vent+particules
 rem   lancer.cmd series-x minimal           textures:2 et les groupes a faible
@@ -71,6 +74,7 @@ if /i "%~2"=="720p" call :size 1280x720
 if /i "%~2"=="540p" call :size 960x540
 for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="textures" set "TEXTURES=%%b"
+    if /i "%%a"=="plancher" set "VICTORY_TEXTURE_SMALLEST=%%b"
     if /i "%%a"=="sans" call :without "%%b"
     if /i "%%a"=="sortie" set "SORTIE=%%b"
     if /i "%%a"=="echelle" set "ECHELLE=%%b"

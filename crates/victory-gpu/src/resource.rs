@@ -1719,7 +1719,7 @@ pub(crate) fn host_skip(this: This) -> u32 {
     r.host.made.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |(host, _)| host.skip)
 }
 
-/// `VICTORY_TEXTURE_SKIP_MIPS=<n>` (0 to 4, 0 by default): how many of
+/// `VICTORY_TEXTURE_SKIP_MIPS=<n>` (0 to 6, 0 by default): how many of
 /// their first levels the host copies of the textures the title fills
 /// leave out, where [`lowered_levels`] allows it. Each level left out
 /// halves the width and height of what the card holds and of what is
@@ -1738,7 +1738,7 @@ pub(crate) fn skip_levels() -> u32 {
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(0)
-            .min(4);
+            .min(6);
         if skip > 0 {
             tracing::info!(skip, "textures the title fills are kept without their first levels where they have them");
         }
@@ -1760,6 +1760,21 @@ pub(crate) static LOWERED: [std::sync::atomic::AtomicU64; 3] = [const { std::syn
 
 /// The smallest width or height a host copy is lowered to.
 const LOWERED_SMALLEST: u64 = 128;
+
+/// The smallest width or height for this run: [`LOWERED_SMALLEST`], or
+/// what `VICTORY_TEXTURE_SMALLEST` asks for (32 to 1024 texels, a multiple
+/// of 4): with 32 and six levels left out, a texture of 2048 texels is one
+/// of 32, coarser than a console of 2000 drew.
+fn lowered_smallest() -> u64 {
+    static SMALLEST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SMALLEST.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_SMALLEST")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| (32..=1024).contains(v) && v % 4 == 0)
+            .unwrap_or(LOWERED_SMALLEST)
+    })
+}
 
 /// How many first levels (of `wanted`) the host copy of a texture
 /// described by `desc` may leave out: none unless it is a 2D texture (or
@@ -1788,7 +1803,7 @@ fn lowered_levels(desc: &ResourceDesc, wanted: u32) -> u32 {
     let mut skip = wanted.min(u32::from(desc.mip_levels).saturating_sub(1));
     let fits = |skip: u32| {
         let (width, height) = (desc.width >> skip, u64::from(desc.height) >> skip);
-        width >= LOWERED_SMALLEST && height >= LOWERED_SMALLEST && width % 4 == 0 && height % 4 == 0
+        width >= lowered_smallest() && height >= lowered_smallest() && width % 4 == 0 && height % 4 == 0
     };
     while skip > 0 && !fits(skip) {
         skip -= 1;
