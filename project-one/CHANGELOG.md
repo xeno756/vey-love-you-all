@@ -4,11 +4,34 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 — Series X : graphismes réduits et diagnostic par image
+
+Détail, mesures et ordre d'essai : [docs/technical/07-graphismes-minimaux.md](docs/technical/07-graphismes-minimaux.md).
+Rien de cette section n'a encore tourné avec PROJECT GAME.
+
+- **Ligne `frame account` dans chaque version.** Toutes les cinq secondes : ce qui limite l'image
+  (la carte, la préparation, le jeu), les parts en pourcentage, la mémoire vidéo et la RAM, les
+  tailles de rendu demandées par le jeu et la taille présentée.
+- **Textures réduites** (`lancer.cmd series-x textures:2`, `VICTORY_TEXTURE_SKIP_MIPS`). Les
+  textures compressées du jeu sont copiées vers la carte sans leurs 1 à 4 premiers niveaux de
+  détail, jamais sous 128 pixels. Désactivé par défaut.
+- **Effets laissés de côté par nom** (`lancer.cmd series-x sans:vent+particules`,
+  `VICTORY_SKIP_SHADERS`). Seules des passes de calcul sont laissées de côté, jamais un dessin :
+  aucun modèle ne peut disparaître. Les groupes sont des fichiers dans `..\victory-profils`.
+  `lancer.cmd series-x minimal` regroupe `textures:2` et les groupes à faible risque.
+- **Noms des shaders.** `preparer` écrit la liste des 25 894 shaders nommés du jeu à côté du
+  cache (`shader-names.txt`) ; `victory prepare --names-only` écrit la liste seule.
+- **Définition.** Établi par les captures : 2560 × 1440 en interne et 3840 × 2160 présentés en
+  mode Series X, sans définition dynamique ni paramètre. Un vrai 720p demande le profil Series S
+  du jeu ou une mise à l'échelle par le runtime, non commencée.
+- **Mode Series S** : la correction de la mémoire n'a pas suffi, le jeu reste sur son premier
+  écran (lancement de 7 minutes). Piste mise de côté.
+
 ## 24/11/2026 (soir) — performances
 
 Diagnostic complet et mesures : [docs/technical/06-performances.md](docs/technical/06-performances.md).
 
-- **Mode Series S débloqué (à vérifier en jeu).** Le runtime disait au jeu qu'il utilisait toute
+- **Mode Series S : une cause corrigée, le blocage persiste (vérifié le 25/11).** Le runtime disait au jeu qu'il utilisait toute
   la mémoire du processus (6 082 Mo sur 7 776 Mo trois secondes après le démarrage). Le jeu, qui
   ne pose cette question qu'en mode Series S, ne chargeait rien après son premier écran. La
   réponse compte maintenant la mémoire du jeu seul. `VICTORY_TITLE_USED=process` remet l'ancienne.

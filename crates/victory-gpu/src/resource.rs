@@ -1765,7 +1765,9 @@ const LOWERED_SMALLEST: u64 = 128;
 /// described by `desc` may leave out: none unless it is a 2D texture (or
 /// an array of them, a cube) the title fills, in a block-compressed
 /// format, with levels to spare; and no more than leave it
-/// [`LOWERED_SMALLEST`] wide and high and with one level.
+/// [`LOWERED_SMALLEST`] wide and high, a whole number of 4 x 4 blocks
+/// (the host makes no block-compressed texture of another size), and with
+/// one level.
 ///
 /// Block-compressed textures with a chain of levels are the title's
 /// streamed material textures, sampled by coordinates between 0 and 1,
@@ -1784,7 +1786,11 @@ fn lowered_levels(desc: &ResourceDesc, wanted: u32) -> u32 {
         return 0;
     }
     let mut skip = wanted.min(u32::from(desc.mip_levels).saturating_sub(1));
-    while skip > 0 && (desc.width >> skip < LOWERED_SMALLEST || u64::from(desc.height) >> skip < LOWERED_SMALLEST) {
+    let fits = |skip: u32| {
+        let (width, height) = (desc.width >> skip, u64::from(desc.height) >> skip);
+        width >= LOWERED_SMALLEST && height >= LOWERED_SMALLEST && width % 4 == 0 && height % 4 == 0
+    };
+    while skip > 0 && !fits(skip) {
         skip -= 1;
     }
     skip
@@ -2556,6 +2562,11 @@ mod tests {
         assert_eq!(lowered_levels(&texture(256, 256, BC1, 9), 2), 1);
         assert_eq!(lowered_levels(&texture(512, 256, BC1, 10), 2), 1);
         assert_eq!(lowered_levels(&texture(128, 128, BC1, 8), 2), 0);
+        // Whole blocks only: 1920 x 1080 halves to 960 x 540, and 270 rows
+        // are not whole blocks; 1000 x 600 halves to 500 x 300, no further.
+        assert_eq!(lowered_levels(&texture(1920, 1080, BC7, 11), 3), 1);
+        assert_eq!(lowered_levels(&texture(1000, 600, BC1, 10), 2), 1);
+        assert_eq!(lowered_levels(&texture(1004, 600, BC1, 10), 2), 0);
         // No more than the levels beside the last one.
         assert_eq!(lowered_levels(&texture(4096, 4096, BC1, 2), 4), 1);
         assert_eq!(lowered_levels(&texture(2048, 2048, BC1, 1), 2), 0);

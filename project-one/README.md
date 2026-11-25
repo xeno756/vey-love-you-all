@@ -13,13 +13,15 @@ référence : ses bonnes idées sont réécrites ici, jamais copiées.
 ## État réel
 
 **Non jouable sur cette machine à ce jour.** Le jeu démarre, charge le monde et affiche le
-générique d'ouverture, à environ 1 image par seconde en mode Series X (mesuré le 24/11/2026).
-Le remplacement des mesh shaders fonctionne en jeu pour les dessins directs. Les dessins
-indirects (la géométrie solide du monde) et le déblocage du mode Series S sont écrits mais pas
-encore essayés en jeu.
+générique d'ouverture, à environ 1 image par seconde en mode Series X (mesuré le 25/11/2026 :
+0,5 à 1,7). Le remplacement des mesh shaders fonctionne en jeu, dessins directs et indirects.
+Le mode Series S reste bloqué sur son premier écran. Les graphismes réduits (textures, effets
+laissés de côté) sont écrits et testés hors jeu, pas encore essayés en jeu.
 
 - Pourquoi 1 image par seconde, et ce qui a été changé :
   [docs/technical/06-performances.md](docs/technical/06-performances.md).
+- Définition, graphismes au minimum, écran de lancement, ordre d'essai :
+  [docs/technical/07-graphismes-minimaux.md](docs/technical/07-graphismes-minimaux.md).
 - Le remplacement des mesh shaders :
   [docs/technical/04-shaders-ecran-noir.md](docs/technical/04-shaders-ecran-noir.md), section 3 bis.
 - Le reste : [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
@@ -83,9 +85,13 @@ Rien de PROJECT GAME n'est stocké ici (voir `docs/asset-policy.md` à la racine
 | `lancer.cmd series-x capture` | version diagnostic (`target\diag\victory.exe`) : enregistre des images de l'écran et des tampons internes du jeu (normales, profondeur, couleurs) dans `..\victory-captures`, hors du dépôt |
 | `lancer.cmd series-x profil` | version diagnostic : mesure le temps de la carte commande par commande (plus lent) |
 | `lancer.cmd series-x test` | montre ce qui serait lancé, sans rien lancer |
+| `lancer.cmd series-x textures:2` | textures du jeu sans leurs 2 premiers niveaux de détail (1 à 4) : moins de mémoire vidéo, textures plus floues |
+| `lancer.cmd series-x sans:vent+particules` | laisse de côté les passes de calcul de groupes d'effets (fichiers `..\victory-profils\<groupe>.txt`) ; jamais un dessin |
+| `lancer.cmd series-x minimal` | `textures:2` et les groupes à faible risque : `particules`, `vent`, `flou-et-halos`, `reflets` |
 
-`series-x` et `series-s` se remplacent l'un l'autre dans chaque commande. `capture`, `profil` et
-`test` se combinent. `preparer` suit la version choisie : la version diagnostic a son propre
+`series-x` et `series-s` se remplacent l'un l'autre dans chaque commande. `capture`, `profil`,
+`test`, `textures:N`, `sans:…` et `minimal` se combinent. Les graphismes réduits et leur ordre
+d'essai sont décrits dans [docs/technical/07-graphismes-minimaux.md](docs/technical/07-graphismes-minimaux.md). `preparer` suit la version choisie : la version diagnostic a son propre
 cache de shaders.
 
 Le dossier du jeu vient de `victory.toml`, à la racine du dépôt (non suivi par git). Chaque
