@@ -58,8 +58,9 @@ Lecture :
   650 à 4 180 dessins. La compilation avance à 3,5 pipelines par seconde avec 8 fils. Cette
   attente se déroule en grande partie pendant que le fil d'envoi attend la carte : quand la
   carte est chargée, elle allonge peu l'image (735 ms avec l'attente, 680 ms sans, sur deux
-  images comparables). Quand la carte est libre, comme à l'écran de lancement, elle fait toute
-  l'image : 520 ms par image mesurés au début du lancement Series S.
+  images comparables). Quand la carte est libre, comme à l'écran de lancement, elle peut faire
+  toute l'image : 520 ms par image au début du lancement Series S, avec un dessin sauté faute de
+  pipeline (déduction : ce journal ne détaille pas l'attente).
 - **Les images de 16 à 20 s** coïncident avec 1,3 à 5,7 millions de défauts de page.
 
 ### La mémoire (mesuré)
@@ -99,9 +100,9 @@ trente passes prennent de l'ordre d'une seconde (estimation).
 
 | Observation | Cause |
 |---|---|
-| Environ 1 image par seconde dans le monde | la carte : 0,4 à 2,6 s par image pour le rendu en 1440p du mode Series X, aggravé par la mémoire vidéo dépassée ; plus 500 ms d'attente de pipelines pendant les 4 à 5 premières minutes |
+| Environ 1 image par seconde dans le monde | la carte : 0,4 à 2,6 s par image pour le rendu en 1440p du mode Series X, aggravé par la mémoire vidéo dépassée. Pendant les 4 à 5 premières minutes s'ajoutent la compilation des pipelines (7 à 19 cœurs occupés) et les images de 16 à 20 s dues à la mémoire qui déborde |
 | Les sous-titres ralentissent | ils avancent avec les images du jeu : à 1 image par seconde, tout ce que le jeu met à jour par image ralentit. Le fil principal n'est pas bloqué en dehors de l'attente de la carte |
-| L'écran de lancement est lent, le chargement moins | au lancement, 1 200 à 1 600 pipelines connus des lancements précédents sont compilés d'avance par 8 fils : 4 à 18 cœurs occupés, le jeu a moins de processeur, et une image qui dessine avec un pipeline pas encore prêt attend jusqu'à 500 ms. Le mode capture ajoutait l'écriture d'une image PNG toutes les 16 images |
+| L'écran de lancement est lent, le chargement moins | **expliqué en partie.** Mesuré : dans les premières secondes, les images durent 340 à 520 ms alors que la carte est libre (0 à 4 % d'occupation) ; ensuite le jeu tient 25 à 30 images par seconde jusqu'au monde. Deux causes vues : une image qui dessine avec un pipeline pas encore prêt l'attend jusqu'à 500 ms (lancement Series S : 520 ms par image, un dessin sauté, déduit du budget d'attente) ; et le jeu lui-même n'envoie rien pendant son démarrage (lancement Series X : 344 ms par image, 4 cœurs occupés). En plus, 1 200 à 1 600 pipelines connus des lancements précédents sont compilés d'avance par 8 fils pendant cette phase (4 à 18 cœurs occupés) |
 | Le monde est incomplet | 2 000 à 2 260 dessins mesh indirects sautés par image, plus les dessins dont le pipeline n'est pas encore compilé |
 
 Part de chaque facteur, dans l'état stable du monde en Series X : la carte représente 60 à 90 %
@@ -136,8 +137,9 @@ qu'il a engagé dans ses propres réservations et les pages physiques qu'il dét
 `VICTORY_TITLE_USED=process` remet l'ancienne réponse.
 
 **Non vérifié** : que le jeu dépasse bien son premier écran avec cette réponse. C'est le premier
-essai à faire. Le journal donne maintenant, à chaque question du jeu, la mémoire du jeu, ses
-pages physiques et celle du processus : si le blocage persiste, ces lignes diront pourquoi.
+essai à faire. Le journal donne maintenant, pour les huit premières questions du jeu puis une
+sur 256, la mémoire du jeu, ses pages physiques et celle du processus : si le blocage persiste,
+ces lignes diront pourquoi.
 
 ## 4. Les changements de cette session
 

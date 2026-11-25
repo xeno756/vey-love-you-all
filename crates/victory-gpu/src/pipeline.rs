@@ -932,7 +932,9 @@ pub fn prepare(
         shaders,
         translated,
         untranslated,
-        cached: (crate::shader_cache::counts().0 - hits) as usize,
+        // A shader a pipeline was made from was read a second time, from
+        // the cache whatever it held before.
+        cached: ((crate::shader_cache::counts().0 - hits) as usize).saturating_sub(pipelines + refused),
         pipelines,
         loaded: (library::LOADED.load(Relaxed) - loaded) as usize,
         refused,

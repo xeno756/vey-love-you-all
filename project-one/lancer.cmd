@@ -8,7 +8,8 @@ rem                                  de l'ecran et des tampons internes du jeu
 rem   lancer.cmd series-x profil     version diagnostic : mesure le temps de la
 rem                                  carte commande par commande (plus lent)
 rem   lancer.cmd series-x preparer   ne lance pas le jeu : traduit ses shaders
-rem                                  et compile ses pipelines de calcul d'avance
+rem                                  et compile d'avance ses pipelines de calcul
+rem                                  et ceux de ses programmes mesh
 rem   lancer.cmd series-x test       montre ce qui serait lance, sans rien lancer
 rem   (capture, profil et test peuvent se combiner ; preparer suit la version
 rem   choisie : la version diagnostic a son propre cache de shaders)
@@ -107,7 +108,7 @@ if not exist "%LOGS%" mkdir "%LOGS%"
 if defined CAPTURE if not exist "%VICTORY_CAPTURE%" mkdir "%VICTORY_CAPTURE%"
 
 if not defined PREPARE goto title
-"%EXE%" prepare --compute-pipelines 2>"%LOG%"
+"%EXE%" prepare --compute-pipelines --mesh-pipelines 2>"%LOG%"
 echo Preparation terminee, code %ERRORLEVEL%. Journal : %LOG%
 exit /b %ERRORLEVEL%
 :title

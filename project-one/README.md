@@ -79,7 +79,7 @@ Rien de PROJECT GAME n'est stocké ici (voir `docs/asset-policy.md` à la racine
 |---|---|
 | `lancer.cmd` | Series X |
 | `lancer.cmd series-s` | Series S : moins de mémoire et une définition interne plus basse, le mode le plus proche de cette machine |
-| `lancer.cmd series-x preparer` | **ne lance pas le jeu** : traduit ses shaders dans le cache et compile ses pipelines de calcul. À refaire après chaque recompilation du runtime |
+| `lancer.cmd series-x preparer` | **ne lance pas le jeu** : traduit ses shaders dans le cache et compile ses pipelines de calcul et ceux de ses programmes mesh (environ 10 minutes). À refaire après chaque recompilation du runtime |
 | `lancer.cmd series-x capture` | version diagnostic (`target\diag\victory.exe`) : enregistre des images de l'écran et des tampons internes du jeu (normales, profondeur, couleurs) dans `..\victory-captures`, hors du dépôt |
 | `lancer.cmd series-x profil` | version diagnostic : mesure le temps de la carte commande par commande (plus lent) |
 | `lancer.cmd series-x test` | montre ce qui serait lancé, sans rien lancer |
