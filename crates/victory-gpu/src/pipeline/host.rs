@@ -439,6 +439,9 @@ pub(crate) enum Variant {
     MeshCompute,
     /// The vertex shader that draws what that compute shader wrote.
     MeshVertex,
+    /// A pixel shader that reads its barycentrics from inputs
+    /// ([`Shader::bary_variant`]).
+    Bary,
 }
 
 fn translation(shader: &Shader, variant: Variant) -> Option<&Translated> {
@@ -446,6 +449,42 @@ fn translation(shader: &Shader, variant: Variant) -> Option<&Translated> {
         Variant::Title => shader.translated(),
         Variant::MeshCompute => shader.mesh_variant().map(|m| &m.compute),
         Variant::MeshVertex => shader.mesh_variant().map(|m| &m.vertex),
+        Variant::Bary => shader.bary_variant(),
+    }
+}
+
+/// `VICTORY_BARYCENTRIC_GS=0`: pixel shaders that read barycentrics are
+/// left to a host that has them, as before (their pipelines are refused on
+/// one that has not).
+fn barycentric_gs_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_BARYCENTRIC_GS").is_none_or(|v| v != "0"))
+}
+
+/// (PROJECT ONE) Whether pixel shader `ps` runs its barycentric variant
+/// behind a geometry stage of ours (`victory_shader::emit::bary`): its
+/// translation reads barycentrics and the host has none. The draw is then
+/// made instead of refused (the title's skin, hair and wiper mask on an
+/// RDNA1 card).
+fn wants_barycentric_inputs(ps: &Shader) -> bool {
+    barycentric_gs_on()
+        && host().is_some_and(|h| !h.caps().barycentrics)
+        && ps.translated().is_some_and(|t| reads_barycentrics(&t.host.dxil))
+}
+
+/// The geometry stage that gives a barycentric variant of a pixel shader
+/// what it reads, behind vertex shader `vs` (DXIL); `None`, logged, where
+/// it cannot be made.
+fn barycentric_stage(vs: &[u8], ps: &[u8], shaders: &[Arc<Shader>]) -> Option<Vec<u8>> {
+    match victory_shader::emit::bary::barycentric_gs(vs, ps) {
+        Ok(gs) => {
+            tracing::info!(?shaders, "pipeline with a geometry stage that gives its pixel shader barycentrics");
+            Some(gs)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, ?shaders, "no barycentric geometry stage");
+            None
+        }
     }
 }
 
@@ -579,7 +618,17 @@ impl HostPipeline {
                 (None, None) => return refuse("no vertex or mesh shader", shaders),
             };
             let mut stages = vec![first];
-            stages.extend(find("pixel").map(|ps| (ps, Variant::Title, D3D12_SHADER_VISIBILITY_PIXEL)));
+            // (PROJECT ONE) Triangles only: a geometry stage of ours takes
+            // them as they come.
+            let triangles = g.is_some_and(|g| g.topology == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE || g.topology.0 == QUADS);
+            let pixel = |ps: &Shader| {
+                if gs.is_none() && mesh.is_none() && triangles && wants_barycentric_inputs(ps) {
+                    Variant::Bary
+                } else {
+                    Variant::Title
+                }
+            };
+            stages.extend(find("pixel").map(|ps| (ps, pixel(ps), D3D12_SHADER_VISIBILITY_PIXEL)));
             stages.extend(gs.map(|gs| (gs, Variant::Title, D3D12_SHADER_VISIBILITY_GEOMETRY)));
             stages
         };
@@ -705,6 +754,16 @@ impl HostPipeline {
         // that completes each one from the three vertices the vertex
         // shader made. Without it (refused here or by the host) the draws
         // fall back on what `draw` does for rectangles.
+        // (PROJECT ONE) A pixel shader that reads its barycentrics from
+        // inputs gets the geometry stage that writes them.
+        let mut bary_gs = None;
+        if let Some(i) = ps_at
+            && stages[i].1 == Variant::Bary
+            && let Some(ps) = translation(stages[i].0, stages[i].1)
+        {
+            let vs = &stages[0].0.translated()?.host.dxil;
+            bary_gs = barycentric_stage(vs, &ps.host.dxil, shaders);
+        }
         let mut rect_gs = None;
         if g.topology.0 == RECTANGLES && real_gs.is_none() {
             let ps = ps_at.and_then(|i| translation(stages[i].0, stages[i].1));
@@ -720,7 +779,7 @@ impl HostPipeline {
             VS: code(0),
             PS: ps_code,
             GS: real_gs.unwrap_or_else(|| {
-                rect_gs.as_ref().map_or(D3D12_SHADER_BYTECODE::default(), |gs| {
+                rect_gs.as_ref().or(bary_gs.as_ref()).map_or(D3D12_SHADER_BYTECODE::default(), |gs| {
                     D3D12_SHADER_BYTECODE {
                         pShaderBytecode: gs.as_ptr().cast(),
                         BytecodeLength: gs.len(),
@@ -758,7 +817,7 @@ impl HostPipeline {
                 &state,
             ),
             (None, Some(gs)) => super::library::name(
-                "graphics rectangles",
+                if bary_gs.is_some() { "graphics barycentrics" } else { "graphics rectangles" },
                 &root_blob,
                 &[&code_bytes(&code(0)), &code_bytes(&ps_code), &gs[..]],
                 &state,
@@ -782,7 +841,7 @@ impl HostPipeline {
                 || unsafe { host.device.CreateGraphicsPipelineState(desc) },
             )
         };
-        let mut made = make(&desc, &name(rect_gs.as_ref()));
+        let mut made = make(&desc, &name(rect_gs.as_ref().or(bary_gs.as_ref())));
         if made.is_err() && rect_gs.is_some() {
             // The host refused the geometry stage: once more without it.
             tracing::warn!(?shaders, "host pipeline refused with the rectangle geometry stage");
@@ -846,13 +905,22 @@ impl HostPipeline {
         let host = host()?;
         let compute = Self::mesh_compute_half(shaders, ms)?;
 
+        // (PROJECT ONE) A pixel shader that reads barycentrics runs its
+        // variant that reads them from inputs, behind a geometry stage.
+        let ps_variant = match ps {
+            Some(ps) if wants_barycentric_inputs(ps) && ps.bary_variant().is_some() => Variant::Bary,
+            _ => Variant::Title,
+        };
         let mut stages = vec![(ms, Variant::MeshVertex, D3D12_SHADER_VISIBILITY_VERTEX)];
-        stages.extend(ps.map(|ps| (ps, Variant::Title, D3D12_SHADER_VISIBILITY_PIXEL)));
+        stages.extend(ps.map(|ps| (ps, ps_variant, D3D12_SHADER_VISIBILITY_PIXEL)));
         let (bound, root, root_blob) = root_for(host, &stages, false, shaders)?;
         let vs = &variant.vertex.host.dxil;
         let ps_code = ps
-            .and_then(|ps| ps.translated())
+            .and_then(|ps| translation(ps, ps_variant))
             .map_or(&[][..], |t| &t.host.dxil[..]);
+        let bary_gs = (ps_variant == Variant::Bary)
+            .then(|| barycentric_stage(vs, ps_code, shaders))
+            .flatten();
         let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
             // SAFETY: a borrowed pointer the description never releases.
             pRootSignature: unsafe { std::mem::transmute_copy(&root) },
@@ -862,6 +930,7 @@ impl HostPipeline {
             } else {
                 bytecode(ps_code)
             },
+            GS: bary_gs.as_deref().map_or(D3D12_SHADER_BYTECODE::default(), bytecode),
             BlendState: g.host_blend(),
             SampleMask: g.sample_mask,
             RasterizerState: g.rasterizer,
@@ -875,7 +944,10 @@ impl HostPipeline {
             ..Default::default()
         };
         let state = g.describe();
-        let name = super::library::name("mesh as vertices", &root_blob, &[vs, ps_code], &state);
+        let name = match &bary_gs {
+            Some(gs) => super::library::name("mesh as vertices, barycentrics", &root_blob, &[vs, ps_code, gs], &state),
+            None => super::library::name("mesh as vertices", &root_blob, &[vs, ps_code], &state),
+        };
         let made = super::library::pipeline(
             &name,
             // SAFETY: the description points at live data.
@@ -886,7 +958,7 @@ impl HostPipeline {
         let pso = match made {
             Ok(pso) => pso,
             Err(e) => {
-                let why = why_refused(host.caps(), &[vs, ps_code]);
+                let why = why_refused(host.caps(), &[vs, ps_code, bary_gs.as_deref().unwrap_or_default()]);
                 tracing::warn!(error = %e, ?shaders, why, "host pipeline drawing a mesh program's records refused");
                 host.log_messages();
                 return None;

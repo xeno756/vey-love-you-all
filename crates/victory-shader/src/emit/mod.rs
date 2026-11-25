@@ -90,6 +90,7 @@
 
 mod bitcode;
 mod container;
+pub mod bary;
 pub mod exposure;
 #[cfg(all(test, windows))]
 mod diff_tests;
@@ -2134,6 +2135,47 @@ mod barycentric_tests {
         assert_ne!(features & 0x2_0000, 0, "no Barycentrics feature");
         assert_eq!(inputs.iter().filter(|e| e.kind == 28).count(), 1);
         assert_eq!(texcoord_mode(&shader), 1);
+        validate(&shader);
+    }
+
+    /// (PROJECT ONE) Translated for a host without barycentrics, the same
+    /// program reads its weights from an ordinary input the geometry stage
+    /// writes (`bary.rs`): no Barycentrics feature, three floats in a
+    /// register of their own.
+    #[test]
+    fn barycentric_values_from_inputs_need_no_feature() {
+        let [e0, e1] = exp_mrt0(2);
+        let words = [v_add_f32(2, 0, 1), e0, e1, 0xBF81_0000];
+        let shader = bary::with_inputs(|| pixel(&words, PERSP_CENTER)).unwrap();
+        let (features, inputs) = parts(&shader);
+        assert_eq!(features & 0x2_0000, 0, "a Barycentrics feature");
+        assert!(!inputs.iter().any(|e| e.kind == 28), "{inputs:?}");
+        let weights: Vec<_> = inputs.iter().filter(|e| e.name == bary::WEIGHTS).collect();
+        assert_eq!(weights.len(), 1, "{inputs:?}");
+        assert_eq!((weights[0].col, weights[0].cols), (0, 3));
+        assert!(weights[0].row.is_some_and(|r| r != 0), "a register of its own");
+        validate(&shader);
+    }
+
+    /// (PROJECT ONE) And its vertices' values from constant inputs, one per
+    /// vertex: no `attributeAtVertex`, no Barycentrics feature.
+    #[test]
+    fn vertex_values_from_inputs_need_no_feature() {
+        let [e0, e1] = exp_mrt0(2);
+        let words = [
+            0x1006_00F0, // v_mul_f32 v3, 0.5, v0
+            0xC808_0003, // v_interp_p1_f32 v2, v3, attr0.x
+            0xC809_0001, // v_interp_p2_f32 v2, v1, attr0.x
+            e0,
+            e1,
+            S_ENDPGM,
+        ];
+        let shader = bary::with_inputs(|| pixel(&words, PERSP_CENTER)).unwrap();
+        let (features, inputs) = parts(&shader);
+        assert_eq!(features & 0x2_0000, 0, "a Barycentrics feature");
+        let mut corners: Vec<u32> = inputs.iter().filter(|e| e.name == bary::CORNER).map(|e| e.index).collect();
+        corners.sort_unstable();
+        assert_eq!(corners, [0, 1, 2].map(|k| bary::corner_index(0, 0, k)), "{inputs:?}");
         validate(&shader);
     }
 

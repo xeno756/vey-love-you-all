@@ -70,6 +70,10 @@ pub(crate) struct Shader {
     /// ([`Shader::mesh_variant`]).
     #[cfg(windows)]
     mesh_variant: OnceLock<Option<MeshVariant>>,
+    /// A pixel shader's translation that reads its barycentrics from
+    /// inputs ([`Shader::bary_variant`]).
+    #[cfg(windows)]
+    bary_variant: OnceLock<Option<Translated>>,
 }
 
 impl std::fmt::Debug for Shader {
@@ -122,6 +126,8 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 translated: OnceLock::new(),
                 #[cfg(windows)]
                 mesh_variant: OnceLock::new(),
+                #[cfg(windows)]
+                bary_variant: OnceLock::new(),
             })
         })
         .clone()
@@ -197,6 +203,41 @@ impl Shader {
 
 /// A mesh program for a host without mesh shaders
 /// (`victory_shader::emit::mesh_compute`): the compute shader that runs it
+#[cfg(windows)]
+impl Shader {
+    /// (PROJECT ONE) This pixel shader translated to read its barycentric
+    /// weights and its inputs' vertex values from inputs a geometry stage
+    /// writes (`victory_shader::emit::bary`), for a host without
+    /// barycentrics; made on first use (after [`Shader::translated`]), its
+    /// bindings the same as the title translation's.
+    /// shortcut: translated again each run, not kept in the shader cache.
+    pub(crate) fn bary_variant(&self) -> Option<&Translated> {
+        self.bary_variant
+            .get_or_init(|| {
+                let title = self.translated()?;
+                let done = victory_shader::emit::for_program(&self.hash, || {
+                    victory_shader::emit::bary::translate_with_barycentric_inputs(&self.container)
+                });
+                match done {
+                    Ok(host) => {
+                        tracing::info!(hash = %self.hash, "pixel shader translated to read its barycentrics from inputs");
+                        Some(Translated {
+                            host,
+                            used: title.used.clone(),
+                            stores: title.stores,
+                            writes: title.writes,
+                        })
+                    }
+                    Err(error) => {
+                        tracing::warn!(hash = %self.hash, %error, "pixel shader does not translate with barycentric inputs");
+                        None
+                    }
+                }
+            })
+            .as_ref()
+    }
+}
+
 /// and writes each group's vertices and triangles to a record buffer, and
 /// the vertex shader that draws the records with the title's pixel shader.
 #[cfg(windows)]

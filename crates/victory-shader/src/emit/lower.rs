@@ -2662,6 +2662,38 @@ impl<'a> Lower<'a> {
         if index > 1 {
             return Val::Missing("pull-model barycentrics");
         }
+        // (PROJECT ONE) A host without barycentrics: from the input the
+        // geometry stage writes (`super::bary`).
+        if super::bary::from_inputs() {
+            let found = self
+                .s
+                .inputs
+                .iter()
+                .position(|e| e.name == super::bary::WEIGHTS && e.interp == mode);
+            let id = match found {
+                Some(id) => id,
+                None => {
+                    let Some(row) = super::bary::free_row(&self.s.inputs) else {
+                        return Val::Missing("no register left for the barycentric weights");
+                    };
+                    let index = self.s.inputs.iter().filter(|e| e.name == super::bary::WEIGHTS).count() as u32;
+                    self.s.inputs.push(SigElement {
+                        name: super::bary::WEIGHTS.into(),
+                        index,
+                        kind: 0,
+                        comp: 9,
+                        interp: mode,
+                        row: Some(row),
+                        col: 0,
+                        cols: 3,
+                        usage: 0,
+                        half: false,
+                    });
+                    self.s.inputs.len() - 1
+                }
+            };
+            return self.load_any_input(id, index + 1);
+        }
         // One element per interpolation mode (the console's own, if its
         // signature declares one): DXIL allows two.
         let bary = |e: &SigElement| e.kind == 28;
@@ -9855,6 +9887,13 @@ impl<'a> Lower<'a> {
     /// Vertex `k` (0 the provoking vertex, as `barycentric` orders them)
     /// of a constant input element's channel, as a float.
     fn vertex_input(&mut self, id: usize, col: u8, k: u8) -> V {
+        // (PROJECT ONE) A host without barycentrics: vertex `k`'s value
+        // from the constant input the geometry stage writes (`super::bary`).
+        if super::bary::from_inputs()
+            && let Some(x) = self.corner_input(id, col, k)
+        {
+            return x;
+        }
         let e = &mut self.s.inputs[id];
         e.usage |= 1 << col;
         let int = e.comp != 9;
@@ -9883,6 +9922,40 @@ impl<'a> Lower<'a> {
             self.s.m.cast(entry, Cast::Bitcast, v, self.s.t.f32)
         } else {
             v
+        }
+    }
+
+    /// [`Self::vertex_input`] from the [`super::bary::CORNER`] input that
+    /// carries vertex `k`'s value of element `id`, declared on first use;
+    /// `None` for an element without a register, or without one free.
+    fn corner_input(&mut self, id: usize, col: u8, k: u8) -> Option<V> {
+        let source = self.s.inputs[id].clone();
+        let index = super::bary::corner_index(source.row?, source.col, k);
+        let found = self
+            .s
+            .inputs
+            .iter()
+            .position(|e| e.name == super::bary::CORNER && e.index == index);
+        let at = match found {
+            Some(at) => at,
+            None => {
+                let row = super::bary::free_row(&self.s.inputs)?;
+                self.s.inputs.push(SigElement {
+                    name: super::bary::CORNER.into(),
+                    index,
+                    interp: 1,
+                    row: Some(row),
+                    usage: 0,
+                    ..source
+                });
+                self.s.inputs.len() - 1
+            }
+        };
+        // The element's columns are the source's: `col` (counted from the
+        // element's first) is the same here.
+        match self.load_any_input(at, col) {
+            Val::I32(x) => Some(self.as_float(x)),
+            _ => None,
         }
     }
 
