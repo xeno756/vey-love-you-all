@@ -142,6 +142,52 @@ impl Bools {
         vars.into_iter().map(|v| self.atoms[v as usize]).collect()
     }
 
+    /// Whether `m` is the same in every lane where `r` holds, lanes being alike in the atoms
+    /// `same` accepts (values every lane shares): no two such lanes where `r` holds, one
+    /// with `m` and one without. `false` when the search grows past its budget.
+    pub fn uniform_within(&self, m: Bool, r: Bool, same: &dyn Fn(Atom) -> bool) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut budget = 200_000usize;
+        !self.differ([r, m, r, m], same, &mut seen, &mut budget)
+    }
+
+    /// (r1, m1, r2, m2): whether lane 1 can have `r` and `m`, and lane 2 `r` and not `m`.
+    fn differ(
+        &self,
+        s: [Bool; 4],
+        same: &dyn Fn(Atom) -> bool,
+        seen: &mut std::collections::HashSet<[Bool; 4]>,
+        budget: &mut usize,
+    ) -> bool {
+        let [r1, m1, r2, m2] = s;
+        if r1 == Bool::FALSE || m1 == Bool::FALSE || r2 == Bool::FALSE || m2 == Bool::TRUE {
+            return false;
+        }
+        if r1 == Bool::TRUE && m1 == Bool::TRUE && r2 == Bool::TRUE && m2 == Bool::FALSE {
+            return true;
+        }
+        if *budget == 0 {
+            return true;
+        }
+        *budget -= 1;
+        if !seen.insert(s) {
+            return false;
+        }
+        let top = |b: Bool| self.nodes[b.0 as usize].0;
+        let v = s.iter().map(|&b| top(b)).min().unwrap_or(TERMINAL);
+        let c: Vec<(Bool, Bool)> = s.iter().map(|&b| self.split(b, v)).collect();
+        let pick = |x: (Bool, Bool), one: bool| if one { x.1 } else { x.0 };
+        if same(self.atoms[v as usize]) {
+            [false, true]
+                .into_iter()
+                .any(|x| self.differ([pick(c[0], x), pick(c[1], x), pick(c[2], x), pick(c[3], x)], same, seen, budget))
+        } else {
+            [(false, false), (false, true), (true, false), (true, true)].into_iter().any(|(a, b)| {
+                self.differ([pick(c[0], a), pick(c[1], a), pick(c[2], b), pick(c[3], b)], same, seen, budget)
+            })
+        }
+    }
+
     fn vars(&self, b: Bool) -> Vec<u32> {
         let (mut seen, mut vars, mut stack) = (Vec::new(), Vec::new(), vec![b]);
         while let Some(b) = stack.pop() {

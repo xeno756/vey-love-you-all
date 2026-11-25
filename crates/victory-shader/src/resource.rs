@@ -56,6 +56,27 @@ const RAW: [&str; 5] = [
     "an address from a phi",
 ];
 
+/// VIcky (diagnostics, `VICTORY_RT_MISS=1`): an address neither a root
+/// parameter nor title memory ([`MEMORY`]) explains. Loads from it read
+/// zeros, and a node test this tree cannot lower misses, so a ray-traced
+/// pass that would be refused runs with no ray-traced shadows or bounces.
+/// Only a fallback here: everything the tracer resolves is lowered as before.
+pub const RT_NULL: usize = usize::MAX - 2;
+
+/// Whether `VICTORY_RT_MISS=1` is set: unresolvable addresses read zeros and
+/// BVH intersections miss, so ray-traced passes run (no ray-traced shadows or
+/// bounces) instead of being dropped.
+pub fn rt_miss() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VICTORY_RT_MISS").is_ok_and(|v| v == "1"))
+}
+
+const NULL_ADDRESS: Address = Address {
+    param: RT_NULL,
+    offset: 0,
+    dynamic: None,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// Dwords `first..` of what the scalar load at `load` reads (see
@@ -271,10 +292,13 @@ pub fn track(
                         {
                             out.bvh.push((site, BvhNodes::Memory { word1, word3 }));
                         }
-                        _ => {
-                            descriptor(rsrc, Role::Resource)?;
-                            out.bvh.push((site, BvhNodes::Resource));
-                        }
+                        _ => match descriptor(rsrc, Role::Resource) {
+                            Ok(()) => out.bvh.push((site, BvhNodes::Resource)),
+                            // `VICTORY_RT_MISS=1`: lowered as a test that
+                            // finds no node (`Lower::bvh_miss`).
+                            Err(_) if rt_miss() => {}
+                            Err(e) => return Err(e),
+                        },
                     }
                 }
                 Fields::Image { rsrc, sampler, .. } => {
@@ -301,6 +325,7 @@ pub fn track(
                     let address = t
                         .smem_address(inst, base, *offset, soffset)
                         .or_else(|why| t.by_address(why))
+                        .or_else(|why| if rt_miss() { Ok(NULL_ADDRESS) } else { Err(why) })
                         .map_err(fail)?;
                     out.scalar.push((site, address));
                 }
@@ -313,6 +338,7 @@ pub fn track(
                     let address = t
                         .flat_address(inst, addr.as_ref(), saddr.as_ref(), *offset)
                         .or_else(|why| t.by_address(why))
+                        .or_else(|why| if rt_miss() { Ok(NULL_ADDRESS) } else { Err(why) })
                         .map_err(fail)?;
                     out.scalar.push((site, address));
                 }

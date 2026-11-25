@@ -403,6 +403,10 @@ impl<'a> Lower<'a> {
             let on = self.s.m.bin(c, Bin::Xor, off, on);
             let hit = self.s.m.bin(c, Bin::And, through, before);
             let hit = self.s.m.bin(c, Bin::And, hit, on);
+            // An absent child (NONE) is no hit whatever its bounds, so it
+            // cannot sort ahead of a real one (victory-fork #173).
+            let present = self.s.m.cmp(c, pred::IULT, children[n], none);
+            let hit = self.s.m.bin(c, Bin::And, hit, present);
             ids[n] = self.s.m.select(c, hit, children[n], none);
             distances[n] = self.s.m.select(c, hit, enter, infinity);
         }

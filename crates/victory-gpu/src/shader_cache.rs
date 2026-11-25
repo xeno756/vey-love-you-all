@@ -1,7 +1,8 @@
 //! Translated shaders kept on disk (decision 0003): under the configured
-//! cache folder, keyed by the container's content and by the VIctory build
-//! that translated it (the BLAKE3 of our executable), so a rebuilt
-//! translator never serves an old translation. Entries go through
+//! cache folder, keyed by the container's content and by the translator
+//! that made it (the BLAKE3 of its sources, see [`build`]), so a changed
+//! translator never serves an old translation and a rebuild that leaves it
+//! alone keeps the cache. Entries go through
 //! `victory-pipeline`'s content-addressed cache, which writes them
 //! atomically; an entry that does not read back is translated again.
 //!
@@ -134,13 +135,18 @@ pub(crate) fn counts() -> (u64, u64) {
     (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed))
 }
 
-/// What identifies this build: the BLAKE3 of our executable file and of
-/// the translation settings it runs with (the loop limit, which a
-/// diagnostics build can change at run time).
+/// What identifies a translation besides the container: the translator that made it and the
+/// settings it ran with. The translator is named by the BLAKE3 of the sources of
+/// `victory-shader` (`victory_shader::SOURCE_HASH`, made by its `build.rs`, from upstream PR
+/// Marvisak/VIctory#254 by wbkepler) and by [`CACHE_SCHEMA_VERSION`] (bumped when this file's
+/// encoding changes), not by the executable: a rebuild that leaves the translator alone
+/// (another crate changed) serves the translations an earlier build cached, and one that
+/// changes it translates again. Run with `VICTORY_SHADER_CACHE_KEY=exe` for the BLAKE3 of the
+/// executable instead (any new executable then starts with an empty cache; a build patched
+/// outside the translator's sources that changes what it makes should).
 fn build() -> &'static [u8; 32] {
     static BUILD: OnceLock<[u8; 32]> = OnceLock::new();
     BUILD.get_or_init(|| {
-        let exe = std::env::current_exe().and_then(std::fs::read);
         let limit = victory_shader::emit::loop_limit();
         if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
             tracing::warn!(
@@ -148,35 +154,22 @@ fn build() -> &'static [u8; 32] {
                 "VICTORY_SHADER_LOOP_LIMIT: translated loops stop sooner"
             );
         }
-        match exe {
-            Ok(mut bytes) => {
-                bytes.extend_from_slice(&limit.to_le_bytes());
-                // So is the view heap's null slot (it differs by host GPU):
-                // a translation cached without the clamp must not be served.
-                crate::descriptor::host::probe_view_limit();
-                bytes.extend_from_slice(&victory_shader::emit::view_heap_limit().to_le_bytes());
-                // Which group barriers wait is part of the translation too.
-                bytes.push(victory_shader::emit::group_sync());
-                // So are the switches that pick the form of a wave64 program:
-                // without them here a run with `VICTORY_WAVE_WIDE=0` was
-                // served the translations an earlier run of the same
-                // executable had cached with the switch unset.
-                for name in [
-                    "VICTORY_WAVE_WIDE",
-                    "VICTORY_WAVE_DEEP_SKIPS",
-                    "VICTORY_WAVE_OWN_BITS",
-                    "VICTORY_F16_NEAREST",
-                ] {
-                    bytes.extend_from_slice(name.as_bytes());
-                    bytes.push(b'=');
-                    if let Some(value) = std::env::var_os(name) {
-                        bytes.extend_from_slice(value.as_encoded_bytes());
-                    }
-                    bytes.push(0);
-                }
-                // And which clean-up passes ran over the translated code.
-                bytes.extend_from_slice(&victory_shader::emit::shader_opt().to_le_bytes());
-                *blake3::hash(&bytes).as_bytes()
+        let translator = if std::env::var_os("VICTORY_SHADER_CACHE_KEY").is_some_and(|v| v == "exe")
+        {
+            std::env::current_exe().and_then(std::fs::read)
+        } else {
+            Ok([&CACHE_SCHEMA_VERSION.to_le_bytes()[..], victory_shader::SOURCE_HASH.as_bytes()].concat())
+        };
+        match translator {
+            Ok(translator) => {
+                let switches = SWITCHES.map(|name| (name, std::env::var_os(name)));
+                with_host_settings(key(
+                    &translator,
+                    limit,
+                    victory_shader::emit::group_sync(),
+                    &switches,
+                    victory_shader::emit::shader_opt(),
+                ))
             }
             Err(e) => {
                 // Without it no entry can be trusted: a fresh key per run.
@@ -190,14 +183,224 @@ fn build() -> &'static [u8; 32] {
     })
 }
 
+/// [`key`] mixed with the settings of this run that change translations
+/// beyond the translator's own switches: whether ray-traced passes the
+/// translator cannot follow run with every ray missing (`VICTORY_RT_MISS`,
+/// VIcky #6), and the view heap the host keeps (`probe_view_limit`, which
+/// runs before the first translation): the clamp of view indices and the
+/// heap map bindless views are looked up in (`VICTORY_HEAP_MAP`,
+/// `VICTORY_HEAP_WINDOW`).
+fn with_host_settings(base: [u8; 32]) -> [u8; 32] {
+    let mut bytes = base.to_vec();
+    bytes.push(u8::from(victory_shader::resource::rt_miss()));
+    bytes.extend_from_slice(&victory_shader::emit::view_heap_limit().to_le_bytes());
+    // (victory-amd) the host's widest wave, which picks how wave64 programs are made.
+    bytes.extend_from_slice(&victory_shader::emit::host_max_wave().to_le_bytes());
+    let map = victory_shader::emit::view_heap_map().map_or([u32::MAX; 2], |(w, s)| [w, s]);
+    for word in map {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    *blake3::hash(&bytes).as_bytes()
+}
+
+/// The environment switches that change what the translator makes, part of the key.
+const SWITCHES: [&str; 8] = [
+    "VICTORY_WAVE_WIDE",
+    "VICTORY_WAVE_DEEP_SKIPS",
+    "VICTORY_WAVE_OWN_BITS",
+    // (victory-amd: these three change the translation too)
+    "VICTORY_WAVE_LOCAL",
+    "VICTORY_STRICT_JOINS",
+    "VICTORY_MESH_OUTPUT_STRICT",
+    "VICTORY_F16_NEAREST",
+    // (VIcky #6: the loop limit changes the translation too)
+    "VICTORY_SHADER_LOOP_LIMIT",
+];
+
+/// Serialization schema version of [`encode`] / [`decode`]: bump it whenever [`HostShader`]'s
+/// on-disk format changes (the sources hash covers the translator, not this file).
+const CACHE_SCHEMA_VERSION: u32 = 1;
+
+/// The key of a translation's context: the translator's identity and the settings that
+/// change what it makes (the loop limit, which group barriers wait, the switches that pick
+/// the form of a wave64 program, the clean-up passes that ran over the translated code).
+fn key(
+    translator: &[u8],
+    limit: u32,
+    group_sync: u8,
+    switches: &[(&str, Option<std::ffi::OsString>)],
+    shader_opt: u32,
+) -> [u8; 32] {
+    let mut bytes = translator.to_vec();
+    bytes.extend_from_slice(&limit.to_le_bytes());
+    bytes.push(group_sync);
+    for (name, value) in switches {
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.push(b'=');
+        if let Some(value) = value {
+            bytes.extend_from_slice(value.as_encoded_bytes());
+        }
+        bytes.push(0);
+    }
+    bytes.extend_from_slice(&shader_opt.to_le_bytes());
+    *blake3::hash(&bytes).as_bytes()
+}
+
 /// The translation of a console shader container, from the cache when
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
-    let translate = |c: &[u8]| victory_shader::emit::translate(c).map_err(|e| e.to_string());
-    match cache() {
-        Some(cache) => cached(cache, build(), container, translate),
-        None => translate(container),
+    use victory_shader::emit;
+    if let Some(s) = stand_in(container) {
+        return Ok(s);
     }
+    // The hash the log names the shader by (`pipeline.rs`), which the
+    // per-program switches take.
+    let hash = blake3::hash(container).to_hex()[..16].to_owned();
+    let translate = |c: &[u8]| emit::for_program(&hash, || emit::translate(c)).map_err(|e| e.to_string());
+    let r = match cache() {
+        Some(cache) => {
+            // (`wave64_retried` second: it parses the container, and only a
+            // program a list names, or with `VICTORY_WAVE_DEEP_SKIPS=0`
+            // any, gets there)
+            let off = !emit::deep_skips_allowed(Some(&hash)) && emit::wave64_retried(container);
+            cached(cache, &program_key(build(), off), container, translate)
+        }
+        None => translate(container),
+    };
+    match r {
+        Err(e) => exposure_stub(container).ok_or(e),
+        ok => ok,
+    }
+}
+
+/// The stand-ins of `victory_shader::emit::stand_in`, each opt-in:
+/// `VICTORY_AMBIENT_STUB=1` (the diffuse illumination's last pass writes
+/// `VICTORY_AMBIENT_STUB_VALUE`, 0.1 by default) and
+/// `VICTORY_SHADOWMASK_STUB=1` (the ray-traced distant shadows write
+/// `VICTORY_SHADOWMASK_STUB_VALUE`, 1 = lit; each output in its own encoding,
+/// by slot: `VICTORY_AMBIENT_STUB_SLOTS="152=rgb9e5,208=mask,*=f"`), for the containers in
+/// `VICTORY_AMBIENT_STUB_HASHES` / `VICTORY_SHADOWMASK_STUB_HASHES` (the
+/// title's by default). They replace those passes whenever switched on: the
+/// passes translate, but what they read comes from ray tracing, which does
+/// not run on the host yet. Not cached (the cache keys by container).
+fn stand_in(container: &[u8]) -> Option<HostShader> {
+    use victory_shader::emit::stand_in as s;
+    let hash = blake3::hash(container).to_hex()[..16].to_owned();
+    let kinds = [
+        ("VICTORY_AMBIENT_STUB", s::AMBIENT_HASHES, s::AMBIENT_VALUE, s::ambient_slots(&hash)),
+        ("VICTORY_SHADOWMASK_STUB", s::SHADOWMASK_HASHES, s::SHADOWMASK_VALUE, s::SHADOWMASK_SLOTS),
+    ];
+    for (name, hashes, value, defaults) in kinds {
+        if std::env::var(name).ok().as_deref().map(str::trim) != Some("1") {
+            continue;
+        }
+        let listed = match std::env::var(format!("{name}_HASHES")) {
+            Ok(v) => v
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .any(|h| h.eq_ignore_ascii_case(&hash)),
+            Err(_) => hashes.contains(&hash.as_str()),
+        };
+        if !listed {
+            continue;
+        }
+        let value = std::env::var(format!("{name}_VALUE"))
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(value);
+        let slots = std::env::var(format!("{name}_SLOTS")).unwrap_or_default();
+        let plan = s::Plan::new(value)
+            .with_overrides(defaults)
+            .with_overrides(&slots);
+        match s::storing_plan(container, plan) {
+            Ok((shader, plan)) => {
+                tracing::warn!(
+                    %hash,
+                    stand_in = name,
+                    value,
+                    outputs = ?plan.seen,
+                    "pass replaced by a stand-in writing each output in its own encoding"
+                );
+                return Some(shader);
+            }
+            Err(e) => {
+                tracing::warn!(%hash, stand_in = name, error = %e, "stand-in does not translate");
+            }
+        }
+    }
+    None
+}
+
+/// `VICTORY_EXPOSURE_STUB=1`: the auto-exposure average, when it does not
+/// translate, replaced by a stand-in writing a constant luminance
+/// (`victory_shader::emit::exposure`; `VICTORY_EXPOSURE_STUB_VALUE`, 0.18 by
+/// default) for the containers in `VICTORY_EXPOSURE_STUB_HASHES` (16-digit
+/// hashes as the pipeline logs them, comma-separated; the title's by
+/// default).
+fn exposure_stub(container: &[u8]) -> Option<HostShader> {
+    use victory_shader::emit::exposure;
+    if std::env::var("VICTORY_EXPOSURE_STUB").ok()?.trim() != "1" {
+        return None;
+    }
+    let hash = blake3::hash(container).to_hex()[..16].to_owned();
+    let listed = match std::env::var("VICTORY_EXPOSURE_STUB_HASHES") {
+        Ok(v) => v
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .any(|h| h.eq_ignore_ascii_case(&hash)),
+        Err(_) => exposure::HASHES.contains(&hash.as_str()),
+    };
+    if !listed {
+        return None;
+    }
+    let value = std::env::var("VICTORY_EXPOSURE_STUB_VALUE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .unwrap_or(exposure::VALUE);
+    match exposure::stub(container, value) {
+        Ok(s) => {
+            tracing::warn!(%hash, value, "exposure shader replaced by a constant stand-in");
+            Some(s)
+        }
+        Err(e) => {
+            tracing::warn!(%hash, error = %e, "exposure stand-in does not translate either");
+            None
+        }
+    }
+}
+
+/// The key of one program's entries: the build's, mixed with the
+/// per-program decision when the program is kept out of the wave64 form
+/// "without skips, scalars followed" (`VICTORY_WAVE_DEEP_SKIPS_NOT`,
+/// `_ONLY`: `victory_shader::emit::deep_skips_allowed`). Only for a wave64
+/// compute program on a host of 32-lane waves, the only ones it can change.
+/// So the lists are in no key: changing one translates again only the
+/// programs whose decision it changes, and a program allowed the form keeps
+/// the key it had without any list.
+fn program_key(build: &[u8; 32], deep_skips_off: bool) -> [u8; 32] {
+    if !deep_skips_off {
+        return *build;
+    }
+    let mut h = blake3::Hasher::new();
+    h.update(build);
+    h.update(b"VICTORY_WAVE_DEEP_SKIPS off for this program");
+    *h.finalize().as_bytes()
+}
+
+/// Whether the translation of `container` is in the cache already (nothing is read or
+/// translated: the entry's file is looked for).
+pub(crate) fn is_cached(container: &[u8]) -> bool {
+    cache().is_some_and(|cache| has_entry(cache, build(), container))
+}
+
+/// Whether `cache` holds the translation of `container` made in context `build`.
+fn has_entry(cache: &Cache, build: &[u8; 32], container: &[u8]) -> bool {
+    let converter = Translate {
+        translate: |_: &[u8]| Err::<HostShader, String>(String::new()),
+        ran: AtomicBool::new(false),
+    };
+    let input = cache_input(build, container);
+    cache
+        .path_for(&victory_pipeline::CacheKey::new(&converter, &input))
+        .exists()
 }
 
 /// The cache entry's converter: the build and the container in, the
@@ -222,13 +425,19 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
     }
 }
 
+/// What a cache entry is made from: the context's key and the container (the entry's name
+/// is a hash of it, so [`is_cached`] finds what [`cached`] stored).
+fn cache_input(build: &[u8; 32], container: &[u8]) -> Vec<u8> {
+    [&build[..], container].concat()
+}
+
 fn cached(
     cache: &Cache,
     build: &[u8; 32],
     container: &[u8],
     translate: impl Fn(&[u8]) -> Result<HostShader, String> + Send + Sync,
 ) -> Result<HostShader, String> {
-    let input = [&build[..], container].concat();
+    let input = cache_input(build, container);
     let converter = Translate {
         translate,
         ran: AtomicBool::new(false),
@@ -531,6 +740,103 @@ mod tests {
         assert!(cached(&cache, &build, b"other", fail).is_err());
     }
 
+    #[test]
+    fn an_entry_is_found_for_the_translator_that_stored_it_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let (container, mine, other) = (b"a container".as_slice(), [1; 32], [2; 32]);
+        assert!(!has_entry(&cache, &mine, container));
+        let translate = |_: &[u8]| Ok(shader());
+        cached(&cache, &mine, container, translate).unwrap();
+        assert!(has_entry(&cache, &mine, container));
+        // another translator's key, or another container, finds nothing
+        assert!(!has_entry(&cache, &other, container));
+        assert!(!has_entry(&cache, &mine, b"another container"));
+    }
+
+    /// The digest `victory-shader`'s `build.rs` makes, from its sources as they are now.
+    fn digest_of_translator_sources() -> String {
+        fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, PathBuf)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/");
+                    out.push((rel, path));
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../victory-shader/src");
+        let mut files = Vec::new();
+        walk(&root, &root, &mut files);
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut hasher = blake3::Hasher::new();
+        for (rel, path) in files {
+            let contents = std::fs::read(path).unwrap();
+            hasher.update(rel.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(&(contents.len() as u64).to_le_bytes());
+            hasher.update(&contents);
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
+    #[test]
+    fn the_source_hash_is_the_translators_sources_digest() {
+        // so a changed translator source changes the key (the build script reruns when a file
+        // under `victory-shader/src` changes) and nothing else does
+        assert_eq!(victory_shader::SOURCE_HASH, digest_of_translator_sources());
+    }
+
+    #[test]
+    fn the_key_follows_the_translator_and_its_settings_and_nothing_else() {
+        let k = |translator: &[u8], limit: u32, wide: Option<&str>| {
+            key(
+                translator,
+                limit,
+                1,
+                &[("VICTORY_WAVE_WIDE", wide.map(Into::into))],
+                3,
+            )
+        };
+        let base = k(b"fingerprint A", 4096, None);
+        assert_eq!(
+            base,
+            k(b"fingerprint A", 4096, None),
+            "the same inputs, the same key"
+        );
+        // another translator: another key
+        assert_ne!(base, k(b"fingerprint B", 4096, None));
+        // its settings: the loop limit, a switch that picks the wave64 form
+        assert_ne!(base, k(b"fingerprint A", 16, None));
+        assert_ne!(base, k(b"fingerprint A", 4096, Some("1")));
+        // (a switch set to nothing reads as unset in the translator, so it keys alike)
+        assert_eq!(k(b"x", 1, None), k(b"x", 1, Some("")));
+    }
+
+    #[test]
+    fn the_translator_of_this_build_is_named_by_a_fingerprint_not_the_executable() {
+        // 64 hex digits of the BLAKE3 of the translator's sources (victory-shader's build.rs)
+        assert_eq!(victory_shader::SOURCE_HASH.len(), 64);
+        assert!(victory_shader::SOURCE_HASH.bytes().all(|b| b.is_ascii_hexdigit()));
+        // and, unless the executable is asked for, the key is made of it
+        if std::env::var_os("VICTORY_SHADER_CACHE_KEY").is_none() {
+            let expected = with_host_settings(key(
+                &[&CACHE_SCHEMA_VERSION.to_le_bytes()[..], victory_shader::SOURCE_HASH.as_bytes()].concat(),
+                victory_shader::emit::loop_limit(),
+                victory_shader::emit::group_sync(),
+                &SWITCHES.map(|name| (name, std::env::var_os(name))),
+                victory_shader::emit::shader_opt(),
+            ));
+            assert_eq!(build(), &expected);
+        }
+    }
+
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
         let mut files = Vec::new();
         for e in std::fs::read_dir(dir).unwrap().flatten() {
@@ -541,6 +847,39 @@ mod tests {
             }
         }
         files
+    }
+
+    #[test]
+    fn a_program_kept_out_of_the_deep_skips_form_has_a_key_of_its_own() {
+        let build = [7u8; 32];
+        assert_eq!(program_key(&build, false), build, "allowed: the build's key, as without lists");
+        let off = program_key(&build, true);
+        assert_ne!(off, build);
+        assert_eq!(program_key(&build, true), off, "the same decision, the same key");
+        assert_ne!(program_key(&[8; 32], true), off, "and still the build's");
+
+        // So only the program whose decision changed is translated again.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let runs = AtomicU64::new(0);
+        let translate = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Ok(shader())
+        };
+        let [a, b] = [b"program a".as_slice(), b"program b"];
+        for c in [a, b] {
+            cached(&cache, &program_key(&build, false), c, translate).unwrap();
+        }
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+        // a listed: a translated again, b from the cache
+        cached(&cache, &program_key(&build, true), a, translate).unwrap();
+        cached(&cache, &program_key(&build, false), b, translate).unwrap();
+        assert_eq!(runs.load(Ordering::Relaxed), 3);
+        // the list emptied again: both from the cache
+        for c in [a, b] {
+            cached(&cache, &program_key(&build, false), c, translate).unwrap();
+        }
+        assert_eq!(runs.load(Ordering::Relaxed), 3);
     }
 
     #[test]

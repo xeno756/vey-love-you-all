@@ -293,6 +293,7 @@ pub fn run(
             println!("pair {v} + {p}: {made}");
         }
     }
+    link_check(validate, pipelines)?;
     let mut lines = t.lines;
     lines.sort();
     for l in lines {
@@ -303,6 +304,235 @@ pub fn run(
     for (reason, (n, example)) in failed {
         println!("  {n:>7}  {reason}  (e.g. {example})");
     }
+    Ok(())
+}
+
+/// `victory warm`: fills the caches a run reads (`Command::Warm`).
+pub fn warm(paths: Vec<PathBuf>, jobs: Option<usize>, pipelines: bool) -> Result<()> {
+    let paths = crate::default_paths(paths)?;
+    let cfg = victory_core::Config::load()?;
+    victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
+    let threads = jobs.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+    let seen = Mutex::new(HashSet::new());
+    let [done, refused, made, unmade] = [const { AtomicUsize::new(0) }; 4];
+    let started = std::time::Instant::now();
+    for root in &paths {
+        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
+            if !entry.file_type().is_file() || entry.metadata().map_or(0, |m| m.len()) > MAX_FILE {
+                continue;
+            }
+            let Ok(data) = std::fs::read(entry.path()) else {
+                continue;
+            };
+            let jobs = sources(&data);
+            let next = AtomicUsize::new(0);
+            std::thread::scope(|s| {
+                for _ in 0..threads.min(jobs.len()) {
+                    s.spawn(|| {
+                        while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
+                            let Some(bytes) = job.bytes() else { continue };
+                            let Ok(container) = Container::parse(&bytes) else { continue };
+                            // As the title passes it: no more than the container.
+                            let Some(total) = bytes.get(0x18..0x1c).and_then(|b| b.try_into().ok()) else { continue };
+                            let total = u32::from_le_bytes(total) as usize;
+                            let bytes = &bytes[..total.min(bytes.len())];
+                            let Some(dxil) = container.part(FourCC::DXIL).map(|p| p.data) else { continue };
+                            if !lock(&seen).insert(blake3::hash(bytes)) {
+                                continue;
+                            }
+                            let Ok(programs) = native_programs(dxil) else { continue };
+                            let stage = programs.iter().find_map(|p| match p.stage {
+                                HwStage::Vs => Some("vertex"),
+                                HwStage::Ps => Some("pixel"),
+                                HwStage::Ms => Some("mesh"),
+                                HwStage::Gs => Some("geometry"),
+                                HwStage::Cs => Some("compute"),
+                                _ => None,
+                            });
+                            let Some(stage) = stage else { continue };
+                            let compute = pipelines && stage == "compute";
+                            let (translated, pipeline) = victory_hle::modules::d3d12x::warm(stage, bytes, compute);
+                            let count = if translated { &done } else { &refused };
+                            let n = count.fetch_add(1, Ordering::Relaxed) + 1;
+                            match pipeline {
+                                Some(true) => made.fetch_add(1, Ordering::Relaxed),
+                                Some(false) => unmade.fetch_add(1, Ordering::Relaxed),
+                                None => 0,
+                            };
+                            if n.is_multiple_of(2000) {
+                                println!("{:6.0} s  {n} shaders", started.elapsed().as_secs_f64());
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    }
+    victory_hle::modules::d3d12x::save_pipeline_cache();
+    println!(
+        "warm         {} translated, {} refused; {} compute pipelines, {} refused; {:.0} s",
+        done.into_inner(),
+        refused.into_inner(),
+        made.into_inner(),
+        unmade.into_inner(),
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+/// `VICTORY_LINK_PAIRS=<file>`: mesh/pixel pairs, one `pair <mesh hash> <pixel hash>`
+/// a line (as `farm-pso-pairs` lists the title's pipeline cache). Each mesh
+/// shader whose outputs pass the host's 32 KiB is linked with each of its
+/// pixel shaders (`emit::link`), both validated (and with `--pipelines` made
+/// into a host mesh pipeline) after the walk.
+fn link_pairs() -> &'static Vec<(String, String)> {
+    static PAIRS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    PAIRS.get_or_init(|| {
+        let Some(path) = std::env::var_os("VICTORY_LINK_PAIRS") else {
+            return Vec::new();
+        };
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| match l.split_whitespace().collect::<Vec<_>>()[..] {
+                ["pair", m, p] => Some((m.to_owned(), p.to_owned())),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// The containers [`link_pairs`] names, by hash.
+static LINKED: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
+
+fn link_keep(hash: &str, bytes: &[u8]) {
+    let pairs = link_pairs();
+    if !pairs.is_empty() && pairs.iter().any(|(m, p)| m == hash || p == hash) {
+        lock(&LINKED).insert(hash.to_owned(), bytes.to_vec());
+    }
+}
+
+/// The check [`link_pairs`] describes.
+fn link_check(validate: bool, pipelines: bool) -> Result<()> {
+    let pairs = link_pairs();
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let containers = lock(&LINKED);
+    let mut validator = if validate {
+        Some(Validator::load(Validator::default_path().as_deref()).map_err(anyhow::Error::msg)?)
+    } else {
+        None
+    };
+    let host = if pipelines { Some(Host::new(false).map_err(anyhow::Error::msg)?) } else { None };
+    let mut own: BTreeMap<String, Result<emit::HostShader, String>> = BTreeMap::new();
+    let mut translated = |h: &str| {
+        own.entry(h.to_owned())
+            .or_insert_with(|| {
+                let bytes = containers.get(h).ok_or("not in the walk")?;
+                emit::for_program(h, || emit::translate(bytes)).map_err(|e| e.to_string())
+            })
+            .clone()
+    };
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut meshes: BTreeMap<String, bool> = BTreeMap::new();
+    for (m, p) in pairs {
+        let ms = match translated(m) {
+            Ok(ms) if emit::link::mesh_outputs_over(&ms) => ms,
+            Ok(_) => continue,
+            Err(e) => {
+                println!("link {m} {p}: mesh does not translate: {e}");
+                continue;
+            }
+        };
+        let outcome = (|| -> Result<String, String> {
+            let ps = translated(p).map_err(|e| format!("pixel does not translate: {e}"))?;
+            let (mut ms2, mut ps2) = emit::for_program(m, || emit::link::link(&containers[m], &ms, &containers[p], &ps))
+                .map_err(|e| format!("link: {e}"))?;
+            if let Some(v) = validator.as_mut() {
+                v.validate(&mut ms2.dxil).map_err(|e| format!("mesh validator: {}", e.lines().find(|l| l.contains("error")).unwrap_or("")))?;
+                v.validate(&mut ps2.dxil).map_err(|e| format!("pixel validator: {}", e.lines().find(|l| l.contains("error")).unwrap_or("")))?;
+            }
+            if let Some(h) = &host {
+                h.mesh_pipeline(&ms2, &ps2).map_err(|e| format!("pipeline: {e}"))?;
+                return Ok("validated, pipeline created".into());
+            }
+            Ok(if validator.is_some() { "validated".into() } else { "linked".into() })
+        })();
+        let text = outcome.clone().unwrap_or_else(|e| e);
+        println!("link {m} {p}: {text}");
+        *counts.entry(text.chars().take(90).collect()).or_default() += 1;
+        let all = meshes.entry(m.clone()).or_insert(true);
+        *all &= outcome.is_ok();
+    }
+    println!(
+        "linked       {} over-limit mesh shaders in pairs; {} with every pair linked",
+        meshes.len(),
+        meshes.values().filter(|&&ok| ok).count()
+    );
+    // Without a pixel shader (depth only) a mesh shader keeps its system values alone.
+    let mut alone = 0;
+    for m in meshes.keys() {
+        let made = emit::for_program(m, || emit::link::translate_keeping(&containers[m], &[]));
+        let outcome = match made {
+            Ok(mut ms) if !emit::link::mesh_outputs_over(&ms) => match validator.as_mut() {
+                Some(v) => v.validate(&mut ms.dxil).map_err(|e| e.lines().find(|l| l.contains("error")).unwrap_or("").to_owned()),
+                None => Ok(()),
+            },
+            Ok(_) => Err("still past 32 KiB".to_owned()),
+            Err(e) => Err(e.to_string()),
+        };
+        match outcome {
+            Ok(()) => alone += 1,
+            Err(e) => println!("link {m} -: depth only: {e}"),
+        }
+    }
+    println!("linked       {alone} of {} depth-only (no pixel shader) variants validated", meshes.len());
+    for (k, n) in counts {
+        println!("  {n:>7}  link: {k}");
+    }
+    Ok(())
+}
+
+/// `victory precompile-graphics` (`Command::PrecompileGraphics`).
+pub fn precompile_graphics(archive: Option<PathBuf>, jobs: Option<usize>, limit: Option<usize>) -> Result<()> {
+    let cfg = victory_core::Config::load()?;
+    let archive = match archive {
+        Some(a) => a,
+        None => crate::default_paths(Vec::new())?
+            .into_iter()
+            .map(|p| p.join("shaders.rpf"))
+            .find(|p| p.is_file())
+            .ok_or_else(|| anyhow::anyhow!("no shaders.rpf in the configured folders; give its path"))?,
+    };
+    victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
+    let index = cfg.cache_subdir("precompiled")?.join("shaders.rpf.index");
+    let jobs = jobs.unwrap_or_else(|| std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1)));
+    let started = std::time::Instant::now();
+    let report = victory_hle::modules::d3d12x::precompile_graphics(&archive, Some(&index), jobs, limit, &|done, r| {
+        println!(
+            "{:6.0} s  {done} records: {} made, {} failed, {} duplicates, {} unmapped, {} undecoded",
+            started.elapsed().as_secs_f64(),
+            r.made,
+            r.failed,
+            r.duplicates,
+            r.unmapped,
+            r.undecoded
+        );
+    })
+    .map_err(|e| anyhow::anyhow!(e))?;
+    victory_hle::modules::d3d12x::save_pipeline_cache();
+    println!(
+        "precompile-graphics  {} records: {} pipelines made, {} failed, {} left out, {} duplicates, {} with a shader not in the archive, {} undecoded; {:.0} s",
+        report.records,
+        report.made,
+        report.failed,
+        report.left_out,
+        report.duplicates,
+        report.unmapped,
+        report.undecoded,
+        started.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 
@@ -334,7 +564,53 @@ fn translate(
     if !only.is_empty() && !only.iter().any(|o| hash.starts_with(o.as_str())) {
         return;
     }
+    link_keep(&hash, &bytes);
     let example = || format!("{}{} #{hash}", path.display(), source.label());
+    // `VICTORY_TRANSLATE_STUB`: the exposure stand-in
+    // (`VICTORY_EXPOSURE_STUB`) of the containers it may replace, translated
+    // and validated, on stderr.
+    if std::env::var_os("VICTORY_TRANSLATE_STUB").is_some()
+        && emit::exposure::HASHES.contains(&hash.as_str())
+    {
+        let outcome = match emit::exposure::stub(&bytes, emit::exposure::VALUE) {
+            Ok(mut s) => match checks.validator.as_mut() {
+                Some(v) => match v.validate(&mut s.dxil) {
+                    Ok(()) => "translated, validated".to_owned(),
+                    Err(e) => format!("translated, validator: {e}"),
+                },
+                None => "translated".to_owned(),
+            },
+            Err(e) => format!("does not translate: {e}"),
+        };
+        eprintln!("exposure stand-in #{hash}: {outcome}");
+    }
+    if std::env::var_os("VICTORY_TRANSLATE_STUB").is_some() {
+        use emit::stand_in as s;
+        for (kind, hashes, value, slots) in [
+            ("ambient", s::AMBIENT_HASHES, s::AMBIENT_VALUE, s::ambient_slots(&hash)),
+            ("shadow-mask", s::SHADOWMASK_HASHES, s::SHADOWMASK_VALUE, s::SHADOWMASK_SLOTS),
+        ] {
+            if !hashes.contains(&hash.as_str()) {
+                continue;
+            }
+            let plan = s::Plan::new(value).with_overrides(slots);
+            let mut outputs = String::new();
+            let outcome = match s::storing_plan(&bytes, plan) {
+                Ok((mut sh, plan)) => {
+                    outputs = format!(" outputs (descriptor dword offset) {:?}", plan.seen);
+                    match checks.validator.as_mut() {
+                        Some(v) => match v.validate(&mut sh.dxil) {
+                            Ok(()) => "translated, validated".to_owned(),
+                            Err(e) => format!("translated, validator: {e}"),
+                        },
+                        None => "translated".to_owned(),
+                    }
+                }
+                Err(e) => format!("does not translate: {e}"),
+            };
+            eprintln!("{kind} stand-in #{hash}: {outcome}{outputs}");
+        }
+    }
     t.containers += 1;
     let Ok(container) = Container::parse(&bytes) else {
         return t.fail("no DXIL part (SM5 or older)".into(), example);
@@ -380,7 +656,7 @@ fn translate(
     // has them (`.cdxil`), to work on a translator gap offline
     let dump = std::env::var_os("VICTORY_FAIL_DUMP");
     let before: Option<BTreeMap<String, usize>> = dump.as_ref().map(|_| t.failed.iter().map(|(k, v)| (k.clone(), v.0)).collect());
-    translate_programs(&container, programs, &example, t, checks);
+    translate_programs(&container, &hash, programs, &example, t, checks);
     if let (Some(dir), Some(before)) = (dump, before) {
         for (reason, (n, _)) in &t.failed {
             let was = before.get(reason).copied().unwrap_or(0);
@@ -393,7 +669,7 @@ fn translate(
     }
 }
 
-fn translate_programs(container: &Container, programs: Vec<NativeProgram>, example: &dyn Fn() -> String, t: &mut Tally, checks: &mut Checks) {
+fn translate_programs(container: &Container, hash: &str, programs: Vec<NativeProgram>, example: &dyn Fn() -> String, t: &mut Tally, checks: &mut Checks) {
     for p in programs {
         t.programs += 1;
         match victory_shader::spill::build(&p) {
@@ -423,7 +699,7 @@ fn translate_programs(container: &Container, programs: Vec<NativeProgram>, examp
                 let graphics = matches!(p.stage, HwStage::Vs | HwStage::Ps);
                 let compute = p.stage == HwStage::Cs;
                 let mut raised = None;
-                if graphics || compute || p.stage == HwStage::Ms {
+                if graphics || compute || matches!(p.stage, HwStage::Ms | HwStage::Es | HwStage::Gs) {
                     t.io_programs += usize::from(graphics);
                     match io::raise(&program, &p) {
                         Ok(r) => {
@@ -457,7 +733,8 @@ fn translate_programs(container: &Container, programs: Vec<NativeProgram>, examp
                 if let (Some(r), Some(i), Some(s)) = (res, raised, structured) {
                     let label = || format!("{} {:?}", example(), p.stage);
                     *counter(t, p.stage, 0) += 1;
-                    match emit::emit(container, &p, &program, &s, &i, &r) {
+                    // (by its hash, as at run time: the per-program switches, `VICTORY_WAVE_WHY`)
+                    match emit::for_program(hash, || emit::emit(container, &p, &program, &s, &i, &r)) {
                         Ok(shader) => {
                             census_line(&label(), &p, &program, &shader);
                             *counter(t, p.stage, 1) += 1;
@@ -550,7 +827,11 @@ fn check(
             &shader.dxil,
         );
     }
-    if let Some((h, stub_ps)) = &checks.host {
+    // (a geometry stage gets a pipeline only with its vertex stage, which
+    // this check has not got)
+    if let Some((h, stub_ps)) = &checks.host
+        && shader.stage != HwStage::Gs
+    {
         let made = match shader.stage {
             HwStage::Vs => h.pipeline(&shader, stub_ps).map(drop),
             HwStage::Cs => h.compute_pipeline(&shader).map(drop),

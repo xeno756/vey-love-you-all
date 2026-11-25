@@ -177,6 +177,7 @@ fn build(
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        dropped: Vec::new(),
     })?;
     let shader = HostShader {
         stage: HwStage::Cs,
@@ -680,6 +681,7 @@ fn a_structure_that_returns_triangle_ids_is_refused_by_name() {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        dropped: Vec::new(),
     });
     match r {
         Err(ShaderError::Unsupported { what, .. }) => {

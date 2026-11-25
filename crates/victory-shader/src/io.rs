@@ -30,6 +30,15 @@
 //! bit 31 culls); `param` entries with bit 7 are per-primitive outputs. One
 //! lane sends the output counts (`s_sendmsg` GS_ALLOC_REQ, m0 = vertices |
 //! primitives << 12).
+//!
+//! Geometry programs are the half of a legacy merged ES-GS stage after the
+//! handover (`crate::merged`), with the rings in LDS: v0, v1 and v3 hold the
+//! LDS dword offsets of the input vertices (two per register, 16 bits
+//! each), v2 the primitive id, v4 the instance. The export half wrote dword
+//! `4 r + c` of its vertex with component c of output register r; the
+//! geometry half writes each output vertex likewise, at `vertex_dwords`
+//! dwords per vertex from its invocation's base, and sends a GS emit after
+//! each (`s_sendmsg`), a cut to end a strip.
 
 use crate::ShaderError;
 use crate::gfx10::{Fields, Operand};
@@ -70,6 +79,42 @@ pub enum Input {
     MeshGroup,
     /// Mesh: s3, the wave's index in the group in bits 24-27.
     MergedWaveInfo,
+    /// Geometry: v0, v1, v3, the LDS dword offsets of the input vertices
+    /// 2n (low half) and 2n + 1 (high half). The host gives input vertex i
+    /// the offset `i * ES_VERTEX_SPACING`, so an LDS address says which
+    /// vertex and which dword of it a read takes.
+    EsVertexOffsets(u8),
+    /// Geometry: v4, the instance (one instance on the host: 0).
+    GsInstance,
+    /// A merged stage's system SGPR the host has no value for (ring
+    /// offsets, lane counts): read as 0.
+    Zero,
+}
+
+/// The LDS dwords between two input vertices of a geometry program on the
+/// host ([`Input::EsVertexOffsets`]): byte address `a` is dword
+/// `(a >> 2) & (ES_VERTEX_SPACING - 1)` of input vertex `a >> 14`.
+pub const ES_VERTEX_SPACING: u32 = 1 << 12;
+
+/// A geometry program's output vertices ([`crate::native::GeometryIo`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Geometry {
+    pub max_vertices: u32,
+    pub vertex_dwords: u32,
+    /// Each LDS write of output data: per dword, its place in the vertex
+    /// (`4 * register + component`) and the value. The vertex is the one
+    /// the next emit sends (checked: the dword's vertex is the number of
+    /// emits before the write).
+    pub writes: Vec<(Site, Vec<(u32, Value)>)>,
+    /// `s_sendmsg` GS emits and cuts.
+    pub messages: Vec<(Site, GsMessage)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GsMessage {
+    Emit,
+    Cut,
+    EmitCut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +235,12 @@ pub struct Io {
     /// Compute: how many SGPRs the hardware initializes
     /// ([`ComputeIo::initialized_sgprs`](crate::native::ComputeIo::initialized_sgprs)).
     pub initialized_sgprs: Option<u8>,
+    /// Geometry: the output vertices and the messages that send them.
+    pub geometry: Option<Geometry>,
+    /// Export half of a merged ES-GS stage: the dwords of its vertex it
+    /// writes to LDS (`4 * register + component`, as the geometry half
+    /// reads them), sorted.
+    pub es_dwords: Vec<u32>,
 }
 
 /// Raises the I/O of `p`, built from `native`'s patched code. Fails for
@@ -302,6 +353,22 @@ pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
             ];
             (loaded, &[][..], &ms.outputs[..])
         }
+        // The geometry half of a merged ES-GS stage (`crate::merged`): the
+        // input vertices' LDS offsets, the primitive and the instance in
+        // v0-v4; the system SGPRs before the user data mean nothing here.
+        (StageIo::Gs(_), HwStage::Gs) => {
+            let mut loaded = vec![
+                (Reg::V(0), Input::EsVertexOffsets(0)),
+                (Reg::V(1), Input::EsVertexOffsets(1)),
+                (Reg::V(2), Input::PrimitiveId),
+                (Reg::V(3), Input::EsVertexOffsets(2)),
+                (Reg::V(4), Input::GsInstance),
+            ];
+            loaded.extend((0..8).map(|s| (Reg::S(s), Input::Zero)));
+            (loaded, &[][..], &[][..])
+        }
+        // The export half: only where it writes its vertex (`es_dwords`).
+        (_, HwStage::Es) => (Vec::new(), &[][..], &[][..]),
         _ => return Err(unsupported(0, "I/O of this stage")),
     };
     let inputs: Vec<(Value, Input)> = p
@@ -460,7 +527,219 @@ pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
             }
         }
     }
+    match (&native.io, native.stage) {
+        (StageIo::Gs(g), HwStage::Gs) => io.geometry = Some(geometry(p, g)?),
+        (_, HwStage::Es) => io.es_dwords = es_dwords(p)?,
+        _ => {}
+    }
     Ok(io)
+}
+
+/// The dwords (byte offset from the address, value) an LDS write stores;
+/// `None` for other LDS instructions and forms not handled.
+fn lds_write(inst: &Inst) -> Option<Vec<(u32, Option<Value>)>> {
+    let Fields::Ds {
+        addr: Some(_),
+        data,
+        offset0,
+        offset1,
+        gds: false,
+        ..
+    } = &inst.fields
+    else {
+        return None;
+    };
+    let name = inst.name();
+    let width = match name.rsplit('_').next()? {
+        "b32" => 1,
+        "b64" => 2,
+        "b96" => 3,
+        "b128" => 4,
+        _ => return None,
+    };
+    let elements = match name {
+        "ds_write_b32" | "ds_write_b64" | "ds_write_b96" | "ds_write_b128" => {
+            vec![(u32::from(*offset0) | u32::from(*offset1) << 8, data.first()?)]
+        }
+        "ds_write2_b32" | "ds_write2_b64" | "ds_write2st64_b32" | "ds_write2st64_b64" => {
+            let scale = 4 * width * if name.contains("st64") { 64 } else { 1 };
+            vec![
+                (u32::from(*offset0) * scale, data.first()?),
+                (u32::from(*offset1) * scale, data.get(1)?),
+            ]
+        }
+        _ => return None,
+    };
+    let mut out = Vec::new();
+    for (offset, op) in elements {
+        let Operand::Vector { reg, .. } = *op else {
+            return None;
+        };
+        for k in 0..width {
+            out.push((offset + 4 * k, inst.read(Reg::V(reg + k as u8))));
+        }
+    }
+    Some(out)
+}
+
+/// The LDS address value of an LDS instruction.
+fn lds_address(inst: &Inst) -> Option<Value> {
+    match inst.fields {
+        Fields::Ds {
+            addr: Some(Operand::Vector { reg, .. }),
+            ..
+        } => inst.read(Reg::V(reg)),
+        _ => None,
+    }
+}
+
+/// Plain dword reads, which a geometry program's input reads are.
+fn is_lds_read(name: &str) -> bool {
+    matches!(
+        name,
+        "ds_read_b32"
+            | "ds_read_b64"
+            | "ds_read_b96"
+            | "ds_read_b128"
+            | "ds_read2_b32"
+            | "ds_read2_b64"
+            | "ds_read2st64_b32"
+            | "ds_read2st64_b64"
+    )
+}
+
+/// A geometry program's output writes and messages (see [`Geometry`]): its
+/// LDS writes all go through one address, the invocation's first output
+/// vertex, at offsets that place each dword in the vertex the next emit
+/// sends; its LDS reads are input reads (lowered by address).
+fn geometry(p: &Program, g: &crate::native::GeometryIo) -> Result<Geometry, ShaderError> {
+    let unsupported = |offset, what| ShaderError::Unsupported { offset, what };
+    let order = crate::ir::reverse_postorder(&p.blocks);
+    let mut rank = vec![usize::MAX; p.blocks.len()];
+    for (n, &b) in order.iter().enumerate() {
+        rank[b] = n;
+    }
+    // Emits before each block's end; a block's entry count must be one.
+    let mut emitted: Vec<Option<u32>> = vec![None; p.blocks.len()];
+    let mut out = Geometry {
+        max_vertices: g.max_vertices,
+        vertex_dwords: g.vertex_dwords,
+        ..Geometry::default()
+    };
+    let mut base: Option<Value> = None;
+    for &b in &order {
+        let block = &p.blocks[b];
+        let at = block.insts.first().map_or(block.offset, |i| i.machine.offset);
+        let mut counts = block.preds.iter().filter(|&&q| rank[q] != usize::MAX).map(|&q| {
+            if rank[q] >= rank[b] {
+                Err(unsupported(at, "a loop in a geometry program"))
+            } else {
+                Ok(emitted[q].expect("predecessors come first"))
+            }
+        });
+        let mut count = match counts.next() {
+            None => 0,
+            Some(first) => {
+                let first = first?;
+                for c in counts {
+                    if c? != first {
+                        return Err(unsupported(at, "geometry output vertices counted differently on two paths"));
+                    }
+                }
+                first
+            }
+        };
+        for (i, inst) in block.insts.iter().enumerate() {
+            let at = inst.machine.offset;
+            let name = inst.name();
+            match &inst.fields {
+                Fields::Sopp { imm } if name == "s_sendmsg" => {
+                    let (msg, op, stream) = (imm & 0xF, imm >> 4 & 3, imm >> 8 & 3);
+                    match msg {
+                        // MSG_GS
+                        2 => {
+                            if stream != 0 {
+                                return Err(unsupported(at, "a geometry stream other than 0"));
+                            }
+                            let m = match op {
+                                1 => GsMessage::Cut,
+                                2 => GsMessage::Emit,
+                                3 => GsMessage::EmitCut,
+                                _ => continue,
+                            };
+                            count += u32::from(m != GsMessage::Cut);
+                            if count > g.max_vertices {
+                                return Err(unsupported(at, "more geometry output vertices than declared"));
+                            }
+                            out.messages.push(((b, i), m));
+                        }
+                        // MSG_GS_DONE
+                        3 => {}
+                        _ => return Err(unsupported(at, "a message of a geometry program")),
+                    }
+                }
+                Fields::Ds { .. } if is_lds_read(name) => {}
+                Fields::Ds { .. } if name.starts_with("ds_write") => {
+                    let dwords = lds_write(inst)
+                        .ok_or(unsupported(at, "a geometry output write of bytes or halves"))?;
+                    let address = lds_address(inst);
+                    if address.is_none() || base.is_some_and(|v| Some(v) != address) {
+                        return Err(unsupported(at, "geometry output writes through different addresses"));
+                    }
+                    base = address;
+                    let mut slots = Vec::new();
+                    for (byte, value) in dwords {
+                        let dword = byte / 4;
+                        if byte % 4 != 0 || dword / g.vertex_dwords != count {
+                            return Err(unsupported(at, "a geometry output written for another vertex than the next"));
+                        }
+                        let value = value.ok_or(unsupported(at, "a geometry output write without data"))?;
+                        slots.push((dword % g.vertex_dwords, value));
+                    }
+                    out.writes.push(((b, i), slots));
+                }
+                Fields::Ds { .. } => {
+                    return Err(unsupported(at, "an LDS access of a geometry program other than a dword read or write"));
+                }
+                _ => {}
+            }
+        }
+        emitted[b] = Some(count);
+    }
+    Ok(out)
+}
+
+/// The vertex dwords the export half of a merged ES-GS stage writes to LDS
+/// (see [`Io::es_dwords`]), all through one address: its vertex's.
+fn es_dwords(p: &Program) -> Result<Vec<u32>, ShaderError> {
+    let unsupported = |offset, what| ShaderError::Unsupported { offset, what };
+    let mut base: Option<Value> = None;
+    let mut out = Vec::new();
+    for inst in p.blocks.iter().flat_map(|b| &b.insts) {
+        let at = inst.machine.offset;
+        let name = inst.name();
+        if !matches!(inst.fields, Fields::Ds { .. }) || name.starts_with("ds_swizzle") || name.contains("permute") {
+            continue;
+        }
+        let dwords = lds_write(inst).ok_or(unsupported(at, "an LDS access of an export program other than a dword write"))?;
+        let address = lds_address(inst);
+        if address.is_none() || base.is_some_and(|v| Some(v) != address) {
+            return Err(unsupported(at, "export program writes through different addresses"));
+        }
+        base = address;
+        for (byte, _) in dwords {
+            if byte % 4 != 0 {
+                return Err(unsupported(at, "an unaligned export program write"));
+            }
+            out.push(byte / 4);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    if out.is_empty() {
+        return Err(unsupported(0, "an export program that writes no vertex"));
+    }
+    Ok(out)
 }
 
 /// The pixel input VGPRs that `addr` enables, with their meaning.
@@ -795,6 +1074,46 @@ mod tests {
             S_ENDPGM,
         ];
         assert_eq!(mesh(&reuse).map(|_| ()), Ok(()));
+    }
+
+    #[test]
+    fn an_export_program_lists_the_vertex_dwords_it_writes() {
+        let es = |words: &[u32]| {
+            let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let p = crate::ir::build(&code, true, 16).unwrap();
+            let native = NativeProgram {
+                stage: HwStage::Es,
+                wave64: true,
+                vgprs: 16,
+                layout: vec![],
+                used: vec![],
+                io: StageIo::None,
+                code,
+            };
+            raise(&p, &native)
+        };
+        // The voxelizer's: position in dwords 0-3, a coordinate in 4-5.
+        let io = es(&[
+            0x7E0C_0280, // v_mov_b32 v6, 0
+            0xD938_0100,
+            0x0002_0006, // ds_write2_b64 v6, v[0:1], v[2:3] offset1:1
+            0xD934_0010,
+            0x0000_0406, // ds_write_b64 v6, v[4:5] offset:16
+            S_ENDPGM,
+        ])
+        .unwrap();
+        assert_eq!(io.es_dwords, [0, 1, 2, 3, 4, 5]);
+        // Through two addresses: refused.
+        let two = es(&[
+            0x7E0C_0280, // v_mov_b32 v6, 0
+            0x7E0E_0280, // v_mov_b32 v7, 0
+            0xD934_0010,
+            0x0000_0406, // ds_write_b64 v6, v[4:5] offset:16
+            0xD934_0000,
+            0x0000_0407, // ds_write_b64 v7, v[4:5]
+            S_ENDPGM,
+        ]);
+        assert!(two.is_err());
     }
 
     #[test]

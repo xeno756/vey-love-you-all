@@ -381,6 +381,7 @@ mod tests {
             io: &io,
             res: &res,
             inputs: Vec::new(),
+            dropped: Vec::new(),
             outputs: vec![element("SV_Position", 3, 0), element("TEXCOORD", 0, 1)],
             prims: Vec::new(),
             mesh_stride: 128,

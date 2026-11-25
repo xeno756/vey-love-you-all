@@ -49,6 +49,16 @@ pub fn use_shader_cache(dir: std::path::PathBuf) {
     let _ = dir;
 }
 
+/// The title's shader archive (`shaders.rpf` of the package), which its
+/// precompiled pipelines name their shaders in; indexed in the background,
+/// the index kept at `index` across runs.
+pub fn use_shader_pack(archive: std::path::PathBuf, index: std::path::PathBuf) {
+    victory_gpu::pipeline::use_shader_pack(archive, Some(index));
+}
+
+#[cfg(windows)]
+pub use victory_gpu::pipeline::{precompile_graphics, save_pipeline_cache, warm};
+
 pub(crate) fn module() -> HleModule {
     HleModule {
         name: "d3d12x",

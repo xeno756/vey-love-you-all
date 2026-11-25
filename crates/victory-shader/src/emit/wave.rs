@@ -34,6 +34,11 @@ pub(crate) enum Op {
     Or,
     And,
     Xor,
+    /// A sum of doubles (`v_add_f64`), dword by dword: the low dwords (`src` of the
+    /// reduction), with the high dwords' value from before the section.
+    AddDLo(Value),
+    /// The high dwords of a sum of doubles, with the low dwords' value.
+    AddDHi(Value),
 }
 
 impl Op {
@@ -61,7 +66,8 @@ impl Op {
     fn identity(self, k: u32) -> bool {
         match self {
             Op::AddU | Op::AddH | Op::Or | Op::Xor | Op::MaxU => k == 0,
-            Op::AddF => k == 0 || k == 0x8000_0000,
+            Op::AddF | Op::AddDHi(_) => k == 0 || k == 0x8000_0000,
+            Op::AddDLo(_) => k == 0,
             Op::MinU | Op::And => k == u32::MAX,
             Op::MinI => k == 0x7FFF_FFFF,
             Op::MaxI => k == 0x8000_0000,
@@ -72,7 +78,20 @@ impl Op {
 
     /// Counting a lane twice changes the result.
     fn counts(self) -> bool {
-        matches!(self, Op::AddU | Op::AddF | Op::AddH | Op::Xor)
+        matches!(
+            self,
+            Op::AddU | Op::AddF | Op::AddH | Op::Xor | Op::AddDLo(_) | Op::AddDHi(_)
+        )
+    }
+
+    /// A double sum's halves: (low dword source, high dword source), the one this holds
+    /// being `src`.
+    pub(crate) fn double_halves(self, src: Value) -> Option<(Value, Value)> {
+        match self {
+            Op::AddDLo(hi) => Some((src, hi)),
+            Op::AddDHi(lo) => Some((lo, src)),
+            _ => None,
+        }
     }
 }
 
@@ -112,15 +131,6 @@ pub(crate) enum Sym {
         ident: u32,
         lanes: u64,
     },
-    /// Low (`!high`) or high (`high`) 32 bits of the 64-bit float sum over
-    /// `lanes` of `mask ? f64(lo, hi) : 0.0`.
-    Red64F {
-        lo: Value,
-        hi: Value,
-        mask: Value,
-        lanes: u64,
-        high: bool,
-    },
 }
 
 /// What a value a section leaves holds in every lane.
@@ -132,8 +142,6 @@ pub(crate) enum Shape {
     Masked(Value, Value, u32),
     /// `op` over every lane.
     Active(Op, Value, Value, u32),
-    /// Low (`!high`) or high (`high`) 32 bits of the 64-bit float sum over every lane.
-    ActiveF64(Value, Value, Value, bool),
     /// `op` over the lanes below (`inclusive`: and including) each lane.
     Prefix(Op, Value, Value, u32, bool),
 }
@@ -268,6 +276,68 @@ fn combine(op: Op, a: Sym, b: Sym) -> Sym {
     }
 }
 
+/// One lane's `v_add_f64` of two doubles held as (low, high) dword symbols: the identity
+/// (+-0) leaves the other; two partial sums of the same masked doubles over disjoint lanes
+/// make their sum. `None`: neither.
+fn add_double(a: (Sym, Sym), b: (Sym, Sym)) -> Option<(Sym, Sym)> {
+    let zero = |s: (Sym, Sym)| matches!(s, (Sym::K(0), Sym::K(0 | 0x8000_0000)));
+    if zero(a) {
+        return Some(b);
+    }
+    if zero(b) {
+        return Some(a);
+    }
+    // (low source, high source, mask, low identity, high identity, lanes)
+    let parts = |s: (Sym, Sym)| match s {
+        (
+            Sym::Red {
+                op: ol,
+                src: sl,
+                mask: ml,
+                ident: il,
+                lanes: ll,
+            },
+            Sym::Red {
+                op: oh,
+                src: sh,
+                mask: mh,
+                ident: ih,
+                lanes: lh,
+            },
+        ) if ml == mh
+            && ll == lh
+            && il == 0
+            && matches!(ih, 0 | 0x8000_0000)
+            && (ol.is_none() && oh.is_none()
+                || ol == Some(Op::AddDLo(sh)) && oh == Some(Op::AddDHi(sl))) =>
+        {
+            Some((sl, sh, ml, il, ih, ll))
+        }
+        _ => None,
+    };
+    let (x, y) = (parts(a)?, parts(b)?);
+    if (x.0, x.1, x.2, x.3, x.4) != (y.0, y.1, y.2, y.3, y.4) || x.5 & y.5 != 0 {
+        return None;
+    }
+    let (sl, sh, mask, il, ih, lanes) = (x.0, x.1, x.2, x.3, x.4, x.5 | y.5);
+    Some((
+        Sym::Red {
+            op: Some(Op::AddDLo(sh)),
+            src: sl,
+            mask,
+            ident: il,
+            lanes,
+        },
+        Sym::Red {
+            op: Some(Op::AddDHi(sl)),
+            src: sh,
+            mask,
+            ident: ih,
+            lanes,
+        },
+    ))
+}
+
 fn simulate(insts: &[Inst], wave: u32, saved: Value) -> HashMap<Value, Shape> {
     let all = if wave == 64 {
         u64::MAX
@@ -309,27 +379,22 @@ fn simulate(insts: &[Inst], wave: u32, saved: Value) -> HashMap<Value, Shape> {
             exec = ((exec & 0xFFFF_FFFF) | ((k & 0xFFFF_FFFF) << 32)) & all;
             continue;
         }
-        if let Fields::Sop { dst, src, .. } = &inst.fields {
+        if let Fields::Sop { src, .. } = &inst.fields {
             if name.starts_with("s_and_b")
                 && src.iter().any(|o| matches!(*o, Operand::Scalar { code, .. } if inst.read(Reg::S(code)).is_some_and(|v| masked.contains(&v))))
                 && let Some(&(_, w)) = inst.writes.iter().find(|w| matches!(w.0, Reg::S(_)))
             {
                 masked.push(w);
             }
+            // A copy keeps what it copies (the compiler moves a 64-bit result's dwords).
             if name == "s_mov_b32"
-                && let (Some(Operand::Scalar { code: dc, .. }), Some(s0)) = (dst, src.first())
-                && *dc != NULL
-                && let Some(w) = inst.write(Reg::S(*dc))
+                && let (Some(&Operand::Scalar { code, .. }), Some(&(_, w))) =
+                    (src.first(), inst.writes.iter().find(|w| matches!(w.0, Reg::S(_))))
+                && code != NULL
+                && let Some(x) = inst.read(Reg::S(code))
             {
-                let sym = match *s0 {
-                    Operand::Scalar { code, .. } if code != NULL => inst
-                        .read(Reg::S(code))
-                        .map_or(Sym::Unknown, |x| uni.get(&x).copied().unwrap_or(Sym::Uni(x))),
-                    Operand::Const(c) => crate::resource::inline(c).map_or(Sym::Unknown, Sym::K),
-                    Operand::Literal(x) => Sym::K(x),
-                    _ => Sym::Unknown,
-                };
-                uni.insert(w, sym);
+                uni.insert(w, uni.get(&x).copied().unwrap_or(Sym::Uni(x)));
+                continue;
             }
             for &(_, w) in &inst.writes {
                 uni.entry(w).or_insert(Sym::Unknown);
@@ -385,128 +450,45 @@ fn simulate(insts: &[Inst], wave: u32, saved: Value) -> HashMap<Value, Shape> {
             }
             continue;
         }
-        if name == "v_add_f64"
-            && !modifiers
-            && v.dpp.is_none()
-            && let Some(Operand::Vector { reg: dreg, .. }) = v.dst
-            && let (Some(dst_lo), Some(dst_hi)) =
-                (inst.write(Reg::V(dreg)), inst.write(Reg::V(dreg + 1)))
-        {
-            let pair_lanes = |op: Option<&Operand>| -> Option<(Vec<Sym>, Vec<Sym>)> {
-                match *op? {
-                    Operand::Vector { reg, .. } => Some((
-                        lanes(&Operand::Vector { reg, dwords: 1 }, &vec, &uni),
-                        lanes(
-                            &Operand::Vector {
-                                reg: reg + 1,
-                                dwords: 1,
-                            },
-                            &vec,
-                            &uni,
-                        ),
-                    )),
-                    Operand::Scalar { code, .. } if code != NULL => Some((
-                        lanes(&Operand::Scalar { code, dwords: 1 }, &vec, &uni),
-                        lanes(
-                            &Operand::Scalar {
-                                code: code + 1,
-                                dwords: 1,
-                            },
-                            &vec,
-                            &uni,
-                        ),
-                    )),
-                    _ => None,
+        if name == "v_add_f64" {
+            let halves = |op: &Operand| match *op {
+                Operand::Vector { reg, dwords } => {
+                    Some((*op, Operand::Vector { reg: reg + 1, dwords }))
                 }
+                Operand::Scalar { code, dwords } if code != NULL => {
+                    Some((*op, Operand::Scalar { code: code + 1, dwords }))
+                }
+                _ => None,
             };
-            let old_lo = lanes(
-                &Operand::Vector {
-                    reg: dreg,
-                    dwords: 1,
-                },
-                &vec,
-                &uni,
-            );
-            let old_hi = lanes(
-                &Operand::Vector {
-                    reg: dreg + 1,
-                    dwords: 1,
-                },
-                &vec,
-                &uni,
-            );
-            let f64_term = |lo_s: Sym, hi_s: Sym| -> Option<(Value, Value, Value, u64)> {
-                match (lo_s, hi_s) {
-                    (
-                        Sym::Red {
-                            op: None,
-                            src: lo,
-                            mask: ml,
-                            ident: 0,
-                            lanes: ll,
-                        },
-                        Sym::Red {
-                            op: None,
-                            src: hi,
-                            mask: mh,
-                            ident: 0,
-                            lanes: lh,
-                        },
-                    ) if ml == mh && ll == lh => Some((lo, hi, ml, ll)),
-                    (
-                        Sym::Red64F {
-                            lo: lo1,
-                            hi: hi1,
-                            mask: m1,
-                            lanes: l1,
-                            high: false,
-                        },
-                        Sym::Red64F {
-                            lo: lo2,
-                            hi: hi2,
-                            mask: m2,
-                            lanes: l2,
-                            high: true,
-                        },
-                    ) if (lo1, hi1, m1, l1) == (lo2, hi2, m2, l2) => Some((lo1, hi1, m1, l1)),
-                    _ => None,
-                }
+            let dreg = match v.dst {
+                Some(Operand::Vector { reg, .. }) => Some(reg),
+                _ => None,
             };
-            let mut out_lo = vec![Sym::Unknown; wave as usize];
-            let mut out_hi = vec![Sym::Unknown; wave as usize];
-            if let (Some((alo, ahi)), Some((blo, bhi))) =
-                (pair_lanes(v.src.first()), pair_lanes(v.src.get(1)))
-            {
-                for l in 0..wave as usize {
-                    let (rl, rh) = match (f64_term(alo[l], ahi[l]), f64_term(blo[l], bhi[l])) {
-                        (Some((lo1, hi1, m1, la)), Some((lo2, hi2, m2, lb)))
-                            if (lo1, hi1, m1) == (lo2, hi2, m2) && la & lb == 0 =>
-                        {
-                            (
-                                Sym::Red64F {
-                                    lo: lo1,
-                                    hi: hi1,
-                                    mask: m1,
-                                    lanes: la | lb,
-                                    high: false,
-                                },
-                                Sym::Red64F {
-                                    lo: lo1,
-                                    hi: hi1,
-                                    mask: m1,
-                                    lanes: la | lb,
-                                    high: true,
-                                },
-                            )
-                        }
-                        _ => (Sym::Unknown, Sym::Unknown),
-                    };
-                    out_lo[l] = if exec >> l & 1 != 0 { rl } else { old_lo[l] };
-                    out_hi[l] = if exec >> l & 1 != 0 { rh } else { old_hi[l] };
+            let (a, b) = (v.src.first().and_then(halves), v.src.get(1).and_then(halves));
+            let dst = dreg.and_then(|r| Some((inst.write(Reg::V(r))?, inst.write(Reg::V(r + 1))?)));
+            let (Some(dreg), Some((dlo, dhi)), Some(a), Some(b)) = (dreg, dst, a, b) else {
+                for &(_, w) in &inst.writes {
+                    vec.insert(w, vec![Sym::Unknown; wave as usize]);
                 }
+                continue;
+            };
+            let old = |r: u8, vec: &HashMap<Value, Vec<Sym>>, uni: &HashMap<Value, Sym>| {
+                lanes(&Operand::Vector { reg: r, dwords: 1 }, vec, uni)
+            };
+            let (mut lo, mut hi) = (old(dreg, &vec, &uni), old(dreg + 1, &vec, &uni));
+            let (alo, ahi) = (lanes(&a.0, &vec, &uni), lanes(&a.1, &vec, &uni));
+            let (blo, bhi) = (lanes(&b.0, &vec, &uni), lanes(&b.1, &vec, &uni));
+            for l in 0..wave as usize {
+                if exec >> l & 1 == 0 {
+                    continue;
+                }
+                let r = (!modifiers && v.dpp.is_none())
+                    .then(|| add_double((alo[l], ahi[l]), (blo[l], bhi[l])))
+                    .flatten();
+                (lo[l], hi[l]) = r.unwrap_or((Sym::Unknown, Sym::Unknown));
             }
-            vec.insert(dst_lo, out_lo);
-            vec.insert(dst_hi, out_hi);
+            vec.insert(dlo, lo);
+            vec.insert(dhi, hi);
             continue;
         }
         let Some(Operand::Vector { reg: dreg, .. }) = v.dst else {
@@ -710,13 +692,6 @@ fn shapes(
             ident,
             lanes,
         } if lanes == all => Some(Shape::Active(op, src, mask, ident)),
-        Sym::Red64F {
-            lo,
-            hi,
-            mask,
-            lanes,
-            high,
-        } if lanes == all => Some(Shape::ActiveF64(lo, hi, mask, high)),
         _ => None,
     };
     for (v, s) in uni {
@@ -760,13 +735,6 @@ fn per_lane(lanes: &[Sym], all: u64) -> Option<Shape> {
                 ident,
                 lanes,
             } if lanes == all => Some(Shape::Active(op, src, mask, ident)),
-            Sym::Red64F {
-                lo,
-                hi,
-                mask,
-                lanes,
-                high,
-            } if lanes == all => Some(Shape::ActiveF64(lo, hi, mask, high)),
             _ => None,
         };
     }

@@ -3,7 +3,8 @@
 //! Filter with `VICTORY_LOG` (falls back to `RUST_LOG`), e.g.
 //! `VICTORY_LOG=victory_loader=trace,info`. Debug and trace output exist
 //! only in builds with the `diagnostics` feature; a plain release build
-//! logs info and above whatever the filter asks for.
+//! logs info and above whatever the filter asks for. Without a filter
+//! the caller's default applies (the app uses `warn`).
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
@@ -16,6 +17,13 @@ const CAP: LevelFilter = if cfg!(feature = "diagnostics") {
 } else {
     LevelFilter::INFO
 };
+
+/// Rate limit for per-item log lines on hot paths: true for the first 100
+/// calls on `counter`, then at each doubling (101st..., 128th, 256th, ...).
+pub fn sample(counter: &std::sync::atomic::AtomicU64) -> bool {
+    let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    n <= 100 || n.is_power_of_two()
+}
 
 pub fn init(default_level: &str) {
     let filter = std::env::var("VICTORY_LOG")

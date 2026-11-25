@@ -368,7 +368,7 @@ impl Provider {
     fn open(saves: &Path, config: Option<&str>) -> Result<Provider, HRESULT> {
         let config = config.filter(|c| !c.is_empty()).unwrap_or("default");
         let root = saves
-            .join(format!("{:016X}", xuser::XUID))
+            .join(format!("{:016X}", xuser::xuid()))
             .join(file_name(config));
         std::fs::create_dir_all(&root).map_err(|_| NO_ACCESS)?;
         let _saves = saves_lock();
@@ -1121,7 +1121,7 @@ mod tests {
     #[test]
     fn the_old_layout_moves_over() {
         let saves = tempfile::tempdir().unwrap();
-        let root = saves.path().join(format!("{:016X}", xuser::XUID)).join("scid");
+        let root = saves.path().join(format!("{:016X}", xuser::xuid())).join("scid");
         let old = root.join("Player");
         std::fs::create_dir_all(&old).unwrap();
         std::fs::write(old.join("Save%20Game%20Data"), b"data").unwrap();

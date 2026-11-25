@@ -34,6 +34,8 @@ pub mod frame;
 #[cfg(windows)]
 mod host;
 #[cfg(windows)]
+mod over;
+#[cfg(windows)]
 mod indirect;
 #[cfg(windows)]
 mod inplace;
@@ -42,7 +44,16 @@ pub mod object;
 pub mod pipeline;
 #[cfg(windows)]
 mod primitive;
+#[cfg(all(windows, feature = "diagnostics"))]
+mod profile;
 pub mod query;
+#[cfg(windows)]
+mod memcopy;
+#[cfg(windows)]
+mod readback;
+mod rebar;
+#[cfg(windows)]
+mod regions;
 pub mod queue;
 pub mod resource;
 pub mod root;
@@ -56,6 +67,8 @@ mod memory;
 mod shadow;
 pub mod signature;
 #[cfg(windows)]
+pub mod splash;
+#[cfg(windows)]
 mod texture;
 #[cfg(windows)]
 mod watch;
@@ -65,6 +78,23 @@ pub use host::on_failure;
 #[cfg(windows)]
 pub use inplace::{title_memory_freeing, title_memory_section, title_memory_view};
 #[cfg(windows)]
+pub use regions::{title_memory_not_placeholder, title_memory_placeholder};
+#[cfg(windows)]
 pub use watch::{
     title_memory_reading, title_memory_remapped, title_memory_remapping, writing as kernel_will_write,
 };
+
+/// Total installed physical RAM in bytes, queried once from the OS.
+#[cfg(windows)]
+pub(crate) fn total_system_ram_bytes() -> Option<u64> {
+    static TOTAL: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *TOTAL.get_or_init(|| {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: plain data the call fills in.
+        let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: a sized structure.
+        let ok = unsafe { GlobalMemoryStatusEx(&mut m) } != 0;
+        (ok && m.ullTotalPhys > 0).then_some(m.ullTotalPhys)
+    })
+}

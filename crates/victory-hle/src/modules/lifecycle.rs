@@ -169,8 +169,11 @@ extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     // A user close (close button, Alt+F4, window or taskbar menu); a
-    // console title never sees one, nor a WM_CLOSE from it.
-    if message == wm::WM_SYSCOMMAND && wparam & 0xFFF0 == wm::SC_CLOSE as usize {
+    // console title never sees one, nor a WM_CLOSE from it. A WM_CLOSE
+    // without the menu command (`taskkill` without /F, a tool closing the
+    // window) too: the title's procedure hands it to DefWindowProc, which
+    // destroys the window, and the title went on running with none.
+    if is_user_close(message, wparam) {
         end_title("window closed", Box::new(|| {}));
         return 0;
     }
@@ -183,6 +186,45 @@ extern "system" fn window_proc(
     if message == wm::WM_SYSCOMMAND && wparam & 0xFFF0 == wm::SC_KEYMENU as usize {
         return 0;
     }
+    // The mouse cursor for keyboard and mouse play (`gameinput::cursor`):
+    // hidden over the window while captured, captured by a click, freed when
+    // the window loses focus. The title still sees every message.
+    match message {
+        wm::WM_SETCURSOR
+            if super::gameinput::cursor::captured() && lparam as u32 & 0xFFFF == wm::HTCLIENT =>
+        {
+            // SAFETY: no cursor while it is over our client area.
+            unsafe { wm::SetCursor(std::ptr::null_mut()) };
+            return 1;
+        }
+        wm::WM_LBUTTONDOWN | wm::WM_RBUTTONDOWN | wm::WM_MBUTTONDOWN => {
+            super::gameinput::cursor::note_window(hwnd as usize);
+            super::gameinput::cursor::click();
+        }
+        wm::WM_SETFOCUS => super::gameinput::cursor::note_window(hwnd as usize),
+        // Focus moving to a window of ours (the splash, an overlay, a
+        // dialog) or to none is not a loss; the host poll frees the cursor
+        // when another program is in front.
+        wm::WM_KILLFOCUS => super::gameinput::cursor::focus_moved(wparam, "WM_KILLFOCUS"),
+        wm::WM_ACTIVATE => {
+            if wparam & 0xFFFF == wm::WA_INACTIVE as usize {
+                super::gameinput::cursor::focus_moved(lparam as usize, "WM_ACTIVATE");
+            } else {
+                super::gameinput::cursor::note_window(hwnd as usize);
+            }
+            if super::gameinput::cursor::captured() {
+                super::gameinput::cursor::clip(super::gameinput::cursor::target());
+            }
+        }
+        // The system lets go of the clip when windows move; hold it again.
+        wm::WM_MOVE | wm::WM_SIZE | wm::WM_WINDOWPOSCHANGED
+            if super::gameinput::cursor::captured() =>
+        {
+            super::gameinput::cursor::clip(super::gameinput::cursor::target());
+        }
+        wm::WM_CAPTURECHANGED => tracing::debug!("WM_CAPTURECHANGED"),
+        _ => {}
+    }
     // SAFETY: the procedure `hook` stored, called the way the system would.
     unsafe {
         let title = wm::GetPropW(hwnd, TITLE_PROC);
@@ -192,6 +234,12 @@ extern "system" fn window_proc(
         let title = std::mem::transmute::<*mut c_void, wm::WNDPROC>(title);
         wm::CallWindowProcW(title, hwnd, message, wparam, lparam)
     }
+}
+
+/// Whether a window message asks to close the window (see `window_proc`).
+fn is_user_close(message: u32, wparam: WPARAM) -> bool {
+    message == wm::WM_CLOSE
+        || message == wm::WM_SYSCOMMAND && wparam & 0xFFF0 == wm::SC_CLOSE as usize
 }
 
 /// Suspends the title as the console does when it ends it, runs `then`
@@ -312,6 +360,18 @@ pub(crate) fn module() -> HleModule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_messages_end_the_title_and_other_commands_do_not() {
+        // The close button and Alt+F4 (the menu command, with the low
+        // bits the system may set), and a plain WM_CLOSE.
+        assert!(is_user_close(wm::WM_SYSCOMMAND, wm::SC_CLOSE as usize));
+        assert!(is_user_close(wm::WM_SYSCOMMAND, wm::SC_CLOSE as usize | 2));
+        assert!(is_user_close(wm::WM_CLOSE, 0));
+        assert!(!is_user_close(wm::WM_SYSCOMMAND, wm::SC_KEYMENU as usize));
+        assert!(!is_user_close(wm::WM_SYSCOMMAND, wm::SC_MINIMIZE as usize));
+        assert!(!is_user_close(wm::WM_DESTROY, 0));
+    }
 
     extern "system" fn noop(_: u8, _: *mut c_void) {}
 

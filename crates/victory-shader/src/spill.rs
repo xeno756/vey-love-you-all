@@ -25,10 +25,12 @@ use crate::native::{HwStage, NativeProgram, StageIo};
 const FIRST: u32 = 16;
 
 /// [`ir::build`] of `native`'s code as the hardware runs it, with the loads
-/// of a spilled user-data table rewritten ([`user_data`]).
+/// of a spilled user-data table rewritten ([`user_data`]), and a geometry
+/// program made ready for the host ([`crate::merged::prepare`]).
 pub fn build(native: &NativeProgram) -> Result<Program, ShaderError> {
     let mut p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
     user_data(&mut p, native);
+    crate::merged::prepare(&mut p, native);
     Ok(p)
 }
 

@@ -94,6 +94,11 @@ extern "system" fn set_event_on_completion(this: This, value: u64, event: *mut c
         #[cfg(windows)]
         if crate::host::late() {
             drop(waiters);
+            // Only until the signal that sets it, if one is in the line.
+            let reached = || fence.value.load(Ordering::Acquire) >= value;
+            if crate::host::wait_fence_signal(this as usize, value, reached) && reached() {
+                return S_OK;
+            }
             crate::host::settle_for_fence();
             if fence.value.load(Ordering::Acquire) >= value {
                 return S_OK;

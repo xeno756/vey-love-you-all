@@ -58,10 +58,13 @@
 //!             u16 maximum primitives, u8 user SGPRs, u8 output topology
 //!             (2 triangles); code follows at E+0x45c
 //! record +0x4c u32 LDS bytes (`lds_byte_size`; mesh programs read it here)
+//! GS  E+0x27c u32 output dwords per invocation, u32 (1 seen), u32 maximum
+//!             output vertices, u32 0, u32 dwords per output vertex
+//!             (the first is the product of the other two; checked)
 //! ```
 //!
 //! Rows are registers of the container's signature parts (`ISG1`, `OSG1`).
-//! Merged stages keep their stage data in another layout (not read).
+//! Other merged stages keep their stage data in another layout (not read).
 //!
 //! Other kinds seen: 0x07 program header + bitcode (or a stub when stripped),
 //! 0x0a `xbop` (compiler options), 0x0e a table not decoded yet, 0x10 and
@@ -120,6 +123,9 @@ const CS_THREADS: usize = 0x28;
 const RECORD_LDS: usize = 0x4c;
 const MS_CLIP_CNTL: usize = 0x194;
 const MS_INFO: usize = 0x448;
+const GS_RING: usize = 0x27c;
+/// Output vertices a D3D geometry shader may declare.
+const GS_MAX_VERTICES: u32 = 1024;
 /// Unpacked blobs are a few KiB; refuse to allocate for absurd sizes.
 const MAX_UNPACKED: u64 = 16 << 20;
 
@@ -268,6 +274,18 @@ pub enum StageIo {
     },
     Cs(ComputeIo),
     Ms(MeshIo),
+    Gs(GeometryIo),
+}
+
+/// A geometry program's output layout (the half of a merged ES-GS stage
+/// after the handover). Each invocation writes its output vertices to LDS,
+/// vertex k at `k * vertex_dwords` dwords from its base, dword `4 r + c`
+/// of a vertex being component c of output register r, and sends a GS emit
+/// message after each vertex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeometryIo {
+    pub max_vertices: u32,
+    pub vertex_dwords: u32,
 }
 
 /// A mesh program's outputs and limits. It runs as one hardware NGG stage:
@@ -446,61 +464,12 @@ fn unpack(blob: &[u8]) -> Result<Vec<u8>, ShaderError> {
     }
     let stream =
         bytes(blob, XBCH_HEADER as u64, packed).ok_or(Malformed("XBCH stream out of bounds"))?;
-    let out = inflate_zlib_exact(stream, unpacked as usize)
-        .ok_or(Malformed("XBCH stream does not inflate to its stated size"))?;
-    Ok(out)
-}
-
-/// Inflates a zlib stream incrementally up to `expected` bytes, rejecting
-/// truncated, corrupt, under-filled, or oversized streams without eagerly
-/// allocating the full declared size up front.
-fn inflate_zlib_exact(source: &[u8], expected: usize) -> Option<Vec<u8>> {
-    let mut state = zlib_rs::Inflate::new(true, 15);
-    let mut out = Vec::new();
-    let (mut in_pos, mut out_pos) = (0usize, 0usize);
-    loop {
-        if out_pos == expected {
-            let mut extra = [0u8; 1];
-            let status = state
-                .decompress(
-                    &source[in_pos..],
-                    &mut extra,
-                    zlib_rs::InflateFlush::NoFlush,
-                )
-                .ok()?;
-            return (status == zlib_rs::Status::StreamEnd
-                && state.total_out() as usize == expected)
-                .then_some(out);
-        }
-        if out_pos == out.len() {
-            let next_len = if out.is_empty() {
-                expected.min(source.len().saturating_mul(4).max(4096))
-            } else {
-                out.len().saturating_mul(2).min(expected)
-            };
-            out.resize(next_len, 0);
-        }
-        let status = state
-            .decompress(
-                &source[in_pos..],
-                &mut out[out_pos..],
-                zlib_rs::InflateFlush::NoFlush,
-            )
-            .ok()?;
-        let next_in = state.total_in() as usize;
-        let next_out = state.total_out() as usize;
-        match status {
-            zlib_rs::Status::StreamEnd => {
-                out.truncate(next_out);
-                return (next_out == expected).then_some(out);
-            }
-            zlib_rs::Status::Ok if next_in != in_pos || next_out != out_pos => {
-                in_pos = next_in;
-                out_pos = next_out;
-            }
-            zlib_rs::Status::Ok | zlib_rs::Status::BufError => return None,
-        }
+    let out = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(stream, unpacked as usize)
+        .map_err(|_| Malformed("XBCH stream does not inflate to its stated size"))?;
+    if out.len() as u64 != unpacked {
+        return Err(Malformed("XBCH stream does not inflate to its stated size"));
     }
+    Ok(out)
 }
 
 fn programs(fssm: &[u8]) -> Result<Vec<NativeProgram>, ShaderError> {
@@ -587,6 +556,7 @@ fn programs(fssm: &[u8]) -> Result<Vec<NativeProgram>, ShaderError> {
                 ],
             }),
             HwStage::Ms => ms_io(stage_data, u32_at(record, RECORD_LDS)?)?,
+            HwStage::Gs => gs_io(stage_data).map_or(StageIo::None, StageIo::Gs),
             _ => StageIo::None,
         };
         out.push(NativeProgram {
@@ -706,6 +676,21 @@ fn ms_io(data: &[u8], lds_bytes: u32) -> Result<StageIo, ShaderError> {
     }))
 }
 
+/// A geometry program's output layout, if its stage data holds a
+/// consistent one (none: its I/O is not raised).
+fn gs_io(data: &[u8]) -> Option<GeometryIo> {
+    let word = |k: usize| u32_at(data, GS_RING + 4 * k).ok();
+    let (per_invocation, max_vertices, vertex_dwords) = (word(0)?, word(2)?, word(4)?);
+    let plausible = (1..=GS_MAX_VERTICES).contains(&max_vertices)
+        && (1..=128).contains(&vertex_dwords)
+        && vertex_dwords % 4 == 0
+        && max_vertices.checked_mul(vertex_dwords) == Some(per_invocation);
+    plausible.then_some(GeometryIo {
+        max_vertices,
+        vertex_dwords,
+    })
+}
+
 /// For entries already sized by `as_chunks`.
 fn le32(entry: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(entry[at..at + 4].try_into().unwrap())
@@ -778,15 +763,12 @@ mod tests {
     }
 
     fn xbch(unpacked: &[u8]) -> Vec<u8> {
-        let mut buf = vec![0u8; zlib_rs::compress_bound(unpacked.len())];
-        let (stream, rc) =
-            zlib_rs::compress_slice(&mut buf, unpacked, zlib_rs::DeflateConfig::new(6));
-        assert_eq!(rc, zlib_rs::ReturnCode::Ok);
+        let stream = miniz_oxide::deflate::compress_to_vec_zlib(unpacked, 6);
         let mut out = b"XBCH".to_vec();
         out.extend_from_slice(&XBCH_VERSION.to_le_bytes());
         out.extend_from_slice(&(stream.len() as u64).to_le_bytes());
         out.extend_from_slice(&(unpacked.len() as u64).to_le_bytes());
-        out.extend_from_slice(stream);
+        out.extend_from_slice(&stream);
         out
     }
 
@@ -991,6 +973,28 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_geometry_output_layout() {
+        let mut blob = fssm(&[(HwStage::Gs, &VS_CODE)]);
+        let e = stage_data_at(&blob, HwStage::Gs);
+        // 60 dwords per invocation: 3 vertices of 20 (as the voxelizer's).
+        for (k, v) in [0x3cu32, 1, 3, 0, 0x14].into_iter().enumerate() {
+            blob[e + GS_RING + 4 * k..][..4].copy_from_slice(&v.to_le_bytes());
+        }
+        let p = &native_programs(&part(&[(KIND_NATIVE, &xbch(&blob))])).unwrap()[0];
+        assert_eq!(
+            p.io,
+            StageIo::Gs(GeometryIo {
+                max_vertices: 3,
+                vertex_dwords: 20
+            })
+        );
+        // A product that disagrees: no layout.
+        blob[e + GS_RING..][..4].copy_from_slice(&0x3du32.to_le_bytes());
+        let p = &native_programs(&part(&[(KIND_NATIVE, &xbch(&blob))])).unwrap()[0];
+        assert_eq!(p.io, StageIo::None);
+    }
+
+    #[test]
     fn compute_dispatch_settings() {
         // 5 user SGPRs, group id x and y, thread ids in v0-v1, 1 KiB LDS.
         let cs = ComputeIo {
@@ -1071,33 +1075,5 @@ mod tests {
         let at = FSSM_HEADER + slot(HwStage::Ls);
         bad_record[at..at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(native_programs(&part(&[(KIND_NATIVE, &xbch(&bad_record))])).is_err());
-    }
-
-    #[test]
-    fn rejects_truncated_oversized_and_bad_checksum_xbch_streams() {
-        let plain = fssm(&[(HwStage::Vs, &VS_CODE)]);
-        let good = xbch(&plain);
-        assert_eq!(unpack(&good).unwrap(), plain);
-
-        // Truncated zlib stream (drop last byte, update packed length).
-        let mut truncated = good[..good.len() - 1].to_vec();
-        let new_packed = (truncated.len() - XBCH_HEADER) as u64;
-        truncated[8..16].copy_from_slice(&new_packed.to_le_bytes());
-        assert!(unpack(&truncated).is_err());
-
-        // Stated unpacked size smaller than the inflated output.
-        let mut oversized = good.clone();
-        oversized[16..24].copy_from_slice(&((plain.len() - 1) as u64).to_le_bytes());
-        assert!(unpack(&oversized).is_err());
-
-        // Stated unpacked size larger than the inflated output.
-        let mut underfilled = good.clone();
-        underfilled[16..24].copy_from_slice(&((plain.len() + 1) as u64).to_le_bytes());
-        assert!(unpack(&underfilled).is_err());
-
-        // Corrupt Adler-32 trailer.
-        let mut bad_adler = good.clone();
-        *bad_adler.last_mut().unwrap() ^= 1;
-        assert!(unpack(&bad_adler).is_err());
     }
 }

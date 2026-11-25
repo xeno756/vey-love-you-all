@@ -72,7 +72,10 @@ pub(crate) fn signature(elements: &[SigElement], input: bool) -> Vec<u8> {
     // Validator 1.6 writes one name per element in element order, repeats
     // included, except that system values share theirs (it keys names by
     // the semantic's string, which is one static string per system value);
-    // the rows sorted by register (unallocated last).
+    // the rows sorted by register (unallocated last), then by the offset of
+    // their name (its `sort_sig`: stream, register, semantic name offset, not
+    // the column), ties in element order (a sort of 32 rows or fewer is its
+    // insertion sort, stable).
     let mut offsets: Vec<u32> = Vec::new();
     let mut next = 8 + 32 * elements.len() as u32;
     let mut names = Vec::new();
@@ -90,7 +93,7 @@ pub(crate) fn signature(elements: &[SigElement], input: bool) -> Vec<u8> {
         }
     }
     let mut order: Vec<usize> = (0..elements.len()).collect();
-    order.sort_by_key(|&i| (elements[i].row.unwrap_or(u32::MAX), elements[i].col));
+    order.sort_by_key(|&i| (elements[i].row.unwrap_or(u32::MAX), offsets[i]));
     for i in order {
         let (e, offset) = (&elements[i], offsets[i]);
         let used = e.usage << e.col;
@@ -113,6 +116,31 @@ pub(crate) fn signature(elements: &[SigElement], input: bool) -> Vec<u8> {
         out.push(0);
     }
     out
+}
+
+/// One interpolation mode per register, as the validator wants it: an
+/// element no code reads or writes takes the mode of one that is, where
+/// they differ (an input read per vertex is constant, while the title's
+/// unread row-mate stays linear). A float takes any mode, an integer only
+/// constant; rows with two modes among used elements stay as they are.
+pub(crate) fn settle_row_modes(elements: &mut [SigElement]) {
+    for i in 0..elements.len() {
+        let (row, mode) = (elements[i].row, elements[i].interp);
+        if row.is_none() || elements[i].usage == 0 || mode == 0 {
+            continue;
+        }
+        for e in elements.iter_mut() {
+            if e.row == row
+                && e.usage == 0
+                && e.interp != mode
+                && e.interp != 0
+                && e.kind == 0
+                && (mode == 1 || e.comp == 9)
+            {
+                e.interp = mode;
+            }
+        }
+    }
 }
 
 /// The most a mesh shader's outputs may take, in bytes (D3D12).
@@ -399,6 +427,82 @@ fn md5_block(state: &mut [u32; 4], block: &[u8; 64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn element(name: &str, index: u32, row: u32, col: u8, cols: u8) -> SigElement {
+        SigElement {
+            name: name.into(),
+            index,
+            kind: 0,
+            comp: 9,
+            interp: 2,
+            row: Some(row),
+            col,
+            cols,
+            usage: 0,
+            half: false,
+        }
+    }
+
+    /// (semantic index, start column) of each row of an `ISG1`/`OSG1` part.
+    fn rows(part: &[u8]) -> Vec<(u32, u8)> {
+        let n = u32::from_le_bytes(part[0..4].try_into().unwrap()) as usize;
+        (0..n)
+            .map(|i| {
+                let at = 8 + 32 * i;
+                let index = u32::from_le_bytes(part[at + 8..at + 12].try_into().unwrap());
+                (index, part[at + 24].trailing_zeros() as u8)
+            })
+            .collect()
+    }
+
+    /// Rows sharing a register come in the order of their names (element
+    /// order), not by column, as the validator writes them: TEXCOORD7 in w
+    /// declared before TEXCOORD4 in xyz of the same register stays first
+    /// ("Container part 'Program Output Signature' does not match expected").
+    #[test]
+    fn rows_of_one_register_keep_element_order() {
+        let els = [
+            element("SV_Position", 0, 0, 0, 4),
+            element("TEXCOORD", 7, 1, 3, 1),
+            element("TEXCOORD", 4, 1, 0, 3),
+            element("COLOR", 0, 0, 0, 4),
+        ];
+        let mut els = els.to_vec();
+        els[0].kind = 3;
+        els[3].row = Some(2);
+        let part = signature(&els, false);
+        assert_eq!(rows(&part), [(0, 0), (7, 3), (4, 0), (0, 0)]);
+        // a later register still sorts after, whatever its element order
+        els.swap(0, 3);
+        let part = signature(&els, false);
+        assert_eq!(rows(&part), [(0, 0), (7, 3), (4, 0), (0, 0)]);
+    }
+
+    /// A NORMAL read per vertex (constant) in a row with an unread linear
+    /// TEXCOORD: the TEXCOORD follows it. An unread uint cannot follow a
+    /// linear read element, and other rows are left alone.
+    #[test]
+    fn unread_row_mates_follow_the_read_mode() {
+        let mut els = vec![
+            element("TEXCOORD", 3, 5, 3, 1),
+            element("NORMAL", 0, 5, 0, 3),
+            element("TEXCOORD", 4, 2, 3, 1),
+            element("TEXCOORD", 1, 2, 0, 3),
+            element("TEXCOORD", 0, 1, 0, 1),
+            element("TEXCOORD", 2, 6, 0, 4),
+        ];
+        els[1].usage = 0b100;
+        els[1].interp = 1;
+        els[2].comp = 5;
+        els[2].interp = 1;
+        els[3].usage = 0b111;
+        els[4].usage = 1;
+        let before: Vec<u8> = els.iter().map(|e| e.interp).collect();
+        assert_eq!(before, [2, 1, 1, 2, 2, 2]);
+        settle_row_modes(&mut els);
+        let after: Vec<u8> = els.iter().map(|e| e.interp).collect();
+        assert_eq!(after, [1, 1, 1, 2, 2, 2]);
+    }
 
     #[test]
     fn md5_core_matches_the_standard() {

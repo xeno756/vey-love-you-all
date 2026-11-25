@@ -243,9 +243,9 @@ pub fn build(code: &[u8], wave64: bool, vgprs: u16) -> Result<Program, ShaderErr
 /// waves could not do where not every lane runs (the lane may be in the other
 /// wave, or not running).
 /// A register pair parked in two neighbouring lanes (a lane mask, a 64-bit
-/// address) moves as a pair (`s_mov_b64`) when every save and every restore
-/// of the two lanes come together, so a parked lane mask comes back as the
-/// mask it is; otherwise its halves come back as two scalars.
+/// address) moves as a pair (`s_mov_b64`) wherever its save or restore of the
+/// two lanes comes together, so a parked lane mask comes back as the mask it
+/// is; a lone scalar parked in one of those lanes elsewhere moves alone.
 fn unspill(
     list: &mut [gfx10::Instruction],
     leaders: &[usize],
@@ -385,19 +385,43 @@ fn unspill(
             None
         }
     };
-    let mut pairs: Vec<(u8, u32)> = Vec::new();
-    for &(reg, lane) in &slots {
-        if !wave64 || pairs.iter().any(|&(r, l)| r == reg && l + 1 == lane) || !slots.contains(&(reg, lane + 1)) {
-            continue;
+    // The pairs: lane slots that some save or restore moves together. The
+    // lanes are reused (PS_VoxelizeVisiblity parks the mask s[34:35] in lanes
+    // 3-4 of v56 and later a lone s59 in lane 3): such a move is single,
+    // the pair moves still pair. A slot is in one pair at most; of
+    // overlapping ones the pair moved together more often wins.
+    let partners: Vec<Option<usize>> = (0..list.len()).map(|i| if wave64 { partner(i) } else { None }).collect();
+    let mut together: Vec<((u8, u32), usize)> = Vec::new();
+    for (i, j) in partners.iter().enumerate() {
+        if j.is_some()
+            && let Some((_, reg, _, lane)) = parks[i]
+        {
+            match together.iter_mut().find(|t| t.0 == (reg, lane)) {
+                Some(t) => t.1 += 1,
+                None => together.push(((reg, lane), 1)),
+            }
         }
-        let lower: Vec<usize> = (0..list.len()).filter(|&i| parks[i].is_some_and(|p| (p.1, p.3) == (reg, lane))).collect();
-        let upper = parks.iter().flatten().filter(|p| (p.1, p.3) == (reg, lane + 1)).count();
-        let partners: Vec<Option<usize>> = lower.iter().map(|&i| partner(i)).collect();
-        let mut distinct: Vec<usize> = partners.iter().flatten().copied().collect();
-        distinct.sort_unstable();
-        distinct.dedup();
-        if partners.iter().all(Option::is_some) && distinct.len() == lower.len() && upper == lower.len() {
+    }
+    together.sort_by_key(|&((reg, lane), n)| (std::cmp::Reverse(n), reg, lane));
+    let mut pairs: Vec<(u8, u32)> = Vec::new();
+    for ((reg, lane), _) in together {
+        if !pairs.iter().any(|&(r, l)| r == reg && l + 1 >= lane && l <= lane + 1) {
             pairs.push((reg, lane));
+        }
+    }
+    // Per instruction: the second half it moves with (a save or restore of
+    // a pair's lower lane), each second half taken once; other moves of the
+    // pair's lanes are single.
+    let mut with: Vec<Option<usize>> = vec![None; list.len()];
+    let mut taken = vec![false; list.len()];
+    for i in 0..list.len() {
+        if let (Some(j), Some((_, reg, _, lane))) = (partners[i], parks[i])
+            && pairs.contains(&(reg, lane))
+            && !taken[j]
+            && !taken[i]
+        {
+            with[i] = Some(j);
+            taken[j] = true;
         }
     }
     // Codes for the parked scalars: the trap temporaries (108..=123), then
@@ -450,15 +474,14 @@ fn unspill(
             continue;
         };
         let Some(slot) = code_of(reg, lane) else { return Vec::new() };
-        if pairs.contains(&(reg, lane)) {
-            let Some(j) = partner(i) else { return Vec::new() };
+        if let Some(j) = with[i] {
             // A save moves the pair where its second half is saved; a
             // restore where its first half is restored.
             let (at, gone) = if save { (j, i) } else { (i, j) };
             let (dst, src) = if save { (slot, code) } else { (code, slot) };
             edits.push((at, Some((true, dst, src))));
             edits.push((gone, None));
-        } else if lane > 0 && pairs.contains(&(reg, lane - 1)) {
+        } else if taken[i] {
             // the upper half of a pair: moved with the lower
         } else {
             let (dst, src) = if save { (slot, code) } else { (code, slot) };
@@ -611,6 +634,69 @@ pub(crate) fn without_early_outs(p: &Program) -> Option<Program> {
     }
     for block in &mut blocks {
         block.phis.clear();
+    }
+    link(&mut blocks);
+    split_irreducible(&mut blocks).ok()?;
+    Some(rename(blocks, p.wave64, p.vgprs))
+}
+
+/// The program with the end of each whole-wave section that the compiler shared between
+/// branches copied into them. `cond ? WaveActiveMax(x) : WaveActiveMin(x)` with a uniform
+/// `cond` becomes two sections (`s_or_saveexec -1` ... DPP steps) that jump to one shared
+/// tail (the last `v_readlane` and the restore of EXEC); the simulation of a section
+/// (`emit::wave`) follows one block. A block that starts a section it does not end, and
+/// jumps to a block that writes EXEC, gets a copy of that block's instructions and its
+/// exit; a tail no block jumps to any more is emptied. `None` if there is no such tail.
+pub(crate) fn with_section_tails(p: &Program) -> Option<Program> {
+    let opens = |b: &Block| {
+        let last = b.insts.iter().rposition(|i| i.writes.iter().any(|w| w.0 == Reg::S(EXEC)))?;
+        let i = &b.insts[last];
+        let all = match (i.name(), &i.fields) {
+            ("s_or_saveexec_b64" | "s_or_saveexec_b32", Fields::Sop { src, .. }) => {
+                src.first() == Some(&Operand::Const(193))
+            }
+            ("s_nand_saveexec_b64" | "s_nand_saveexec_b32", Fields::Sop { src, .. }) => {
+                src.first() == Some(&Operand::Const(128))
+            }
+            _ => false,
+        };
+        all.then_some(())
+    };
+    let closes = |b: &Block| b.insts.iter().any(|i| i.writes.iter().any(|w| w.0 == Reg::S(EXEC)));
+    let mut blocks = p.blocks.clone();
+    let mut merged = Vec::new();
+    for b in 0..blocks.len() {
+        let Exit::Jump(j) = blocks[b].exit else {
+            continue;
+        };
+        if j == b || opens(&blocks[b]).is_none() || !closes(&p.blocks[j]) || opens(&p.blocks[j]).is_some() {
+            continue;
+        }
+        // (a loop's back edge is not a shared tail)
+        if p.blocks[j].offset <= p.blocks[b].offset {
+            continue;
+        }
+        let tail = p.blocks[j].clone();
+        let block = &mut blocks[b];
+        if block.insts.last().is_some_and(|i| i.name() == "s_branch") {
+            block.insts.pop();
+        }
+        block.insts.extend(tail.insts);
+        block.exit = tail.exit;
+        merged.push(j);
+    }
+    if merged.is_empty() {
+        return None;
+    }
+    for block in &mut blocks {
+        block.phis.clear();
+    }
+    link(&mut blocks);
+    for j in merged {
+        if blocks[j].preds.is_empty() {
+            blocks[j].insts.clear();
+            blocks[j].exit = Exit::End;
+        }
     }
     link(&mut blocks);
     split_irreducible(&mut blocks).ok()?;
@@ -1653,6 +1739,54 @@ mod tests {
             assert_eq!(mov1.read(Reg::S(EXEC + 1)).is_some(), wave64);
             assert_eq!((end.name(), b2.exit), ("s_endpgm", Exit::End));
         }
+    }
+
+    #[test]
+    fn a_parked_mask_pair_comes_back_whole_when_its_lane_is_reused_alone() {
+        // A mask parked in lanes 3-4 of v5, and later a lone s59 in lane 3
+        // (PS_VoxelizeVisiblity, v56).
+        let p = build_words(
+            &[
+                0xD761_0005,
+                0x0001_0622, // v_writelane_b32 v5, s34, 3
+                0xD761_0005,
+                0x0001_0823, // v_writelane_b32 v5, s35, 4
+                0xBEA2_0380, // s_mov_b32 s34, 0
+                0xBEA3_0380, // s_mov_b32 s35, 0
+                0xD760_0022,
+                0x0001_0705, // v_readlane_b32 s34, v5, 3
+                0xD760_0023,
+                0x0001_0905, // v_readlane_b32 s35, v5, 4
+                0xD761_0005,
+                0x0001_063B, // v_writelane_b32 v5, s59, 3
+                0xBEBB_0380, // s_mov_b32 s59, 0
+                0xD760_003B,
+                0x0001_0705, // v_readlane_b32 s59, v5, 3
+                0xBEFE_0422, // s_mov_b64 exec, s[34:35]
+                0x7E02_023B, // v_mov_b32 v1, s59
+                S_ENDPGM,
+            ],
+            true,
+        );
+        let insts = &p.blocks[0].insts;
+        let def = |v: Value| insts.iter().find(|i| i.writes.iter().any(|w| w.1 == v)).expect("defined");
+        let restore = insts.iter().find(|i| i.write(Reg::S(EXEC)).is_some()).unwrap();
+        // The mask comes back by one pair move, from the pair the save moved.
+        let (lo, hi) = (restore.read(Reg::S(34)).unwrap(), restore.read(Reg::S(35)).unwrap());
+        let back = def(lo);
+        assert!(std::ptr::eq(back, def(hi)));
+        assert_eq!(back.name(), "s_mov_b64");
+        let slot = back.reads.iter().map(|r| def(r.1)).collect::<Vec<_>>();
+        assert!(slot.iter().all(|s| s.name() == "s_mov_b64"));
+        assert_eq!(slot[0].read(Reg::S(34)), Some(input(&p, Reg::S(34))));
+        assert_eq!(slot[0].read(Reg::S(35)), Some(input(&p, Reg::S(35))));
+        // s59 moves alone, through lane 3's slot.
+        let mov = insts.iter().find(|i| i.name() == "v_mov_b32").unwrap();
+        let s59 = def(mov.read(Reg::S(59)).unwrap());
+        assert_eq!(s59.name(), "s_mov_b32");
+        let saved = def(s59.reads[0].1);
+        assert_eq!(saved.name(), "s_mov_b32");
+        assert_eq!(saved.read(Reg::S(59)), Some(input(&p, Reg::S(59))));
     }
 
     #[test]

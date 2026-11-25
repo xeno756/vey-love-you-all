@@ -24,6 +24,8 @@ pub struct Config {
     pub test_titles: Vec<PathBuf>,
     /// The config file that was read, if any.
     pub source: Option<PathBuf>,
+    /// `[controls]`: keyboard and mouse bindings, read by `victory-hle`.
+    pub controls: Option<toml::Table>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -31,6 +33,7 @@ pub struct Config {
 struct FileConfig {
     #[serde(default)]
     paths: FilePaths,
+    controls: Option<toml::Table>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -70,7 +73,9 @@ impl Config {
             }
             None => (None, FileConfig::default()),
         };
-        Self::resolve(parsed.paths, source, |k| std::env::var_os(k))
+        let mut cfg = Self::resolve(parsed.paths, source, |k| std::env::var_os(k))?;
+        cfg.controls = parsed.controls;
+        Ok(cfg)
     }
 
     fn resolve(
@@ -97,6 +102,7 @@ impl Config {
             data_dir,
             test_titles,
             source,
+            controls: None,
         })
     }
 

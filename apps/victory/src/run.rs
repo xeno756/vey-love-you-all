@@ -16,9 +16,18 @@ pub fn run(
     use victory_hle::{HleResolver, HostPolicy};
     use victory_loader::{BindReport, UnimplementedPolicy, WithTitleDlls};
 
+    use victory_core::splash::{BootPhase, set_phase};
+    // The boot splash first of all (before the waiting and the heavy startup below): its window
+    // is up within milliseconds, on a thread of its own.
+    if execute {
+        victory_hle::splash::start(exe.parent().unwrap_or(Path::new(".")));
+    }
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
+    set_phase(BootPhase::Reading);
     let cfg = victory_core::Config::load()?;
+    victory_hle::modules::controls::configure(cfg.controls.as_ref())
+        .map_err(anyhow::Error::msg)?;
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let prepared = victory_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();
@@ -27,10 +36,12 @@ pub fn run(
         None => println!("build          unknown ({hash})"),
     }
 
+    set_phase(BootPhase::Cache);
     let images = cfg.cache_subdir("images")?;
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
     // The effects this run leaves out, if lists of them were given.
     crate::effects::apply(&cfg.cache_dir);
+    set_phase(BootPhase::Mapping);
     let image = victory_loader::load(&prepared, &images)?;
     // The program is mapped from the copy `load` wrote: the file's bytes
     // and their patched copy are not read again, and were held for the
@@ -56,15 +67,23 @@ pub fn run(
     let manifest =
         std::fs::read_to_string(title_dir.join("MicrosoftGame.config")).unwrap_or_default();
     let title = victory_hle::runtime::Title::from_manifest(&manifest);
-    let storage = cfg.data_subdir(&format!("{:08X}/storage", title.id))?;
+    let slot = victory_core::saves::slot_from_env()?;
+    let title_root = cfg.data_subdir(&format!("{:08X}", title.id))?;
+    let paths = victory_core::saves::resolve(&title_root, &slot)?;
+    let storage = paths.storage;
     println!(
-        "title          {:08X}, storage {} ({} MB)",
+        "title          {:08X}, save slot {slot}{}, storage {} ({} MB)",
         title.id,
+        if paths.legacy { " (pre-slot location)" } else { "" },
         storage.display(),
         title.storage_bytes >> 20
     );
     // The console's fixed drives: the package as `G:`, temporary files `T:`.
     victory_hle::modules::files::mount_at('G', title_dir);
+    victory_hle::modules::d3d12x::use_shader_pack(
+        title_dir.join("shaders.rpf"),
+        cfg.cache_subdir("precompiled")?.join("shaders.rpf.index"),
+    );
     let temp = cfg.data_subdir(&format!("{:08X}/temp", title.id))?;
     victory_hle::modules::files::mount_at('T', &temp);
     victory_hle::runtime::set_title(victory_hle::runtime::Title { storage, ..title });
@@ -73,8 +92,14 @@ pub fn run(
         Console::SeriesS => victory_hle::console::Console::SeriesS,
     });
     println!("console        {}", victory_hle::console::current().name());
+    set_phase(BootPhase::Dlls);
     let dlls = victory_loader::load_title_dlls(image.info(), title_dir, &images, &wanted)?;
     for (name, dll) in &dlls {
+        if name.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
+            && let Some(real) = dll.export("ffxDispatch")
+        {
+            victory_hle::modules::ffx::set_real_dispatch(real);
+        }
         println!("title dll      {name} at {:#x}", dll.base());
         victory_hle::runtime::set_image_path(dll.base(), &title_dir.join(name));
     }
@@ -103,7 +128,27 @@ pub fn run(
         show(name, dll.bind_imports(&with_dlls, policy)?);
     }
     let exe_name = exe.file_name().unwrap_or_default().to_string_lossy();
-    show(&exe_name, image.bind_imports(&with_dlls, policy)?);
+    // The upscale dispatch is ours (`victory_hle::modules::ffx`); the rest of
+    // that DLL is the title's own.
+    struct TakeDispatch<'a>(&'a dyn victory_loader::ImportResolver);
+    impl victory_loader::ImportResolver for TakeDispatch<'_> {
+        fn resolve(
+            &self,
+            dll: &str,
+            symbol: &victory_pe::ImportSymbol,
+        ) -> victory_loader::Resolution {
+            let ours = dll.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
+                && matches!(symbol, victory_pe::ImportSymbol::Name { name, .. } if name == "ffxDispatch");
+            if ours {
+                return victory_loader::Resolution::Found {
+                    address: victory_hle::modules::ffx::dispatch_address(),
+                    provenance: victory_loader::Provenance::Hle,
+                };
+            }
+            self.0.resolve(dll, symbol)
+        }
+    }
+    show(&exe_name, image.bind_imports(&TakeDispatch(&with_dlls), policy)?);
     if !execute {
         println!("not executing (pass --execute to start the title)");
         return Ok(());
@@ -124,6 +169,7 @@ pub fn run(
     victory_hle::runtime::set_title_dll_loader(Box::new(move |file| {
         late.load(file, show).map_err(|e| format!("{e:#}"))
     }));
+    set_phase(BootPhase::Starting);
     // SAFETY: imports are bound; from here on we run title code.
     let main = unsafe { Arc::new(image).spawn_main(dlls)? };
     let code = main

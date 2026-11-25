@@ -1,8 +1,11 @@
 //! `gameinput.dll`: input devices from the host. Gamepads come from XInput
-//! (host slots 0-3); while none is connected, the keyboard drives one
-//! stand-in gamepad (`FALLBACK_BUTTONS`). The keyboard is a device of its own
+//! (host slots 0-3). The keyboard and mouse play as a pad (`controls`): on
+//! the first connected host pad, or on one stand-in gamepad while none is
+//! connected. With `[controls] enabled = false` the stand-in pad is the old
+//! fixed layout (`FALLBACK_BUTTONS`). The keyboard is a device of its own
 //! too. A poll thread turns host state into readings (a new one per change)
-//! and runs device callbacks on connect and disconnect.
+//! and runs device callbacks on connect and disconnect; a title's pad read
+//! makes one too, carrying the mouse motion since its last read.
 #![allow(non_snake_case)]
 // Title code calls these through the objects, passing pointers the real API
 // would trust.
@@ -13,10 +16,11 @@ use std::ffi::c_void;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
+use super::controls::{Controls, Counts};
 use super::xasync::{E_INVALIDARG, E_NOTIMPL};
 use super::xgameruntime::{HRESULT, S_OK};
 use crate::{HleExport, HleModule};
@@ -36,20 +40,10 @@ const STATUS_CONNECTED: u32 = 0x3;
 const ASYNC_ENUMERATION: u32 = 1;
 
 /// Gamepad buttons; the title maps each bit to one of its pad buttons.
-const MENU: u32 = 0x1;
-const VIEW: u32 = 0x2;
-const A: u32 = 0x4;
-const B: u32 = 0x8;
-const X: u32 = 0x10;
-const Y: u32 = 0x20;
-const UP: u32 = 0x40;
-const DOWN: u32 = 0x80;
-const LEFT: u32 = 0x100;
-const RIGHT: u32 = 0x200;
-const LEFT_SHOULDER: u32 = 0x400;
-const RIGHT_SHOULDER: u32 = 0x800;
-const LEFT_STICK: u32 = 0x1000;
-const RIGHT_STICK: u32 = 0x2000;
+pub(super) use victory_core::kbm::{
+    A, B, DOWN, LEFT, LEFT_SHOULDER, LEFT_STICK, MENU, PadState, RIGHT, RIGHT_SHOULDER,
+    RIGHT_STICK, UP, VIEW, X, Y,
+};
 
 /// Devices: host pad slots, the keyboard's stand-in pad, the keyboard.
 const PADS: usize = 4;
@@ -80,19 +74,6 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (b'H', RIGHT_STICK),
 ];
 
-/// A gamepad reading: triggers 0 to 1, sticks -1 to 1 (up positive).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct PadState {
-    buttons: u32,
-    left_trigger: f32,
-    right_trigger: f32,
-    left_x: f32,
-    left_y: f32,
-    right_x: f32,
-    right_y: f32,
-}
-
 /// One key held down: scan code (0xE0xx when extended), character, key.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -103,7 +84,7 @@ struct KeyState {
     dead_key: bool,
 }
 
-const _: () = assert!(size_of::<KeyState>() == 12 && size_of::<PadState>() == 28);
+const _: () = assert!(size_of::<KeyState>() == 12);
 
 /// Host input, or a fake in tests.
 trait Source: Send {
@@ -111,6 +92,11 @@ trait Source: Send {
     fn pad(&mut self, slot: usize) -> Option<PadState>;
     /// Keys held down; none while the title's window lacks focus.
     fn keys(&mut self) -> Vec<KeyState>;
+    /// Mouse buttons held down (`controls::MOUSE_BUTTONS`); none while the
+    /// cursor is not captured.
+    fn mouse_buttons(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
     /// Motor speeds: low frequency (left), high frequency (right).
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
@@ -236,6 +222,12 @@ pub struct Reading {
 }
 
 impl Reading {
+    /// The index of the device it is from.
+    fn hub_index(&self) -> usize {
+        // SAFETY: readings point at one of their hub's devices.
+        unsafe { (*self.device).index }
+    }
+
     fn kind(&self) -> u32 {
         match self.value {
             Value::Pad(_) => GAMEPAD_KIND,
@@ -325,6 +317,13 @@ struct State {
     pending: Vec<Event>,
     /// Device callbacks running now: token and thread.
     running: Vec<(u64, ThreadId)>,
+    /// The keyboard and mouse as a pad; `None`: the old stand-in pad.
+    controls: Option<Controls>,
+    /// The last poll's host pads and keys, for pad reads in between.
+    host_pads: [Option<PadState>; PADS],
+    keys: Vec<KeyState>,
+    /// Scripted input as a pad (none when nothing is scripted now).
+    script: Option<PadState>,
 }
 
 pub struct Hub {
@@ -333,6 +332,8 @@ pub struct Hub {
     /// Apart from the state: XInput can be slow, and the title reads
     /// readings every frame.
     source: Mutex<Box<dyn Source>>,
+    /// Mouse motion and wheel steps, added by the host's raw input thread.
+    counts: Arc<Counts>,
     state: Mutex<State>,
     /// A device callback returned.
     returned: Condvar,
@@ -356,7 +357,12 @@ fn now() -> u64 {
 }
 
 impl Hub {
-    fn new(source: Box<dyn Source>) -> &'static Hub {
+    fn new(
+        source: Box<dyn Source>,
+        counts: Arc<Counts>,
+        settings: super::controls::Settings,
+    ) -> &'static Hub {
+        cursor::ENABLED.store(settings.enabled && settings.capture, Ordering::Relaxed);
         let hub = Box::into_raw(Box::new(Hub {
             object: Object {
                 vtable: &INPUT,
@@ -364,11 +370,16 @@ impl Hub {
             },
             devices: std::array::from_fn(Device::new),
             source: Mutex::new(source),
+            counts,
             state: Mutex::new(State {
                 slots: Default::default(),
                 callbacks: Vec::new(),
                 pending: Vec::new(),
                 running: Vec::new(),
+                controls: settings.enabled.then(|| Controls::new(settings)),
+                host_pads: [None; PADS],
+                keys: Vec::new(),
+                script: None,
             }),
             returned: Condvar::new(),
         }));
@@ -383,8 +394,12 @@ impl Hub {
     }
 
     /// A hub over the host's input, polled from now on.
-    fn start(source: Box<dyn Source>) -> &'static Hub {
-        let hub = Hub::new(source);
+    fn start(
+        source: Box<dyn Source>,
+        counts: Arc<Counts>,
+        settings: super::controls::Settings,
+    ) -> &'static Hub {
+        let hub = Hub::new(source, counts, settings);
         hub.poll();
         std::thread::spawn(move || {
             loop {
@@ -401,12 +416,21 @@ impl Hub {
 
     /// Reads the host once; device callbacks run on the calling thread.
     fn poll(&self) {
-        let (pads, keys) = {
+        let (pads, keys, buttons) = {
             let mut source = lock(&self.source);
             let pads: [_; PADS] = std::array::from_fn(|slot| source.pad(slot));
-            (pads, source.keys())
+            (pads, source.keys(), source.mouse_buttons())
         };
-        let events = self.state().poll(&self.devices, pads, keys);
+        let events = {
+            let mut state = self.state();
+            let events = state.poll(&self.devices, pads, keys, &buttons, &self.counts);
+            if let Some(c) = &mut state.controls
+                && std::mem::take(&mut c.release_cursor)
+            {
+                cursor::release("Alt key");
+            }
+            events
+        };
         self.deliver(events);
     }
 
@@ -451,17 +475,88 @@ impl State {
         devices: &[Device; DEVICES],
         pads: [Option<PadState>; PADS],
         keys: Vec<KeyState>,
+        mouse_buttons: &[u8],
+        counts: &Counts,
     ) -> Vec<Event> {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
-        let any_pad = pads.iter().any(Option::is_some);
-        for (slot, pad) in pads.into_iter().enumerate() {
-            self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
+        // Scripted input (auto input, press file, fast boot) is a third
+        // source beside the host pads and the keyboard and mouse: it never
+        // goes through the key layout and never replaces another source.
+        let mut script = Vec::new();
+        auto_input_inject(&mut script);
+        let script_pad = (!script.is_empty()).then(|| fallback(&script));
+        if let Some(c) = &mut self.controls {
+            let held: Vec<u8> = keys
+                .iter()
+                .map(|k| k.virtual_key)
+                .chain(mouse_buttons.iter().copied())
+                .collect();
+            c.feed(&held, counts);
+            c.set_script(script_pad.unwrap_or_default());
         }
-        let fallback = (!any_pad).then(|| Value::Pad(fallback(&keys)));
-        self.update(devices, FALLBACK, fallback, now, &mut events);
+        self.script = script_pad;
+        self.host_pads = pads;
+        self.keys.clone_from(&keys);
+        self.publish(devices, now, None, &mut events);
+        let mut keys = keys;
+        keys.extend(script);
         self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
+    }
+
+    /// The pad devices' readings: the host pads, the keyboard and mouse on
+    /// the first connected one or else on the stand-in pad. `take`: a title
+    /// read, which drains the mouse counts.
+    fn publish(
+        &mut self,
+        devices: &[Device; DEVICES],
+        now: u64,
+        take: Option<&Counts>,
+        events: &mut Vec<Event>,
+    ) {
+        let pads = self.host_pads;
+        let first = pads.iter().position(Option::is_some);
+        let mut values = [None; PADS + 1];
+        values[..PADS].copy_from_slice(&pads);
+        let target = first.unwrap_or(FALLBACK);
+        match &mut self.controls {
+            Some(c) => {
+                let base = first.and_then(|i| pads[i]);
+                values[target] = Some(match take {
+                    Some(counts) => c.take(now, base, counts),
+                    None => c.peek(base),
+                });
+            }
+            // Keyboard and mouse off: the stand-in pad when no pad is
+            // connected; scripted input joins whichever pad there is.
+            None => {
+                let base = match first {
+                    Some(i) => pads[i],
+                    None => Some(fallback(&self.keys)),
+                };
+                values[target] = match (base, self.script) {
+                    (Some(pad), Some(script)) => Some(pad.merged(script)),
+                    (Some(pad), None) => Some(pad),
+                    (None, script) => script,
+                };
+            }
+        }
+        for (index, value) in values.into_iter().enumerate() {
+            self.update(devices, index, value.map(Value::Pad), now, events);
+        }
+    }
+
+    /// A title read of a pad: with keyboard and mouse, a new reading with the
+    /// mouse motion since the last read.
+    fn title_read(&mut self, devices: &[Device; DEVICES], counts: &Counts) {
+        if self.controls.is_none() {
+            return;
+        }
+        let mut events = Vec::new();
+        self.publish(devices, now(), Some(counts), &mut events);
+        // Connections only change on host polls; keep anything for the next.
+        self.pending.append(&mut events);
     }
 
     /// Records a device's state: a reading when it changed, callbacks when
@@ -510,13 +605,130 @@ impl State {
     }
 }
 
+/// VICTORY_PRESS_FILE=<path>: buttons written to that file ("A", "DOWN DOWN A") are held one
+/// after another for 150 ms each, then the file is emptied.
+fn live_press(keys: &mut Vec<KeyState>) {
+    use std::sync::{Mutex, OnceLock};
+    static PATH: OnceLock<Option<String>> = OnceLock::new();
+    static Q: Mutex<(Option<Instant>, Vec<u8>, Option<Instant>)> = Mutex::new((None, Vec::new(), None));
+    let Some(path) = PATH.get_or_init(|| std::env::var("VICTORY_PRESS_FILE").ok()) else { return };
+    let mut q = Q.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if q.1.is_empty() && q.0.is_none_or(|t| now - t >= Duration::from_millis(50)) {
+        q.0 = Some(now);
+        if let Ok(s) = std::fs::read_to_string(path)
+            && !s.trim().is_empty() {
+                let _ = std::fs::write(path, "");
+                q.1 = s
+                    .split_whitespace()
+                    .rev()
+                    .filter_map(|b| match b.to_ascii_uppercase().as_str() {
+                        "A" => Some(0x0D),
+                        "B" => Some(0x08),
+                        "UP" => Some(0x26),
+                        "DOWN" => Some(0x28),
+                        "LEFT" => Some(0x25),
+                        "RIGHT" => Some(0x27),
+                        "MENU" | "START" => Some(0x1B),
+                        "VIEW" => Some(0x09),
+                        "LS_UP" => Some(b'W'),
+                        "LS_DOWN" => Some(b'S'),
+                        "LS_LEFT" => Some(b'A'),
+                        "LS_RIGHT" => Some(b'D'),
+                        "RS_UP" => Some(b'I'),
+                        "RS_DOWN" => Some(b'K'),
+                        "RS_LEFT" => Some(b'J'),
+                        "RS_RIGHT" => Some(b'L'),
+                        "X" => Some(b'X'),
+                        "Y" => Some(b'Y'),
+                        _ => None,
+                    })
+                    .collect();
+                q.2 = Some(now);
+            }
+    }
+    let Some(&vk) = q.1.last() else { return };
+    let held = q.2.map_or(Duration::ZERO, |t| now - t);
+    // Stick tokens (LS_*, RS_*) are held 1.5 s, buttons 150 ms.
+    let hold = if b"WASDIJKL".contains(&vk) { 1500 } else { 150 };
+    if held < Duration::from_millis(hold) {
+        keys.push(KeyState { scan_code: 0, code_point: 0, virtual_key: vk, dead_key: false });
+    } else if held >= Duration::from_millis(hold + 150) {
+        q.1.pop();
+        q.2 = Some(now);
+    }
+}
+
+/// VICTORY_FAST_BOOT (testing only): A on every other presented frame, and
+/// START on one frame in eight (skips cutscenes), from the first frame until
+/// the title is in the world; then nothing, for good.
+fn fast_boot_keys(keys: &mut Vec<KeyState>) {
+    let key = |scan: u16, vk: u8| KeyState {
+        scan_code: scan.into(),
+        code_point: u32::from(vk),
+        virtual_key: vk,
+        dead_key: false,
+    };
+    // Just in the world: A (Enter) on every other reading, so the intro
+    // cutscene's skip prompt sees presses (frames take seconds there).
+    if victory_core::fastboot::skipping() {
+        static READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).is_multiple_of(2) {
+            keys.push(key(0x1C, 0x0D));
+        }
+        return;
+    }
+    if !victory_core::fastboot::active() {
+        return;
+    }
+    let frame = victory_core::fastboot::frame();
+    if frame.is_multiple_of(2) {
+        keys.push(key(0x1C, 0x0D));
+    } else if frame % 8 == 1 {
+        keys.push(key(0x01, 0x1B));
+    }
+}
+
+/// VICTORY_AUTO_INPUT: inject A-button presses every ~2 s for the first
+/// 120 s, so menus advance without manual interaction.
+fn auto_input_inject(keys: &mut Vec<KeyState>) {
+    live_press(keys);
+    if victory_core::fastboot::enabled() {
+        fast_boot_keys(keys);
+        return;
+    }
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    static START: OnceLock<Instant> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os("VICTORY_AUTO_INPUT").is_some()) {
+        return;
+    }
+    let start = *START.get_or_init(Instant::now);
+    let elapsed = start.elapsed();
+    if elapsed > Duration::from_secs(120) {
+        return;
+    }
+    let cycle = elapsed.as_millis() % 2000;
+    if cycle < 100 {
+        keys.push(KeyState {
+            scan_code: 0x1C,
+            code_point: 0x0D,
+            virtual_key: 0x0D,
+            dead_key: false,
+        });
+    }
+}
+
 #[cfg(windows)]
-fn host() -> Box<dyn Source> {
-    Box::new(host::Host::default())
+fn host(counts: &Arc<Counts>, settings: &super::controls::Settings) -> Box<dyn Source> {
+    if settings.enabled {
+        host::raw_mouse(counts.clone());
+    }
+    Box::new(host::Host::new(counts.clone()))
 }
 
 #[cfg(not(windows))]
-fn host() -> Box<dyn Source> {
+fn host(_: &Arc<Counts>, _: &super::controls::Settings) -> Box<dyn Source> {
     struct Nothing;
     impl Source for Nothing {
         fn pad(&mut self, _: usize) -> Option<PadState> {
@@ -530,8 +742,126 @@ fn host() -> Box<dyn Source> {
     Box::new(Nothing)
 }
 
-static HUB: LazyLock<&'static Hub> = LazyLock::new(|| Hub::start(host()));
+static HUB: LazyLock<&'static Hub> = LazyLock::new(|| {
+    let settings = super::controls::settings();
+    let counts = Arc::new(Counts::default());
+    Hub::start(host(&counts, &settings), counts, settings)
+});
 
+/// The mouse cursor while the title window has focus: captured (hidden,
+/// held inside the window, its motion turns the camera) or free. The host
+/// poll and the title window's procedure (`lifecycle`) keep it. Every
+/// release is logged with its reason (`VICTORY_LOG=info`).
+pub(crate) mod cursor {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// Capture is wanted at all (`[controls]` on, `mouse_capture`).
+    pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
+    pub(crate) static CAPTURED: AtomicBool = AtomicBool::new(false);
+    /// The title window has focus (kept by the host poll).
+    pub(crate) static FOCUSED: AtomicBool = AtomicBool::new(false);
+    /// The title's own top-level window (the last one clicked or focused):
+    /// what the cursor is clipped to, never a splash or overlay window of
+    /// ours that happens to be in front.
+    pub(crate) static WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+    pub(crate) fn captured() -> bool {
+        CAPTURED.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn capture(why: &str) {
+        if ENABLED.load(Ordering::Relaxed) && !CAPTURED.swap(true, Ordering::Relaxed) {
+            tracing::info!(why, "mouse cursor captured");
+        }
+    }
+
+    pub(crate) fn release(why: &str) {
+        if CAPTURED.swap(false, Ordering::Relaxed) {
+            tracing::info!(why, "mouse cursor released");
+        }
+    }
+
+    /// A click in the title window captures. Buttons held while it is
+    /// captured are no shots until they are let go (`host`).
+    pub(crate) fn click() {
+        capture("click");
+    }
+
+    /// Whether `window` (a handle; 0 is none) belongs to this process.
+    #[cfg(windows)]
+    pub(crate) fn ours(window: usize) -> bool {
+        use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        let mut process = 0;
+        // SAFETY: a plain query; a stale handle gives process 0.
+        unsafe { GetWindowThreadProcessId(window as _, &mut process) };
+        process == unsafe { GetCurrentProcessId() }
+    }
+
+    /// A window of the title gained the focus or a click: it is the one to
+    /// hold the cursor in (top-level windows only).
+    #[cfg(windows)]
+    pub(crate) fn note_window(window: usize) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetParent;
+        // SAFETY: a plain query.
+        if window != 0 && unsafe { GetParent(window as _) }.is_null() {
+            WINDOW.store(window, Ordering::Relaxed);
+        }
+    }
+
+    /// The window focus moved from the title window to `to`: a window of
+    /// ours (the splash, an overlay, the title's own dialogs) or none (the
+    /// system is between two windows) keeps the capture, another process's
+    /// window frees it.
+    #[cfg(windows)]
+    pub(crate) fn focus_moved(to: usize, event: &str) {
+        if to != 0 && !ours(to) {
+            release(&format!("{event}: focus went to another program's window {to:#x}"));
+        } else {
+            tracing::debug!(to, event, "focus moved inside the program; the mouse stays captured");
+        }
+    }
+
+    /// Holds the cursor inside `window`'s client area; false when it has no
+    /// area (minimized).
+    #[cfg(windows)]
+    pub(crate) fn clip(window: usize) -> bool {
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ClipCursor, GetClientRect};
+        // SAFETY: plain queries on a window handle; a stale one just fails.
+        unsafe {
+            let hwnd = window as _;
+            let mut client = RECT::default();
+            if GetClientRect(hwnd, &mut client) == 0 {
+                return false;
+            }
+            let mut a = POINT { x: client.left, y: client.top };
+            let mut b = POINT { x: client.right, y: client.bottom };
+            ClientToScreen(hwnd, &mut a);
+            ClientToScreen(hwnd, &mut b);
+            if b.x > a.x && b.y > a.y {
+                let rect = RECT { left: a.x, top: a.y, right: b.x, bottom: b.y };
+                ClipCursor(&rect);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The window the cursor is held in: the title's, else the foreground's.
+    #[cfg(windows)]
+    pub(crate) fn target() -> usize {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow};
+        let window = WINDOW.load(Ordering::Relaxed);
+        // SAFETY: plain queries.
+        if window != 0 && unsafe { IsWindow(window as _) } != 0 {
+            window
+        } else {
+            unsafe { GetForegroundWindow() as usize }
+        }
+    }
+}
 type This = *const Object;
 type Out = *mut *const c_void;
 
@@ -593,7 +923,11 @@ extern "system" fn current_reading(
     out: Out,
 ) -> HRESULT {
     let hub = hub(this);
-    let state = hub.state();
+    let mut state = hub.state();
+    if kind & GAMEPAD_KIND != 0 {
+        state.title_read(&hub.devices, &hub.counts);
+    }
+    let state = state;
     let newest = |i: usize| {
         state.slots[i]
             .history
@@ -1015,6 +1349,7 @@ extern "system" fn key_state(this: *const Reading, count: u32, out: *mut KeyStat
 extern "system" fn gamepad_state(this: *const Reading, out: *mut PadState) -> bool {
     match &reading(this).value {
         Value::Pad(state) if !out.is_null() => {
+            log_title_read(reading(this), state);
             // SAFETY: checked non-null.
             unsafe { out.write(*state) };
             true
@@ -1022,6 +1357,29 @@ extern "system" fn gamepad_state(this: *const Reading, out: *mut PadState) -> bo
         _ => false,
     }
 }
+/// What the title reads, when it differs from what it read before:
+/// `VICTORY_LOG=victory_hle::modules::gameinput=debug`.
+fn log_title_read(reading: &Reading, state: &PadState) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    static LAST: Mutex<Option<PadState>> = Mutex::new(None);
+    let mut last = lock(&LAST);
+    if *last != Some(*state) {
+        *last = Some(*state);
+        tracing::debug!(
+            device = reading.hub_index(),
+            sequence = reading.sequence,
+            buttons = format_args!("{:#06x}", state.buttons),
+            lt = state.left_trigger,
+            rt = state.right_trigger,
+            left = format_args!("{:+.3} {:+.3}", state.left_x, state.left_y),
+            right = format_args!("{:+.3} {:+.3}", state.right_x, state.right_y),
+            "title read pad"
+        );
+    }
+}
+
 /// Kinds our devices do not have: no count, no state.
 extern "system" fn nothing(_: *const c_void) -> usize {
     0
@@ -1072,9 +1430,15 @@ pub(crate) fn module() -> HleModule {
 mod host {
     use std::time::{Duration, Instant};
 
-    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use std::sync::atomic::Ordering;
+
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW,
+    };
+    use windows_sys::Win32::UI::Input::{
+        GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+        RIDEV_INPUTSINK, RIM_TYPEMOUSE, RegisterRawInputDevices,
     };
     use windows_sys::Win32::UI::Input::XboxController::{
         XINPUT_GAMEPAD, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_BACK,
@@ -1085,10 +1449,17 @@ mod host {
         XInputSetState,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
+        ClipCursor, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+        GetForegroundWindow, GetMessageW, GetWindowTextW, HWND_MESSAGE,
+        MSG, RegisterClassW, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_INPUT, WM_SETTEXT,
+        WNDCLASSW,
     };
 
+    use crate::modules::controls::MOUSE_BUTTONS;
     use super::*;
+
+    /// How long no foreground window at all is not yet a loss of focus.
+    const NO_FOREGROUND: Duration = Duration::from_millis(1500);
 
     /// Asking XInput about an empty slot is slow; look again this often.
     const EMPTY_SLOT_RECHECK: Duration = Duration::from_secs(1);
@@ -1127,9 +1498,260 @@ mod host {
         }
     }
 
+    /// The title window's caption, with a hint while the mouse is free.
     #[derive(Default)]
+    struct Caption {
+        window: usize,
+        /// The two captions, kept alive for good: a window that hangs may
+        /// read the text after our call has given up.
+        plain: &'static [u16],
+        hinted: &'static [u16],
+        shown: Option<bool>,
+    }
+
     pub(super) struct Host {
+        caption: Caption,
+        /// Since when the foreground window has been none (the system is
+        /// between two windows: one is being shown, hidden or destroyed).
+        no_foreground: Option<Instant>,
+        /// Why focus was last judged lost (for the release log).
+        lost: String,
         empty_until: [Option<Instant>; PADS],
+        /// Where scripted mouse motion goes (diagnostics).
+        #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+        counts: Arc<Counts>,
+        was_focused: bool,
+        was_captured: bool,
+        clipped: bool,
+        /// Mouse buttons held when the cursor was captured (the click that
+        /// captured it): no shots until let go.
+        swallowed: Vec<u8>,
+        #[cfg(feature = "diagnostics")]
+        kbm: kbm::Script,
+    }
+
+    impl Host {
+        pub(super) fn new(counts: Arc<Counts>) -> Host {
+            Host {
+                caption: Caption::default(),
+                no_foreground: None,
+                lost: String::new(),
+                empty_until: [None; PADS],
+                counts,
+                was_focused: false,
+                was_captured: false,
+                clipped: false,
+                swallowed: Vec::new(),
+                #[cfg(feature = "diagnostics")]
+                kbm: kbm::Script::from_env(),
+            }
+        }
+
+        /// A window of the title is in front. No foreground window at all
+        /// is a gap while windows change (the splash fading and going away,
+        /// an overlay shown): focus is kept through it for `NO_FOREGROUND`.
+        fn focus(&mut self) -> bool {
+            // SAFETY: plain query.
+            let front = unsafe { GetForegroundWindow() } as usize;
+            if front == 0 {
+                let since = *self.no_foreground.get_or_insert_with(Instant::now);
+                if since.elapsed() < NO_FOREGROUND {
+                    return self.was_focused;
+                }
+                self.lost = "no foreground window for too long".into();
+                return false;
+            }
+            self.no_foreground = None;
+            let ours = cursor::ours(front);
+            if !ours {
+                self.lost = format!("another program's window {front:#x} is in front");
+            }
+            ours
+        }
+
+        /// While the mouse is not captured the window caption says how to
+        /// capture it (`kbm::caption`); captured, the title's own again.
+        fn title_hint(&mut self, focus: bool) {
+            if !cursor::ENABLED.load(Ordering::Relaxed) {
+                return;
+            }
+            let caption = &mut self.caption;
+            if focus {
+                // SAFETY: plain query.
+                let hwnd = cursor::target();
+                if hwnd != caption.window {
+                    let mut text = [0u16; 256];
+                    // SAFETY: room for 256 units; the window is ours.
+                    let n = unsafe { GetWindowTextW(hwnd as _, text.as_mut_ptr(), 256) };
+                    let base = String::from_utf16_lossy(&text[..n.max(0) as usize]);
+                    let base = victory_core::kbm::caption(&base, true);
+                    let wide = |s: String| -> &'static [u16] {
+                        Box::leak(s.encode_utf16().chain([0]).collect::<Vec<_>>().into_boxed_slice())
+                    };
+                    caption.hinted = wide(victory_core::kbm::caption(&base, false));
+                    caption.plain = wide(base);
+                    caption.window = hwnd;
+                    caption.shown = None;
+                }
+            }
+            if caption.window == 0 {
+                return;
+            }
+            let captured = focus && cursor::captured();
+            if caption.shown != Some(captured) {
+                let text = if captured { caption.plain } else { caption.hinted };
+                let mut done = 0;
+                // SAFETY: a null-terminated caption that lives for good; a
+                // window that is gone or hung just fails or times out.
+                let ok = unsafe {
+                    SendMessageTimeoutW(
+                        caption.window as _,
+                        WM_SETTEXT,
+                        0,
+                        text.as_ptr() as isize,
+                        SMTO_ABORTIFHUNG,
+                        250,
+                        &mut done,
+                    )
+                };
+                // A hung window is tried again on a later poll.
+                caption.shown = (ok != 0).then_some(captured);
+            }
+        }
+
+        /// Frees the cursor when the title window loses focus, and holds a
+        /// captured one inside the window.
+        fn cursor(&mut self, focus: bool) {
+            cursor::FOCUSED.store(focus, Ordering::Relaxed);
+            // Focus loss (Alt-Tab, another window) frees the cursor; only a
+            // click in the window captures it again.
+            if !focus {
+                let why = std::mem::take(&mut self.lost);
+                cursor::release(&why);
+            }
+            self.was_focused = focus;
+            self.title_hint(focus);
+            if focus && cursor::captured() {
+                // Re-asserted every poll: the system resets the clip when
+                // another window activates.
+                self.clipped = cursor::clip(cursor::target()) || self.clipped;
+            } else if self.clipped {
+                // SAFETY: lets go of the clip we set.
+                unsafe { ClipCursor(std::ptr::null()) };
+                self.clipped = false;
+            }
+        }
+    }
+
+    /// Mouse motion and the wheel from raw input (no pointer acceleration),
+    /// on a thread and message-only window of its own. Counted only while the
+    /// cursor is captured in the focused title window.
+    pub(super) fn raw_mouse(counts: Arc<Counts>) {
+        let spawned = std::thread::Builder::new()
+            .name("victory-mouse".into())
+            .spawn(move || {
+                let class: Vec<u16> = "victory.mouse\0".encode_utf16().collect();
+                // SAFETY: a window class and a message-only window of this
+                // thread; the registration names that window.
+                let hwnd = unsafe {
+                    let instance = GetModuleHandleW(std::ptr::null());
+                    let wc = WNDCLASSW {
+                        lpfnWndProc: Some(DefWindowProcW),
+                        hInstance: instance,
+                        lpszClassName: class.as_ptr(),
+                        ..std::mem::zeroed()
+                    };
+                    RegisterClassW(&wc);
+                    CreateWindowExW(
+                        0,
+                        class.as_ptr(),
+                        std::ptr::null(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        HWND_MESSAGE,
+                        std::ptr::null_mut(),
+                        instance,
+                        std::ptr::null(),
+                    )
+                };
+                let device = RAWINPUTDEVICE {
+                    usUsagePage: 1, // generic desktop
+                    usUsage: 2,     // mouse
+                    dwFlags: RIDEV_INPUTSINK,
+                    hwndTarget: hwnd,
+                };
+                // SAFETY: one valid device description.
+                let ok = !hwnd.is_null()
+                    && unsafe {
+                        RegisterRawInputDevices(&device, 1, size_of::<RAWINPUTDEVICE>() as u32)
+                    } != 0;
+                if !ok {
+                    tracing::warn!("raw mouse input unavailable: no mouse look");
+                    return;
+                }
+                tracing::info!("raw mouse input on");
+                let mut wheel = 0;
+                // SAFETY: the standard message loop of this thread's window.
+                unsafe {
+                    let mut msg: MSG = std::mem::zeroed();
+                    while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                        if msg.message == WM_INPUT {
+                            raw_input(msg.lParam as HRAWINPUT, &counts, &mut wheel);
+                        }
+                        DispatchMessageW(&msg);
+                    }
+                }
+            });
+        if spawned.is_err() {
+            tracing::warn!("no raw mouse thread: no mouse look");
+        }
+    }
+
+    /// One raw input event; `wheel` keeps the part of a step a fine-grained
+    /// wheel has turned.
+    fn raw_input(handle: HRAWINPUT, counts: &Counts, wheel: &mut i32) {
+        /// Relative motion is the default; absolute comes from tablets,
+        /// remote desktops and virtual machines.
+        const MOUSE_MOVE_ABSOLUTE: u16 = 0x1;
+        const RI_MOUSE_WHEEL: u16 = 0x0400;
+        // SAFETY: zeroed is a valid RAWINPUT; `size` is its room.
+        let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
+        let mut size = size_of::<RAWINPUT>() as u32;
+        // SAFETY: the handle of a WM_INPUT this thread received.
+        let got = unsafe {
+            GetRawInputData(
+                handle,
+                RID_INPUT,
+                (&raw mut raw).cast(),
+                &mut size,
+                size_of::<RAWINPUTHEADER>() as u32,
+            )
+        };
+        if got == u32::MAX || raw.header.dwType != RIM_TYPEMOUSE {
+            return;
+        }
+        if !(cursor::FOCUSED.load(Ordering::Relaxed) && cursor::captured()) {
+            *wheel = 0;
+            return;
+        }
+        // SAFETY: a mouse event, so the mouse member is the one written.
+        let mouse = unsafe { raw.data.mouse };
+        if mouse.usFlags & MOUSE_MOVE_ABSOLUTE == 0 {
+            counts.add(i64::from(mouse.lLastX), i64::from(mouse.lLastY));
+        }
+        // SAFETY: both members of the button union are plain integers.
+        let buttons = unsafe { mouse.Anonymous.Anonymous };
+        if buttons.usButtonFlags & RI_MOUSE_WHEEL != 0 {
+            *wheel += i32::from(buttons.usButtonData as i16);
+            let steps = *wheel / 120;
+            *wheel -= steps * 120;
+            if steps != 0 {
+                counts.add_wheel(steps);
+            }
+        }
     }
 
     impl Source for Host {
@@ -1162,11 +1784,17 @@ mod host {
         }
 
         fn keys(&mut self) -> Vec<KeyState> {
+            let focus = self.focus();
+            self.cursor(focus);
             #[cfg(feature = "diagnostics")]
-            let mut down = scripted();
+            let mut down = {
+                let mut down = scripted();
+                down.extend(self.kbm.keys(&self.counts));
+                down
+            };
             #[cfg(not(feature = "diagnostics"))]
             let mut down = Vec::new();
-            if focused() {
+            if focus {
                 // Left/right modifier keys only, as devices report them; no
                 // mouse buttons (below 0x08).
                 let held: Vec<u8> = (0x08..=0xFE_u8)
@@ -1186,6 +1814,30 @@ mod host {
                     ..Default::default()
                 })
                 .collect()
+        }
+
+        fn mouse_buttons(&mut self) -> Vec<u8> {
+            let captured = cursor::FOCUSED.load(Ordering::Relaxed) && cursor::captured();
+            let mut down = Vec::new();
+            if captured {
+                let held: Vec<u8> = MOUSE_BUTTONS
+                    .into_iter()
+                    // SAFETY: plain queries.
+                    .filter(|&vk| unsafe { GetAsyncKeyState(i32::from(vk)) } < 0)
+                    .collect();
+                if !self.was_captured {
+                    self.swallowed.clone_from(&held);
+                }
+                self.swallowed.retain(|b| held.contains(b));
+                down = held
+                    .into_iter()
+                    .filter(|b| !self.swallowed.contains(b))
+                    .collect();
+            }
+            self.was_captured = captured;
+            #[cfg(feature = "diagnostics")]
+            down.extend(self.kbm.buttons());
+            down
         }
 
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
@@ -1237,13 +1889,118 @@ mod host {
             .collect()
     }
 
-    /// The foreground window is one of ours (the title's or our fallback).
-    fn focused() -> bool {
-        let mut process = 0;
-        // SAFETY: plain queries; a null window gives process 0.
-        unsafe {
-            GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
-            process == GetCurrentProcessId()
+    /// Debugging aid: `VICTORY_KBM_SCRIPT=<seconds>:<key>[*<hold seconds>],...`
+    /// plays keyboard and mouse input into the controls layer as if held
+    /// (with or without focus or capture). A key is a `[controls]` key name
+    /// (`W`, `LShift`, `MouseLeft`...) held 0.2 s unless a hold is given;
+    /// `MouseX=<counts>` / `MouseY=<counts>` move the mouse that far, spread
+    /// over the hold; `Wheel=<steps>` turns the wheel (up positive).
+    #[cfg(feature = "diagnostics")]
+    mod kbm {
+        use std::time::{Duration, Instant};
+
+        use super::super::Counts;
+        use crate::modules::controls::key_code;
+
+        enum What {
+            Key(u8),
+            Mouse(f64, f64),
+            Wheel(i32),
+        }
+
+        pub(super) struct Script {
+            start: Instant,
+            last: Duration,
+            entries: Vec<(Duration, Duration, What)>,
+            buttons: Vec<u8>,
+        }
+
+        impl Script {
+            pub(super) fn from_env() -> Script {
+                let list = std::env::var("VICTORY_KBM_SCRIPT").unwrap_or_default();
+                let entries = list
+                    .split(',')
+                    .filter(|e| !e.trim().is_empty())
+                    .filter_map(|entry| {
+                        let parsed = parse(entry);
+                        if parsed.is_none() {
+                            tracing::warn!(entry, "VICTORY_KBM_SCRIPT entry not understood");
+                        }
+                        parsed
+                    })
+                    .collect();
+                Script {
+                    start: Instant::now(),
+                    last: Duration::ZERO,
+                    entries,
+                    buttons: Vec::new(),
+                }
+            }
+
+            /// Keys held now; adds the mouse motion since the last poll.
+            pub(super) fn keys(&mut self, counts: &Counts) -> Vec<u8> {
+                let now = self.start.elapsed();
+                let last = std::mem::replace(&mut self.last, now);
+                let mut keys = Vec::new();
+                self.buttons.clear();
+                for (at, hold, what) in &self.entries {
+                    let end = *at + *hold;
+                    match *what {
+                        What::Key(vk) if (*at..end).contains(&now) => {
+                            if vk <= 0x06 {
+                                self.buttons.push(vk);
+                            } else {
+                                keys.push(vk);
+                            }
+                        }
+                        What::Key(_) => {}
+                        What::Mouse(x, y) => {
+                            let from = last.max(*at);
+                            let to = now.min(end);
+                            if to > from && !hold.is_zero() {
+                                let part = (to - from).as_secs_f64() / hold.as_secs_f64();
+                                counts.add((x * part).round() as i64, (y * part).round() as i64);
+                            }
+                        }
+                        What::Wheel(steps) => {
+                            if last < *at && *at <= now {
+                                counts.add_wheel(steps);
+                            }
+                        }
+                    }
+                }
+                keys
+            }
+
+            /// Mouse buttons held now (from the last `keys`).
+            pub(super) fn buttons(&self) -> Vec<u8> {
+                self.buttons.clone()
+            }
+        }
+
+        fn parse(entry: &str) -> Option<(Duration, Duration, What)> {
+            let (at, rest) = entry.split_once(':')?;
+            let (what, hold) = match rest.split_once('*') {
+                Some((what, hold)) => (what, hold.trim().parse::<f64>().ok()?),
+                None => (rest, 0.2),
+            };
+            let what = match what.trim().split_once('=') {
+                Some((axis, n)) => {
+                    let n: f64 = n.trim().parse().ok()?;
+                    match axis.trim() {
+                        "MouseX" => What::Mouse(n, 0.0),
+                        "MouseY" => What::Mouse(0.0, n),
+                        "Wheel" => What::Wheel(n as i32),
+                        _ => return None,
+                    }
+                }
+                None => What::Key(key_code(what)?),
+            };
+            Some((
+                Duration::try_from_secs_f64(at.trim().parse().ok()?).ok()?,
+                Duration::try_from_secs_f64(hold).ok()?,
+                what,
+            ))
         }
     }
 
@@ -1284,6 +2041,7 @@ mod tests {
     struct FakeHost {
         pads: [Option<PadState>; PADS],
         keys: Vec<KeyState>,
+        buttons: Vec<u8>,
         rumble: Vec<(usize, u16, u16)>,
     }
 
@@ -1296,14 +2054,33 @@ mod tests {
         fn keys(&mut self) -> Vec<KeyState> {
             self.0.lock().unwrap().keys.clone()
         }
+        fn mouse_buttons(&mut self) -> Vec<u8> {
+            self.0.lock().unwrap().buttons.clone()
+        }
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
             self.0.lock().unwrap().rumble.push((slot, low, high));
         }
     }
 
+    /// A hub with the old stand-in pad (`[controls] enabled = false`).
     fn fake() -> (&'static Hub, Arc<Mutex<FakeHost>>) {
+        fake_with(super::super::controls::Settings {
+            enabled: false,
+            ..Default::default()
+        })
+    }
+
+    /// A hub with keyboard and mouse controls (the defaults).
+    fn fake_kbm() -> (&'static Hub, Arc<Mutex<FakeHost>>) {
+        fake_with(Default::default())
+    }
+
+    fn fake_with(
+        settings: super::super::controls::Settings,
+    ) -> (&'static Hub, Arc<Mutex<FakeHost>>) {
         let host = Arc::new(Mutex::new(FakeHost::default()));
-        let hub = Hub::new(Box::new(Fake(Arc::clone(&host))));
+        let counts = Arc::new(Counts::default());
+        let hub = Hub::new(Box::new(Fake(Arc::clone(&host))), counts, settings);
         hub.poll();
         (hub, host)
     }
@@ -1521,6 +2298,76 @@ mod tests {
         release(r);
         // A keyboard reading is no gamepad reading.
         assert_eq!(current(hub, GAMEPAD_KIND, KEYBOARD), Err(READING_NOT_FOUND));
+    }
+
+    #[test]
+    fn keyboard_and_mouse_drive_the_stand_in_pad_without_a_host_pad() {
+        let (hub, host) = fake_kbm();
+        {
+            let mut h = host.lock().unwrap();
+            h.keys = vec![key(b'W'), key(0x20)]; // W, Space
+            h.buttons = vec![0x01]; // left mouse
+        }
+        hub.poll();
+        let r = current(hub, GAMEPAD_KIND, FALLBACK).unwrap();
+        let p = pad(r);
+        assert_eq!((p.buttons, p.left_y, p.right_trigger), (X, 1.0, 1.0));
+        release(r);
+        // The keyboard device still has its keys.
+        let r = current(hub, KEYBOARD_KIND, KEYBOARD).unwrap();
+        let count = slot::<extern "system" fn(*const Reading) -> u32, _>(r, 0x70);
+        assert_eq!(count(r), 2);
+        release(r);
+    }
+
+    #[test]
+    fn keyboard_and_mouse_ride_on_a_connected_host_pad() {
+        let (hub, host) = fake_kbm();
+        {
+            let mut h = host.lock().unwrap();
+            h.pads[1] = Some(PadState {
+                buttons: B,
+                left_trigger: 0.5,
+                ..Default::default()
+            });
+            h.keys = vec![key(b'D'), key(0x20)];
+            h.buttons = vec![0x02]; // right mouse: aim
+        }
+        hub.poll();
+        let r = current(hub, GAMEPAD_KIND, 1).unwrap();
+        let p = pad(r);
+        assert_eq!(
+            (p.buttons, p.left_x, p.left_trigger),
+            (B | X, 1.0, 1.0),
+            "pad and keyboard together"
+        );
+        release(r);
+        assert_eq!(
+            current(hub, GAMEPAD_KIND, FALLBACK),
+            Err(DEVICE_DISCONNECTED),
+            "no stand-in pad beside a host pad"
+        );
+    }
+
+    #[test]
+    fn a_title_pad_read_carries_the_mouse_motion_since_its_last_read() {
+        let (hub, _host) = fake_kbm();
+        let r = current(hub, GAMEPAD_KIND, FALLBACK).unwrap();
+        let first = stamp(r).0;
+        release(r);
+        std::thread::sleep(Duration::from_millis(5));
+        // Below a full stick (no carry into the next read).
+        hub.counts.add(4, -2);
+        let r = current(hub, GAMEPAD_KIND, FALLBACK).unwrap();
+        let p = pad(r);
+        assert!(stamp(r).0 > first, "a new reading at the read");
+        assert!(p.right_x > 0.0 && p.right_y > 0.0, "{p:?}");
+        assert!((p.right_x - 2.0 * p.right_y).abs() < 1e-4, "{p:?}");
+        release(r);
+        std::thread::sleep(Duration::from_millis(5));
+        let r = current(hub, GAMEPAD_KIND, FALLBACK).unwrap();
+        assert_eq!(pad(r).right_x, 0.0, "no motion, no turn");
+        release(r);
     }
 
     #[test]

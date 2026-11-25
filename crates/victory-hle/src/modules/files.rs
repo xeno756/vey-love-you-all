@@ -385,11 +385,102 @@ pub extern "system" fn GetFileAttributesExW(
     info: *mut c_void,
 ) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "GetFileAttributesExW": extern "system" fn(*const u16, i32, *mut c_void) -> i32)(
+    let ok = host!("kernel32.dll", "GetFileAttributesExW": extern "system" fn(*const u16, i32, *mut c_void) -> i32)(
         p.ptr(),
         level,
         info,
-    )
+    );
+    // WIN32_FILE_ATTRIBUTE_DATA: attributes at 0, size high at 28, low at 32.
+    if ok != 0 && level == 0 && !info.is_null() {
+        // SAFETY: the host filled the title's structure.
+        unsafe { follow_link(&wide_path(p.ptr()), info.cast(), 28) };
+    }
+    ok
+}
+
+/// A NUL-terminated wide string as a path.
+fn wide_path(p: *const u16) -> std::path::PathBuf {
+    use std::os::windows::ffi::OsStringExt;
+    // SAFETY: a NUL-terminated string.
+    let s = unsafe {
+        let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+        std::slice::from_raw_parts(p, len)
+    };
+    std::ffi::OsString::from_wide(s).into()
+}
+
+/// A game file that is a symbolic link (part of the game folder moved to another drive): the host
+/// reports the link itself, size 0 with the reparse-point attribute. The title gets the target's
+/// size and attributes instead. `data` starts with the attributes; the size (high, low) is at
+/// `size_at`.
+unsafe fn follow_link(path: &Path, data: *mut u8, size_at: usize) {
+    const REPARSE_POINT: u32 = 0x400;
+    // SAFETY: the caller's structure holds the attributes and the size.
+    unsafe {
+        let attrs = data.cast::<u32>().read_unaligned();
+        if attrs & REPARSE_POINT == 0 {
+            return;
+        }
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        use std::os::windows::fs::MetadataExt;
+        data.cast::<u32>().write_unaligned(meta.file_attributes() & !REPARSE_POINT);
+        let len = meta.len();
+        data.add(size_at).cast::<u32>().write_unaligned((len >> 32) as u32);
+        data.add(size_at + 4).cast::<u32>().write_unaligned(len as u32);
+    }
+}
+
+/// The folder each open search looks in, for [`FindNextFileW`].
+static SEARCHES: Mutex<Vec<(usize, std::path::PathBuf)>> = Mutex::new(Vec::new());
+
+/// WIN32_FIND_DATAW: attributes at 0, size high at 28, low at 32, the name at 44.
+unsafe fn follow_found(folder: &Path, data: *mut c_void) {
+    if data.is_null() {
+        return;
+    }
+    // SAFETY: a filled WIN32_FIND_DATAW.
+    unsafe {
+        let name = wide_path(data.cast::<u8>().add(44).cast());
+        follow_link(&folder.join(name), data.cast(), 28);
+    }
+}
+
+fn found_first(pattern: *const u16, handle: Handle, data: *mut c_void) -> Handle {
+    if handle as isize == -1 || pattern.is_null() {
+        return handle;
+    }
+    let folder = wide_path(pattern).parent().map(Path::to_path_buf).unwrap_or_default();
+    // SAFETY: the host filled `data`.
+    unsafe { follow_found(&folder, data) };
+    let mut s = SEARCHES.lock().unwrap_or_else(|e| e.into_inner());
+    s.retain(|(h, _)| *h != handle as usize);
+    if s.len() > 256 {
+        s.remove(0);
+    }
+    s.push((handle as usize, folder));
+    handle
+}
+
+pub extern "system" fn FindNextFileW(handle: Handle, data: *mut c_void) -> i32 {
+    let ok = host!("kernel32.dll", "FindNextFileW": extern "system" fn(Handle, *mut c_void) -> i32)(handle, data);
+    if ok != 0 {
+        let folder = SEARCHES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(h, _)| *h == handle as usize)
+            .map(|(_, f)| f.clone());
+        if let Some(folder) = folder {
+            // SAFETY: the host filled `data`.
+            unsafe { follow_found(&folder, data) };
+        }
+    }
+    ok
+}
+
+pub extern "system" fn FindClose(handle: Handle) -> i32 {
+    SEARCHES.lock().unwrap_or_else(|e| e.into_inner()).retain(|(h, _)| *h != handle as usize);
+    host!("kernel32.dll", "FindClose": extern "system" fn(Handle) -> i32)(handle)
 }
 
 pub extern "system" fn GetFileAttributesW(path: *const u16) -> u32 {
@@ -440,10 +531,11 @@ pub extern "system" fn GetDiskFreeSpaceW(
 
 pub extern "system" fn FindFirstFileW(path: *const u16, data: *mut c_void) -> Handle {
     let p = wide(path);
-    host!("kernel32.dll", "FindFirstFileW": extern "system" fn(*const u16, *mut c_void) -> Handle)(
+    let h = host!("kernel32.dll", "FindFirstFileW": extern "system" fn(*const u16, *mut c_void) -> Handle)(
         p.ptr(),
         data,
-    )
+    );
+    found_first(p.ptr(), h, data)
 }
 
 pub extern "system" fn FindFirstFileExW(
@@ -455,14 +547,16 @@ pub extern "system" fn FindFirstFileExW(
     flags: u32,
 ) -> Handle {
     let p = wide(path);
-    host!("kernel32.dll", "FindFirstFileExW": extern "system" fn(*const u16, i32, *mut c_void, i32, *mut c_void, u32) -> Handle)(
+    let h = host!("kernel32.dll", "FindFirstFileExW": extern "system" fn(*const u16, i32, *mut c_void, i32, *mut c_void, u32) -> Handle)(
         p.ptr(),
         level,
         data,
         search,
         filter,
         flags,
-    )
+    );
+    // Both info levels fill the same leading fields.
+    found_first(p.ptr(), h, data)
 }
 
 pub extern "system" fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32 {
@@ -704,6 +798,8 @@ pub(crate) fn module() -> HleModule {
             hle_export!(GetDiskFreeSpaceW),
             hle_export!(FindFirstFileW),
             hle_export!(FindFirstFileExW),
+            hle_export!(FindNextFileW),
+            hle_export!(FindClose),
             hle_export!(MoveFileExW),
             hle_export!(SetCurrentDirectoryA),
             hle_export!(_wfopen),

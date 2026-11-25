@@ -1,5 +1,41 @@
 # VIctory fork (work in progress)
 
+## victory-amd
+
+This copy is a fork of
+[fxceless/victory-fork](https://github.com/fxceless/victory-fork), itself a fork
+of [VIctory](https://github.com/Marvisak/VIctory). It adds fixes found while
+running on an AMD card, tested on one machine only: Windows 11, Radeon RX 7800 XT
+16 GB (driver 32.0.32029.2010), Ryzen 5 7500F, 32 GB RAM.
+
+State on that machine (2026-11-25, Series X profile): the prologue's cutscene and
+the first room are drawn, with the player moving, at 2 to 3 frames per second.
+Runs of 8 minutes mostly end without a device loss; one ended with
+`DXGI_ERROR_DEVICE_HUNG` after about 5 and a half minutes, cause unknown. Lamps
+were dark in one run. The room's walls were missing in two others, one before a fix
+that is here (the early pipeline list) and one with changes that are not. Ray-traced
+light does not run.
+
+What it changes over `victory-fork` (each is explained in a comment where it is):
+
+- Texture views are told apart by the memory their mips really take, so textures
+  streamed in part are not taken for one another and are uploaded from their first
+  mip that is there.
+- Views of placed textures the host lost sight of are put back
+  (`VICTORY_TEXTURE_SWEEP`).
+- Dispatches of more than 65,535 groups are made in two parts (the final gather at
+  2560x1440 asks for 115,200).
+- DirectStorage requests read their page array when they run, and wait for it.
+- The list of pipelines to make early keeps what earlier runs listed, and compute
+  pipelines get their own waiting time while a world loads.
+- View indices past the host heap are clamped on AMD too.
+- Programs that stop the AMD driver's compiler, or take it minutes and tens of GB,
+  are left out (ray-tracing resolves).
+- Diagnostics: `VICTORY_NULL_MAGENTA`, `victory warm`, more captures.
+
+Parts of it were prompted by pull requests and issues of VIctory and victory-fork;
+the code was written anew.
+
 A work-in-progress fork of [VIctory](https://github.com/Marvisak/VIctory), a
 compatibility layer that runs an Xbox Series title natively on Windows from
 files the user supplies. This fork follows upstream
@@ -20,7 +56,6 @@ developer or publisher.
 - **[XCL](https://github.com/ivall/xcl)** by ivall and its contributors
   (GPL-2.0-only) was used as a reference for how the same title behaves under
   another layer. Fixes inspired by it were written anew in VIctory's code.
-- This fork's changes were developed with [Claude Code](https://claude.com/claude-code).
 
 ## Status of this fork (2026-11-25)
 
@@ -58,7 +93,7 @@ Speed and memory:
 - The bindless texture queue no longer uploads stale views; the view table no longer grows without bound; the pipeline library is mapped instead of read into memory.
 - An intermittent device loss was traced to the pipeline library file being replaced while mapped; fixed.
 
-- Translated shaders get clean-up passes over the finished module (dead code, constant folding, reuse of values, branch facts); the pack's host instruction count falls by about 43 %, worth about 20 ms of GPU time per frame on the test machine (`VICTORY_SHADER_OPT=0` turns them off).
+- Translated shaders get clean-up passes over the finished module (dead code, constant folding, reuse of values, branch facts); the pack's host instruction count falls by about 43 %, worth about 20 ms of GPU time per frame on the test machine. Off by default in this tree (they drop the first room's walls and roof on several cards); `VICTORY_SHADER_OPT=on` turns them on.
 
 Most of the newer speed changes sit behind environment switches that are off
 by default (`VICTORY_LATE_WAIT`, `VICTORY_RELAY`, `VICTORY_WIDE_BACK`,
@@ -116,7 +151,7 @@ What each part does today and what it still needs:
 | Runtime services | One signed-in offline user, licences, packages, saves that survive a kill at any step, text entry dialog | Speech is silent; the dialog and relaunch are untested live |
 | Network | Offline by design: the title cannot reach the network | – |
 | Files and streaming | Archives and streamed data read, zlib and BCPack decoded in parallel | Loading is limited by writes into title memory |
-| Input | XInput pads, keyboard, keyboard stand-in pad | Trigger rumble |
+| Input | XInput pads, keyboard and mouse as a pad (rebindable) | Trigger rumble; keyboard prompts |
 | Audio | Menu, video and loading sound; XMA voices and Opus streams decode | Reverb is silent; Opus results unverified against the title |
 | GPU: menus | Draws, compute and presentation on host D3D12; only changed title memory is copied | Frame pacing drifts on one screen in release builds |
 | GPU: world | Mesh pipelines, shader-written buffers, descriptor lifetimes, indirect execution (arguments clamped), pipelines made by worker threads and kept on disk | Most of the scene is still missing (untranslated shaders drop draws); frames take seconds; real queries, depth bounds, HDR and scaling are missing |
@@ -153,17 +188,13 @@ The window caption shows the framerate. Saves, settings and `crashes.log`
 are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
 data under the cache folder.
 
-Input: XInput pads. With none connected the keyboard is a pad while the
-title's window has focus:
-
-| Keys | Pad |
-|------|-----|
-| W A S D / I J K L | left / right stick |
-| arrows | D-pad |
-| Enter, Backspace, X, Y | A, B, X, Y |
-| Q / E, Z / C | shoulders, triggers |
-| F / H | stick clicks |
-| Esc, Tab | Menu, View |
+Input: XInput pads, and keyboard and mouse played like a PC game, on by default
+(`VICTORY_KBM=0` turns the keyboard and mouse off). Click in the window to
+capture the mouse; Alt, Alt-Tab or losing focus frees it. WASD, the mouse, Shift,
+Space, E / F, Q / R, Ctrl, Enter, Esc, arrows, Tab and P are the default keys;
+`VICTORY_MOUSE_SENS`, `VICTORY_MOUSE_INVERT_Y` and `VICTORY_KEYMAP=<file>` change
+them. A pad, the keyboard and mouse, and scripted input all feed one pad.
+The key table and every setting are in [docs/input.md](docs/input.md).
 
 ## Commands
 

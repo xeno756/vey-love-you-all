@@ -8,6 +8,7 @@ mod effects;
 mod inspect;
 mod prepare;
 mod run;
+mod saves;
 mod shader;
 mod translate;
 
@@ -87,6 +88,32 @@ enum Command {
         #[arg(long)]
         jobs: Option<usize>,
     },
+    /// Translate the shaders of a title's archives into the cache and make
+    /// their compute pipelines, so that a run finds them there.
+    Warm {
+        paths: Vec<PathBuf>,
+        /// Worker threads (default: every logical core).
+        #[arg(long)]
+        jobs: Option<usize>,
+        /// Only translate: no host pipelines.
+        #[arg(long)]
+        no_pipelines: bool,
+    },
+    /// Make the host pipelines of the graphics records of the title's
+    /// precompiled pipeline cache (in its shaders.rpf) into the pipeline
+    /// library, at low priority, so that a run with
+    /// VICTORY_PRECOMPILED_GRAPHICS=1 compiles none of them. Needs a GPU.
+    PrecompileGraphics {
+        /// The title's shaders.rpf (default: shaders.rpf of the configured
+        /// game folder).
+        archive: Option<PathBuf>,
+        /// Worker threads (default: half the logical cores).
+        #[arg(long)]
+        jobs: Option<usize>,
+        /// Only the first N records.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Prepare, map and bind a title executable; with --execute, run it.
     Run {
         exe: PathBuf,
@@ -131,6 +158,14 @@ enum Command {
     },
     /// Show the resolved configuration and check it.
     Config,
+    /// Manage save slots (`VICTORY_SAVE_SLOT=<name>` picks one when running).
+    Saves {
+        /// Title id (8 hex digits); default: every title with data.
+        #[arg(long)]
+        title: Option<String>,
+        #[command(subcommand)]
+        action: saves::Saves,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -146,7 +181,8 @@ enum Console {
 }
 
 fn main() -> Result<()> {
-    victory_core::logging::init("info");
+    victory_core::env::alias_scarlett();
+    victory_core::logging::init("warn");
     // The audio recorder `run` starts for `VICTORY_AUDIO_CAPTURE`.
     #[cfg(all(windows, feature = "diagnostics"))]
     if victory_hle::modules::audio::capture::child() {
@@ -187,6 +223,8 @@ fn main() -> Result<()> {
             }
             translate::run(paths, validate, pipelines, list, jobs)
         }
+        Command::Warm { paths, jobs, no_pipelines } => translate::warm(paths, jobs, !no_pipelines),
+        Command::PrecompileGraphics { archive, jobs, limit } => translate::precompile_graphics(archive, jobs, limit),
         Command::Run {
             exe,
             unimplemented,
@@ -203,6 +241,7 @@ fn main() -> Result<()> {
             names_only,
         } => prepare::run(paths, compute_pipelines, mesh_pipelines, jobs, names_only),
         Command::Config => show_config(),
+        Command::Saves { title, action } => saves::run(action, title),
     }
 }
 

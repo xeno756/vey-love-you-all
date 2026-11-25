@@ -108,6 +108,8 @@ pub(crate) enum Cast {
     FpToSi = 4,
     UiToFp = 5,
     SiToFp = 6,
+    FpTrunc = 7,
+    FpExt = 8,
     Bitcast = 11,
 }
 
@@ -414,6 +416,19 @@ impl Module {
         // Terminators are kept apart, so a block can still grow at its end.
         self.blocks[block].body.push(i);
         V::Inst(i)
+    }
+
+    /// Another call like `call`, appended to `block`, with operand `from` replaced by `to`.
+    pub fn recall(&mut self, block: usize, call: V, from: V, to: V) -> V {
+        let V::Inst(i) = call else {
+            panic!("recall of a non-instruction")
+        };
+        let Inst { ty, op } = self.insts[i as usize].clone();
+        let Op::Call(f, args) = op else {
+            panic!("recall of a non-call")
+        };
+        let args = args.into_iter().map(|a| if a == from { to } else { a }).collect();
+        self.push(block, ty, Op::Call(f, args))
     }
 
     pub fn bin(&mut self, block: usize, op: Bin, a: V, b: V) -> V {

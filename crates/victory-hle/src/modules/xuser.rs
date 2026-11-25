@@ -54,9 +54,107 @@ pub const DEVICE_IID: Guid = Guid::new(
 /// The documented "no such user" error.
 pub const USER_NOT_FOUND: HRESULT = 0x8924_5104_u32 as i32;
 
+/// The id of the first local profile (kept from the time there was one fixed user, so its saves stay).
 pub const XUID: u64 = 0x0009_0000_0000_0001;
 pub const LOCAL_ID: u64 = 1;
-const GAMERTAG: &str = "Player";
+
+/// A local profile: a gamertag and a stable id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub gamertag: String,
+    pub xuid: u64,
+}
+
+/// Parses `profiles.txt`: one profile per line, `<xuid hex> <gamertag>`; `#` starts a comment.
+pub fn parse_profiles(text: &str) -> Vec<Profile> {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') {
+                return None;
+            }
+            let (id, name) = l.split_once(char::is_whitespace)?;
+            let xuid = u64::from_str_radix(id.trim_start_matches("0x"), 16).ok()?;
+            let gamertag: String = name.trim().chars().take(15).collect();
+            (!gamertag.is_empty()).then_some(Profile { gamertag, xuid })
+        })
+        .collect()
+}
+
+/// A new profile's id: the first profile keeps [`XUID`], later ones get a hash of the name in the same range.
+pub fn new_xuid(gamertag: &str, taken: &[Profile]) -> u64 {
+    if taken.is_empty() {
+        return XUID;
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in gamertag.to_lowercase().bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let mut id = 0x0009_0000_0000_0000 | (h & 0x0000_ffff_ffff_fffe) | 2;
+    while taken.iter().any(|p| p.xuid == id) {
+        id += 1;
+    }
+    id
+}
+
+/// Picks the profile named `wanted` (any case), adding it when missing; else the first; else a new "Ziggy".
+/// Returns the chosen profile and whether the list changed.
+pub fn choose_profile(list: &mut Vec<Profile>, wanted: Option<&str>) -> (Profile, bool) {
+    let name = wanted.map(str::trim).filter(|w| !w.is_empty());
+    if let Some(name) = name {
+        if let Some(p) = list.iter().find(|p| p.gamertag.eq_ignore_ascii_case(name)) {
+            return (p.clone(), false);
+        }
+    } else if let Some(p) = list.first() {
+        return (p.clone(), false);
+    }
+    let gamertag: String = name.unwrap_or("Ziggy").chars().take(15).collect();
+    let p = Profile { xuid: new_xuid(&gamertag, list), gamertag };
+    list.push(p.clone());
+    (p, true)
+}
+
+fn profiles_file() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    Some(std::path::Path::new(&base).join("VIctory").join("profiles.txt"))
+}
+
+/// The signed-in profile: `VICTORY_PROFILE` (a gamertag) from `%LOCALAPPDATA%\VIctory\profiles.txt`,
+/// else the first profile there, else "Ziggy". New names are added to the file.
+pub fn profile() -> &'static Profile {
+    static P: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let file = profiles_file();
+        let mut list = file
+            .as_ref()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .map(|t| parse_profiles(&t))
+            .unwrap_or_default();
+        let wanted = std::env::var("VICTORY_PROFILE").ok();
+        let (p, changed) = choose_profile(&mut list, wanted.as_deref());
+        if changed && let Some(f) = &file {
+            let mut text = String::from("# VIctory local profiles: <xuid hex> <gamertag>. VICTORY_PROFILE=<gamertag> picks one.
+");
+            for q in &list {
+                text += &format!("{:016X} {}
+", q.xuid, q.gamertag);
+            }
+            if let Some(dir) = f.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Err(e) = std::fs::write(f, text) {
+                tracing::warn!(path = %f.display(), %e, "the local profiles could not be written");
+            }
+        }
+        tracing::info!(gamertag = %p.gamertag, xuid = format!("{:016X}", p.xuid), "local profile");
+        p
+    })
+}
+
+/// The signed-in profile's id.
+pub fn xuid() -> u64 {
+    profile().xuid
+}
 
 /// The only user; a handle is its address, duplicating and closing are free.
 pub struct User;
@@ -117,7 +215,9 @@ static ADD: u8 = 0;
 
 /// Any options add the one user, silently.
 extern "system" fn add_async(_: This, options: u32, block: *mut AsyncBlock) -> HRESULT {
-    tracing::info!(options, "XUserAddAsync: the offline local user");
+    // Options with the UI bit (the title's account picker) get the chosen profile too: it is the one
+    // VICTORY_PROFILE names, picked before the run.
+    tracing::info!(options, gamertag = %profile().gamertag, "XUserAddAsync: the local profile");
     xasync::XAsyncBegin(
         block,
         std::ptr::null_mut(),
@@ -142,10 +242,10 @@ extern "system" fn find_by_local_id(_: This, id: u64, out: *mut Handle) -> HRESU
     found(id == LOCAL_ID, out)
 }
 extern "system" fn get_id(_: This, _: Handle, out: *mut u64) -> HRESULT {
-    put(out, XUID)
+    put(out, xuid())
 }
 extern "system" fn find_by_id(_: This, id: u64, out: *mut Handle) -> HRESULT {
-    found(id == XUID, out)
+    found(id == xuid(), out)
 }
 extern "system" fn get_is_guest(_: This, _: Handle, out: *mut bool) -> HRESULT {
     put(out, false)
@@ -168,7 +268,7 @@ extern "system" fn get_gamertag(
     const MODERN_SUFFIX: u32 = 2;
     let text = match component {
         MODERN_SUFFIX => "",
-        _ => GAMERTAG,
+        _ => profile().gamertag.as_str(),
     };
     put_string(text, size, buffer, used)
 }
@@ -330,18 +430,40 @@ mod tests {
     use crate::modules::xgameruntime::method as slot;
 
     #[test]
+    fn profiles_are_read_chosen_and_added() {
+        let mut list = parse_profiles("# c
+0009000000000001 Ziggy
+
+0009AB0000000002 Sam Two
+bad
+");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1].gamertag, "Sam Two");
+        assert_eq!(choose_profile(&mut list, None), (list[0].clone(), false));
+        assert_eq!(choose_profile(&mut list, Some("sam two")).0.xuid, 0x0009_AB00_0000_0002);
+        let (p, changed) = choose_profile(&mut list, Some("New"));
+        assert!(changed && list.len() == 3 && p.xuid != XUID && p.xuid >> 48 == 9);
+        assert_eq!(choose_profile(&mut list, Some("New")), (p, false));
+        let mut empty = Vec::new();
+        let (z, changed) = choose_profile(&mut empty, None);
+        assert!(changed);
+        assert_eq!((z.gamertag.as_str(), z.xuid), ("Ziggy", XUID));
+    }
+
+    #[test]
     fn a_gamertag_without_a_suffix_has_an_empty_modern_suffix() {
         type Gamertag =
             extern "system" fn(This, Handle, u32, usize, *mut u8, *mut usize) -> HRESULT;
         let this: This = &OBJECT;
         let user = std::ptr::null();
         // Classic, modern, modern suffix, unique modern; through both slots.
-        let expected: [&[u8]; 4] = [b"Player\0", b"Player\0", b"\0", b"Player\0"];
+        let tag = format!("{}\0", profile().gamertag);
+        let expected: [&[u8]; 4] = [tag.as_bytes(), tag.as_bytes(), b"\0", tag.as_bytes()];
         for (object, at) in [(&GAMERTAG_OBJECT, 0x18), (&OBJECT, 0x78)] {
             let get = slot::<Gamertag>(object, at);
             for (component, expected) in (0..).zip(expected) {
-                let (mut name, mut used) = ([0xff_u8; 16], 0);
-                let hr = get(this, user, component, 16, name.as_mut_ptr(), &mut used);
+                let (mut name, mut used) = ([0xff_u8; 32], 0);
+                let hr = get(this, user, component, 32, name.as_mut_ptr(), &mut used);
                 assert_eq!(hr, S_OK);
                 assert_eq!(&name[..used], expected, "component {component}");
             }
@@ -372,13 +494,13 @@ mod tests {
         assert!(!handle.is_null());
         let mut xuid = 0;
         assert_eq!(slot::<GetId>(&OBJECT, 0x58)(this, handle, &mut xuid), S_OK);
-        assert_eq!(xuid, XUID);
+        assert_eq!(xuid, super::xuid());
 
         let mut name = [0u8; 16];
         let mut used = 0;
         let get = slot::<Gamertag>(&GAMERTAG_OBJECT, 0x18);
         assert_eq!(get(this, handle, 0, 16, name.as_mut_ptr(), &mut used), S_OK);
-        assert_eq!(&name[..used], b"Player\0");
+        assert_eq!(&name[..used], format!("{}\0", profile().gamertag).as_bytes());
         assert_eq!(
             get(this, handle, 0, 2, name.as_mut_ptr(), &mut used),
             E_NOT_SUFFICIENT_BUFFER

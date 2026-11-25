@@ -31,6 +31,8 @@ use super::xasync::{E_INVALIDARG, E_NOTIMPL, E_PENDING};
 use super::xgameruntime::{Guid, HRESULT, Methods, Object, S_OK, add_ref, missing, put};
 use crate::{HleModule, hle_export};
 
+mod pipeline;
+
 /// The factory interface the title asks for.
 const FACTORY: Guid = Guid::new(
     0x6295_9d11,
@@ -141,10 +143,19 @@ extern "system" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out
         tracing::warn!(path = name, %error, "dstorage: opening a file failed");
         return from_win32(&error);
     }
-    tracing::info!(path = name, iid = iid_text(iid), "dstorage: file opened");
+    static OPENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if victory_core::logging::sample(&OPENED) {
+        tracing::info!(path = name, iid = iid_text(iid), "dstorage: file opened");
+    }
     // SAFETY: a handle we just opened and nobody else owns.
     let file = unsafe { std::fs::File::from_raw_handle(handle) };
-    let file = Instance::create(Object::new("dstorage file", &FILE_VTABLE), File { file });
+    static IDS: AtomicU64 = AtomicU64::new(1);
+    let file = File {
+        file,
+        id: IDS.fetch_add(1, Ordering::Relaxed),
+        overlapped: OnceLock::new(),
+    };
+    let file = Instance::create(Object::new("dstorage file", &FILE_VTABLE), file);
     put(out, file)
 }
 
@@ -258,6 +269,11 @@ static FACTORY_VTABLE: Methods<16> = Methods([
 
 struct File {
     file: std::fs::File,
+    /// Unique for the process (addresses are reused), for the read cache.
+    id: u64,
+    /// A second handle for overlapped reads (the pipeline's), opened on
+    /// first use.
+    overlapped: OnceLock<Option<pipeline::AsyncHandle>>,
 }
 
 static FILE_VTABLE: Methods<8> = Methods([
@@ -420,6 +436,9 @@ fn scheduler() -> Option<&'static Scheduler> {
         })
         .as_ref()?;
     STARTED.call_once(|| {
+        if pipeline::config().enabled && pipeline::start(scheduler) {
+            return;
+        }
         let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
         let started = (0..workers)
             .filter(|i| {
@@ -438,6 +457,12 @@ impl Scheduler {
     fn lock(&self) -> MutexGuard<'_, Lanes> {
         self.lanes.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// New requests to start: wakes the workers (or the pipeline).
+    fn wake(&self) {
+        self.work.notify_all();
+        pipeline::wake();
+    }
 }
 
 /// A worker: runs the next read of the most deserving queue.
@@ -450,7 +475,7 @@ fn work(scheduler: &'static Scheduler) {
         };
         drop(lanes);
         let started = std::time::Instant::now();
-        let result = execute(&job.request);
+        let result = execute(&job.request, None);
         lanes = scheduler.lock();
         lanes.finish(&job, result);
         lanes.count(&job, started);
@@ -477,7 +502,7 @@ impl Lanes {
         if elapsed.as_secs() >= 5 {
             let waiting: usize = self.lanes.values().map(|l| l.reads.len()).sum();
             let reading = READING.swap(0, Ordering::Relaxed) as f64 / 1e9;
-            tracing::debug!(
+            tracing::info!(
                 requests = *requests,
                 mb_per_s = format_args!("{:.1}", *bytes as f64 / elapsed.as_secs_f64() / 1e6),
                 busy_workers = format_args!("{:.2}", busy.as_secs_f64() / elapsed.as_secs_f64()),
@@ -489,6 +514,7 @@ impl Lanes {
                 "dstorage: last {:.1} s",
                 elapsed.as_secs_f64()
             );
+            pipeline::log_summary(elapsed.as_secs_f64());
             self.done = Default::default();
             self.bcpack = Default::default();
             self.since = None;
@@ -759,7 +785,7 @@ fn queue(this: QueueRef, command: Command) {
     lane.unsubmitted.push(command);
     if lane.unsubmitted.len() >= (lane.capacity / 2).max(1) {
         lanes.submit(id);
-        scheduler.work.notify_all();
+        scheduler.wake();
     }
 }
 
@@ -773,7 +799,7 @@ extern "system" fn submit(this: QueueRef) {
     let pending = lanes.lanes.get(&id).map_or(0, |l| l.unsubmitted.len());
     tracing::debug!(commands = pending, "dstorage: submit");
     lanes.submit(id);
-    scheduler.work.notify_all();
+    scheduler.wake();
 }
 
 /// Ends the queue whatever its reference count: what was not started never
@@ -784,8 +810,9 @@ extern "system" fn close(this: QueueRef) {
     close_lane(unsafe { &*this }.state.id);
 }
 
-/// Reads, inflates and/or unpacks, and writes one request.
-fn execute(request: &Request) -> Result<(), HRESULT> {
+/// Reads, inflates and/or unpacks, and writes one request. `prefetched`:
+/// its source bytes, already read (the pipeline's), else it reads them.
+fn execute(request: &Request, prefetched: Option<&[u8]>) -> Result<(), HRESULT> {
     let options = request.options;
     let fail = |hr: HRESULT, why: &str| {
         tracing::warn!(
@@ -814,11 +841,13 @@ fn execute(request: &Request) -> Result<(), HRESULT> {
             return Err(fail(E_INVALIDARG, "source larger than destination"));
         }
         let size = request.source_size as usize;
-        return into_destination(request, size, |out| read_into(request, out).map(|()| size))
+        return into_destination(request, size, |out| {
+            read_into(request, out, prefetched).map(|()| size)
+        })
             .map_err(|hr| fail(hr, "copying"));
     }
     let tables = if bc != 0 { Some(bcpack_tables()?) } else { None };
-    let source = read_source(request).map_err(|hr| fail(hr, "reading the source"))?;
+    let source = read_source(request, prefetched).map_err(|hr| fail(hr, "reading the source"))?;
     // The console's order: zlib first, then BCPack.
     let source = if bc != 0 && options & ZLIB != 0 {
         let mut packed = vec![0; request.intermediate_size as usize];
@@ -932,15 +961,18 @@ fn load_bcpack_tables() -> Result<Tables, String> {
 
 /// A compressed request's source: borrowed from memory, or read from the
 /// file.
-fn read_source(request: &Request) -> Result<Cow<'static, [u8]>, HRESULT> {
+fn read_source<'a>(request: &Request, prefetched: Option<&'a [u8]>) -> Result<Cow<'a, [u8]>, HRESULT> {
     let size = request.source_size as usize;
+    if let Some(bytes) = prefetched {
+        return bytes.get(..size).map(Cow::Borrowed).ok_or(END_OF_FILE);
+    }
     if request.options & MEMORY_SOURCE != 0 {
         // SAFETY: the title's source holds `size` bytes until completion.
         let bytes = unsafe { std::slice::from_raw_parts(request.source.cast(), size) };
         return Ok(Cow::Borrowed(bytes));
     }
     let mut bytes = vec![0; size];
-    read_into(request, &mut bytes)?;
+    read_into(request, &mut bytes, None)?;
     Ok(Cow::Owned(bytes))
 }
 
@@ -948,7 +980,12 @@ fn read_source(request: &Request) -> Result<Cow<'static, [u8]>, HRESULT> {
 static READING: AtomicU64 = AtomicU64::new(0);
 
 /// Fills `out` (the source size) from the request's file or memory.
-fn read_into(request: &Request, out: &mut [u8]) -> Result<(), HRESULT> {
+fn read_into(request: &Request, out: &mut [u8], prefetched: Option<&[u8]>) -> Result<(), HRESULT> {
+    if let Some(bytes) = prefetched {
+        let bytes = bytes.get(..out.len()).ok_or(END_OF_FILE)?;
+        out.copy_from_slice(bytes);
+        return Ok(());
+    }
     if request.options & MEMORY_SOURCE != 0 {
         // SAFETY: the title's source holds `out.len()` bytes until completion.
         out.copy_from_slice(unsafe { std::slice::from_raw_parts(request.source.cast(), out.len()) });
@@ -994,14 +1031,7 @@ fn into_destination(
         return fill(out).map(drop);
     }
     let offset = (request.page_offset & 0xffff) as usize;
-    // SAFETY: the title passes a page number per 64 KiB of destination,
-    // which holds at least `len` bytes from `offset`.
-    let pages = unsafe {
-        std::slice::from_raw_parts(
-            request.destination.cast::<usize>(),
-            (offset + len).div_ceil(PAGE),
-        )
-    };
+    let pages = &filled(request.destination.cast(), (offset + len).div_ceil(PAGE))[..];
     // Consecutive pages of one allocation (the usual case): written in
     // place through one view.
     if let Some(mut window) = super::xmem::page_window(pages, offset, len) {
@@ -1040,10 +1070,46 @@ fn into_destination(
             offset,
             len,
             pages = pages.len(),
+            first = format_args!("{:#x}", pages.first().copied().unwrap_or(0)),
+            options = format_args!("{:#x}", request.options),
             "dstorage: a destination's physical pages could not be written (unknown page or a host failure); its request fails"
         );
         Err(E_INVALIDARG)
     }
+}
+
+/// The page numbers of a destination. The title fills the array after it
+/// enqueued the request (a copy taken then holds zeros, or the numbers of
+/// the array's last use), so it is read when the request runs; a number
+/// that is still zero then is waited for, a tenth of a second at most.
+fn filled(array: *const usize, n: usize) -> Vec<usize> {
+    static LATE: AtomicU64 = AtomicU64::new(0);
+    let read = || -> Vec<usize> {
+        // SAFETY: the title passes a page number per 64 KiB of destination
+        // and keeps the array until the request completes; it may write it
+        // from another thread meanwhile.
+        (0..n).map(|i| unsafe { array.add(i).read_volatile() }).collect()
+    };
+    let mut pages = read();
+    if !pages.contains(&0) {
+        return pages;
+    }
+    let began = std::time::Instant::now();
+    while pages.contains(&0) && began.elapsed() < std::time::Duration::from_millis(100) {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        pages = read();
+    }
+    let late = LATE.fetch_add(1, Ordering::Relaxed) + 1;
+    if late <= 8 || late.is_power_of_two() {
+        tracing::warn!(
+            requests = late,
+            pages = n,
+            waited_ms = began.elapsed().as_millis() as u64,
+            filled = !pages.contains(&0),
+            "dstorage: a request ran before its page array was filled"
+        );
+    }
+    pages
 }
 
 /// Slots by the 2020 order, which the argument shapes at
@@ -1200,6 +1266,20 @@ mod tests {
     }
 
     #[test]
+    fn a_page_array_filled_late_is_waited_for() {
+        let array: &'static [std::sync::atomic::AtomicUsize] = Box::leak(Box::new([std::sync::atomic::AtomicUsize::new(7), std::sync::atomic::AtomicUsize::new(0)]));
+        let title = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            array[1].store(8, Ordering::Release);
+        });
+        assert_eq!(filled(array.as_ptr().cast(), 2), [7, 8]);
+        title.join().unwrap();
+        // One never filled is given up on.
+        array[0].store(0, Ordering::Release);
+        assert_eq!(filled(array.as_ptr().cast(), 2), [0, 8]);
+    }
+
+    #[test]
     fn request_layout_is_the_titles() {
         assert_eq!(size_of::<Request>(), 0x48);
         assert_eq!(std::mem::offset_of!(Request, destination_size), 0x18);
@@ -1301,6 +1381,78 @@ mod tests {
         assert_eq!(result(array, 1), S_OK);
         assert_eq!(buffers[2], contents[100..116]);
         assert_eq!(buffers[3], contents[..16]);
+    }
+
+    /// Many small reads of one file in one submission (merged into larger
+    /// reads by the pipeline), a status after every eight, one request past
+    /// the end in segment 5 and a bad zlib stream in segment 9: every byte
+    /// lands, and each status holds exactly its own segment's first failure.
+    #[test]
+    fn many_small_reads_complete_in_order_with_exact_failures() {
+        let contents = pattern(1 << 20);
+        let plain = pattern(20_000);
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(&plain, 6);
+        let mut file_bytes = contents.clone();
+        let zlib_at = file_bytes.len() as u64;
+        file_bytes.extend_from_slice(&packed);
+        let (_dir, file) = file_with(&file_bytes);
+        let create: extern "system" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
+            call(factory(), 0x50);
+        let desc = QueueDesc {
+            source_type: 0,
+            capacity: 4096,
+            priority: 0,
+            name: c"many".as_ptr(),
+            unknown: 1,
+        };
+        let mut queue = std::ptr::null_mut();
+        assert_eq!(create(factory(), &desc, std::ptr::null(), &mut queue), S_OK);
+        const SEGMENTS: u32 = 12;
+        let array = status_array(SEGMENTS);
+        let coalesced_before = pipeline::coalesced_so_far();
+        // Sizes and offsets vary; neighbours touch or leave small holes.
+        let mut wants = Vec::new();
+        let mut offset = 777u64;
+        for i in 0..8 * SEGMENTS as usize {
+            let size = 1000 + (i * 397) % 9000;
+            wants.push((offset, size));
+            offset += size as u64 + (i as u64 % 3) * 1500;
+        }
+        let mut outs: Vec<Vec<u8>> = wants.iter().map(|&(_, n)| vec![0u8; n]).collect();
+        let mut inflated = vec![0u8; plain.len()];
+        let mut past_end = [0u8; 64];
+        for segment in 0..SEGMENTS as usize {
+            for k in 0..8 {
+                let i = segment * 8 + k;
+                let (offset, size) = wants[i];
+                enqueue(queue, &request(0, outs[i].as_mut_ptr().cast(), size, file, offset, size));
+            }
+            match segment {
+                5 => enqueue(queue, &request(0, past_end.as_mut_ptr().cast(), 64, file, file_bytes.len() as u64 - 10, 64)),
+                9 => enqueue(queue, &request(ZLIB, past_end.as_mut_ptr().cast(), 64, file, 0, 64)),
+                7 => enqueue(queue, &request(ZLIB, inflated.as_mut_ptr().cast(), plain.len(), file, zlib_at, packed.len())),
+                _ => {}
+            }
+            enqueue_status(queue, array, segment as u32);
+        }
+        void(queue, 0x30);
+        assert_eq!(wait(array, SEGMENTS - 1), S_OK);
+        for segment in 0..SEGMENTS {
+            let expected = match segment {
+                5 => END_OF_FILE,
+                9 => INVALID_DATA,
+                _ => S_OK,
+            };
+            assert_eq!(result(array, segment), expected, "segment {segment}");
+        }
+        for (i, &(offset, size)) in wants.iter().enumerate() {
+            assert_eq!(outs[i], contents[offset as usize..offset as usize + size], "request {i}");
+        }
+        assert_eq!(inflated, plain);
+        if pipeline::config().enabled && pipeline::config().coalesce > 0 {
+            assert!(pipeline::coalesced_so_far() > coalesced_before, "nothing was merged");
+        }
+        void(queue, 0x40);
     }
 
     #[test]

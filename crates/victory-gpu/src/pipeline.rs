@@ -9,9 +9,12 @@
 //! containers are shared by content hash and translated once, on first
 //! use (decision 0003).
 //!
-//! shortcut: only vertex plus pixel pipelines from streams and compute
-//! pipelines get host pipelines; mesh, tessellation and geometry stages,
-//! and the plain graphics description, keep their containers only. The 32-byte
+//! shortcut: only vertex (with or without a geometry stage) or mesh plus
+//! pixel pipelines from streams and compute pipelines get host pipelines;
+//! tessellation stages and the plain graphics description keep their
+//! containers only. A console geometry stage is the second half of a merged
+//! ES-GS program: its vertex stage's container carries the export half and
+//! a vertex variant, which the host runs (`victory_shader::merged`). The 32-byte
 //! packet after the header stays zero: titles only copy it inline, which
 //! our null command-list limits keep from running.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -124,6 +127,29 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
         .clone()
 }
 
+#[cfg(windows)]
+pub(crate) use host::depth_bounds_test;
+
+/// Puts the translation of a container of the title's into the cache on
+/// disk, and with `compute` its host pipeline into the driver's, before any
+/// run wants them. Whether it translated, and whether it has a pipeline
+/// (`None`: not asked for, or left out).
+#[cfg(windows)]
+pub fn warm(stage: &'static str, container: &[u8], compute: bool) -> (bool, Option<bool>) {
+    let full = blake3::hash(container);
+    // Not through the table, which lets nothing go.
+    let shader = Arc::new(Shader {
+        stage,
+        hash: full.to_hex()[..16].to_owned(),
+        container: container.to_vec(),
+        translated: OnceLock::new(),
+        mesh_variant: OnceLock::new(),
+    });
+    let translated = shader.translated().is_some();
+    let made = (translated && compute).then(|| make::warm(vec![shader])).flatten();
+    (translated, made)
+}
+
 /// A translated shader and the console resources its code reads.
 #[cfg(windows)]
 pub(crate) struct Translated {
@@ -132,6 +158,11 @@ pub(crate) struct Translated {
     /// Whether the shader's code can store to buffer memory ([`stores`]);
     /// true when its code is not known.
     pub(crate) stores: bool,
+    /// Whether the code can write anything through unordered access:
+    /// [`stores`], or an image store or atomic (a texture shaders write).
+    /// True when its code is not known. What `VICTORY_BARRIER_MERGE` asks
+    /// of an op before it counts it as unordered writes to wait for.
+    pub(crate) writes: bool,
 }
 
 #[cfg(windows)]
@@ -158,19 +189,25 @@ impl Shader {
                     KEPT[3].fetch_add(t.host.dxil.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 }
                 match &done {
-                    Ok(t) => tracing::info!(
+                    Ok(t) => tracing::debug!(
                         stage = self.stage,
                         hash = %self.hash,
                         user_data = t.host.user_data.len(),
                         samplers = t.host.samplers.len(),
                         "shader translated"
                     ),
-                    Err(e) => tracing::warn!(
-                        stage = self.stage,
-                        hash = %self.hash,
-                        error = %e,
-                        "shader does not translate; its pipelines' draws are dropped"
-                    ),
+                    Err(e) => {
+                        static FAILED: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        if victory_core::logging::sample(&FAILED) {
+                            tracing::warn!(
+                                stage = self.stage,
+                                hash = %self.hash,
+                                error = %e,
+                                "shader does not translate; its pipelines' draws are dropped"
+                            );
+                        }
+                    }
                 }
                 done.ok()
             })
@@ -240,17 +277,87 @@ impl Shader {
                         host: m.cs,
                         used: program.used.clone(),
                         stores: program.stores,
+                        writes: program.writes,
                     },
                     vertex: Translated {
                         host: vertex,
                         used: Vec::new(),
                         stores: false,
+                        writes: false,
                     },
                     layout: m.layout,
                 })
             })
             .as_ref()
     }
+}
+
+/// A mesh shader linked to the pixel shader it draws for
+/// (`victory_shader::emit::link`), when its own translation's outputs pass
+/// D3D12's 32 KiB: the mesh code with only the outputs the pixel shader
+/// reads, the pixel code with only those inputs; without a pixel shader
+/// (depth only), the mesh code with its system values alone. None when the mesh shader
+/// fits alone (or a link cannot be made: the pipeline is then made from the
+/// two translations, as before). Mesh variants are kept by (mesh, inputs the
+/// pixel shader reads), pixel variants by pixel shader.
+#[cfg(windows)]
+pub(crate) fn linked(ms: &Shader, ps: Option<&Shader>) -> Option<(Arc<Vec<u8>>, Option<Arc<Vec<u8>>>)> {
+    use victory_shader::emit::{self, link};
+    type Made = Option<Arc<emit::HostShader>>;
+    static MESH: Mutex<Option<HashMap<(String, Vec<link::Semantic>), Made>>> = Mutex::new(None);
+    static PIXEL: Mutex<Option<HashMap<String, Made>>> = Mutex::new(None);
+    let mt = &ms.translated()?.host;
+    if !link::mesh_outputs_over(mt) {
+        return None;
+    }
+    let pt = match ps {
+        Some(ps) => Some(&ps.translated()?.host),
+        None => None,
+    };
+    let reads = match pt {
+        Some(pt) => link::pixel_reads(pt).ok()?,
+        None => Vec::new(),
+    };
+    let made = |own: &emit::HostShader, s: &Shader| -> Made {
+        let r = emit::for_program(&s.hash, || link::translate_keeping(&s.container, &reads));
+        match r {
+            Ok(t) if link::same_bindings(own, &t) => Some(Arc::new(t)),
+            Ok(_) => {
+                tracing::warn!(stage = s.stage, hash = %s.hash, "linked translation binds differently; left unlinked");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(stage = s.stage, hash = %s.hash, error = %e, "linked translation failed");
+                None
+            }
+        }
+    };
+    let m = MESH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .entry((ms.hash.clone(), reads.clone()))
+        .or_insert_with(|| made(mt, ms))
+        .clone()?;
+    let p = match (ps, pt) {
+        (Some(ps), Some(pt)) => Some(
+            PIXEL
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert_with(HashMap::new)
+                .entry(ps.hash.clone())
+                .or_insert_with(|| made(pt, ps))
+                .clone()?,
+        ),
+        _ => None,
+    };
+    let pixel = ps.map_or("-", |ps| ps.hash.as_str());
+    if link::mesh_outputs_over(&m) {
+        tracing::warn!(mesh = %ms.hash, pixel, "mesh outputs the pixel shader reads pass 32 KiB");
+        return None;
+    }
+    tracing::info!(mesh = %ms.hash, pixel, reads = reads.len(), "mesh shader linked to its pixel shader");
+    Some((Arc::new(m.dxil.clone()), p.map(|p| Arc::new(p.dxil.clone()))))
 }
 
 #[cfg(windows)]
@@ -265,17 +372,31 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
     };
     let host = crate::shader_cache::host_shader(container)?;
     let stores = programs.is_empty() || programs.iter().any(stores);
+    let writes = stores || programs.iter().any(image_stores);
     let used = programs
         .into_iter()
         .find(|p| {
             matches!(
                 p.stage,
-                HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs
+                HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs | HwStage::Gs
             )
         })
         .map(|p| p.used)
         .unwrap_or_default();
-    Ok(Translated { host, used, stores })
+    Ok(Translated { host, used, stores, writes })
+}
+
+/// Whether a console program has an image store or atomic (it writes a
+/// texture through unordered access), or code that does not decode.
+#[cfg(windows)]
+fn image_stores(program: &victory_shader::NativeProgram) -> bool {
+    use victory_shader::gfx10::{Encoding, decode};
+    let Ok(code) = decode(&program.code) else {
+        return true;
+    };
+    code.iter().any(|i| {
+        matches!(i.encoding, Encoding::Mimg) && i.name().is_none_or(|n| n.contains("store") || n.contains("atomic"))
+    })
 }
 
 /// The compute pipelines of the console's ray-tracing structure builder
@@ -414,9 +535,24 @@ pub(crate) fn builder_runs() -> bool {
     if b.whole {
         return true;
     }
-    let missing = b.pipelines.iter().filter(|p| !make::now(p)).count();
+    let missing_pipelines: Vec<Arc<make::Pending>> = b
+        .pipelines
+        .iter()
+        .filter(|p| !make::now(p))
+        .cloned()
+        .collect();
+    let missing = missing_pipelines.len();
     if missing > 0 {
         b.off = true;
+        for p in &missing_pipelines {
+            if let Some(shader) = p.shaders.first() {
+                tracing::warn!(
+                    hash = %shader.hash,
+                    stage = %shader.stage,
+                    "the ray-tracing structure builder is missing this program's host pipeline"
+                );
+            }
+        }
         tracing::warn!(
             missing,
             of = b.pipelines.len(),
@@ -467,6 +603,10 @@ struct Pipeline {
     packet: [u32; 8],
     /// Each used stage's container.
     shaders: Vec<Arc<Shader>>,
+    /// What a precompiled pipeline (device methods 0x1c8 and 0x218) was
+    /// made from; its shaders are the archive's containers its stages name
+    /// (none with `VICTORY_PRECOMPILED_PSO=stub`).
+    precompiled: Option<Precompiled>,
     /// Whether a list has bound it yet (its shaders are logged then).
     bound: std::sync::atomic::AtomicBool,
     /// What its host pipeline is made from, and the host pipeline once made
@@ -502,7 +642,7 @@ pub(crate) fn bound(this: This) {
     }
     let frame = crate::frame::current();
     for shader in &p.shaders {
-        tracing::info!(pipeline = ?this, frame, stage = shader.stage, size = shader.container.len(), hash = %shader.hash, "first bind");
+        tracing::debug!(pipeline = ?this, frame, stage = shader.stage, size = shader.container.len(), hash = %shader.hash, "first bind");
     }
 }
 
@@ -549,13 +689,58 @@ fn parse_skip_hashes(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// The skipped shader hashes: `VICTORY_SKIP_PIPELINES`, plus the file
+/// `VICTORY_SKIP_FILE` names (hashes separated by commas or lines, `#`
+/// comments), read again when it changes (checked every 2 s), so passes
+/// can be switched off and on while the title runs.
+#[cfg(all(windows, feature = "diagnostics"))]
+fn skip_hashes() -> std::sync::Arc<std::collections::HashSet<String>> {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    struct Skips {
+        env: Vec<String>,
+        file: Option<std::path::PathBuf>,
+        modified: Option<std::time::SystemTime>,
+        checked: std::time::Instant,
+        set: Arc<HashSet<String>>,
+    }
+    static SKIPS: Mutex<Option<Skips>> = Mutex::new(None);
+    let mut guard = SKIPS.lock().unwrap_or_else(|e| e.into_inner());
+    let s = guard.get_or_insert_with(|| {
+        let env = parse_skip_hashes(&std::env::var("VICTORY_SKIP_PIPELINES").unwrap_or_default());
+        Skips {
+            set: Arc::new(env.iter().cloned().collect()),
+            env,
+            file: std::env::var_os("VICTORY_SKIP_FILE").map(Into::into),
+            modified: None,
+            checked: std::time::Instant::now() - std::time::Duration::from_secs(10),
+        }
+    });
+    if let Some(file) = &s.file
+        && s.checked.elapsed() >= std::time::Duration::from_secs(2)
+    {
+        s.checked = std::time::Instant::now();
+        let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok();
+        if modified != s.modified {
+            s.modified = modified;
+            let text = std::fs::read_to_string(file).unwrap_or_default();
+            let listed: String = text
+                .lines()
+                .map(|l| l.split('#').next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut set: HashSet<String> = s.env.iter().cloned().collect();
+            set.extend(parse_skip_hashes(&listed));
+            tracing::warn!(count = set.len(), "VICTORY_SKIP_FILE: skipped shader hashes now");
+            s.set = Arc::new(set);
+        }
+    }
+    s.set.clone()
+}
+
 #[cfg(all(windows, feature = "diagnostics"))]
 fn skipped_shader(p: &Pipeline) -> Option<&str> {
-    static HASHES: OnceLock<Vec<String>> = OnceLock::new();
-    let hashes = HASHES.get_or_init(|| {
-        let value = std::env::var("VICTORY_SKIP_PIPELINES").unwrap_or_default();
-        parse_skip_hashes(&value)
-    });
+    let hashes = skip_hashes();
     if hashes.is_empty() {
         return None;
     }
@@ -580,6 +765,10 @@ pub(crate) fn note_drop(this: This) {
         let p = pipeline(this);
         skipped_shader(p)
             .map(|hash| format!("skipped shader {hash}"))
+            .or_else(|| {
+                (p.precompiled.is_some() && p.shaders.is_empty())
+                    .then(|| "precompiled pipeline without a host pipeline (VICTORY_PRECOMPILED_PSO=stub)".to_owned())
+            })
             .or_else(|| make::missing(&p.host))
     };
     if let Some(why) = why {
@@ -620,6 +809,7 @@ fn copy(stage: &'static str, code: &Bytecode) -> Option<Arc<Shader>> {
 fn hand_out(
     shaders: Vec<Arc<Shader>>,
     #[cfg(windows)] graphics: Option<Box<host::GraphicsState>>,
+    precompiled: Option<Precompiled>,
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
@@ -653,6 +843,7 @@ fn hand_out(
         #[cfg(windows)]
         left_out,
         shaders,
+        precompiled,
         bound: std::sync::atomic::AtomicBool::new(false),
     });
     object::hand_out(PIPELINE, pipeline, iid, &PIPELINE_IIDS, out)
@@ -675,6 +866,7 @@ pub(crate) extern "system" fn create_graphics(
         shaders,
         #[cfg(windows)]
         None,
+        None,
         iid,
         out,
     )
@@ -694,6 +886,7 @@ pub(crate) extern "system" fn create_compute(
     hand_out(
         copy("compute", &desc.stage).into_iter().collect(),
         #[cfg(windows)]
+        None,
         None,
         iid,
         out,
@@ -797,6 +990,7 @@ pub(crate) extern "system" fn create_stream(
         shaders,
         #[cfg(windows)]
         Some(Box::new(graphics)),
+        None,
         iid,
         out,
     )
@@ -818,6 +1012,14 @@ static FUNCTIONS: Table<24> = {
     f[7] = object::parent_device as *const (); // 0x38
     Table(f)
 };
+
+mod pack;
+mod precompiled;
+pub use pack::use_shader_pack;
+pub use precompiled::PrecompileReport;
+#[cfg(windows)]
+pub use precompiled::precompile_graphics;
+pub(crate) use precompiled::{Precompiled, create_precompiled};
 
 #[cfg(windows)]
 pub(crate) mod host;
