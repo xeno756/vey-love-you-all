@@ -408,6 +408,150 @@ fn done_on(list: &ID3D12GraphicsCommandList, scratch: &ID3D12Resource) {
     };
 }
 
+/// For an indirect mesh dispatch of a mesh pipeline run as compute
+/// (`crate::pipeline::host::HostPipeline::as_compute`): from the clamped
+/// record (the groups asked), the arguments of the compute dispatch that
+/// writes the groups' records, and of the draw that reads them. The record
+/// buffer holds `most` groups: a record that asks for more runs those.
+const MESH_SOURCE: &str = r#"
+#define RS "RootConstants(num32BitConstants=4, b0), SRV(t0), UAV(u0)"
+cbuffer Record : register(b0) {
+    uint record_offset;
+    // The groups whose records fit the record buffer.
+    uint most;
+    // Vertices the vertex shader draws for a group.
+    uint group_vertices;
+    uint pad;
+};
+ByteAddressBuffer record : register(t0);
+// Dispatch arguments at 0 (x, 1, 1), draw arguments at 16 (vertices,
+// instances, first vertex, first instance).
+RWByteAddressBuffer arguments : register(u0);
+[RootSignature(RS)]
+[numthreads(1, 1, 1)]
+void main() {
+    uint3 asked = record.Load3(record_offset);
+    uint groups = (asked.y == 0 || asked.z == 0) ? 0 : min(asked.x, most);
+    arguments.Store4(0, uint4(groups, 1, 1, 0));
+    arguments.Store4(16, uint4(groups * group_vertices, groups == 0 ? 0 : 1, 0, 0));
+}
+"#;
+
+/// Where [`mesh_args`] leaves the draw's arguments in its buffer (the
+/// dispatch's are at 0).
+pub(crate) const MESH_DRAW_ARGS: u64 = 16;
+
+fn mesh_convert() -> Option<&'static Clamp> {
+    static MADE: std::sync::OnceLock<Option<Clamp>> = std::sync::OnceLock::new();
+    MADE.get_or_init(|| {
+        let made = host()
+            .ok_or_else(windows::core::Error::empty)
+            .and_then(|host| compute_from(&host.device, MESH_SOURCE));
+        match made {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!(error = %e, "no mesh argument pass: indirect mesh dispatches run as compute are dropped");
+                None
+            }
+        }
+    })
+    .as_ref()
+}
+
+/// A compute pipeline of ours from HLSL with its root signature inside.
+fn compute_from(device: &ID3D12Device, source: &str) -> windows::core::Result<Clamp> {
+    let mut code: Option<ID3DBlob> = None;
+    // SAFETY: the source and names live through the call; then the blob's
+    // own bytes, which hold the root signature too.
+    unsafe {
+        D3DCompile(source.as_ptr().cast(), source.len(), s!("ours"), None, None, s!("main"), s!("cs_5_1"), 0, 0, &mut code, None)?;
+        let code = code.ok_or_else(windows::core::Error::empty)?;
+        let bytes = std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize());
+        let root: ID3D12RootSignature = device.CreateRootSignature(0, bytes)?;
+        let pso = device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            pRootSignature: std::mem::transmute_copy(&root),
+            CS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: bytes.as_ptr().cast(),
+                BytecodeLength: bytes.len(),
+            },
+            ..Default::default()
+        })?;
+        Ok(Clamp { root, pso })
+    }
+}
+
+/// Records, in `list`, the pass that turns the clamped mesh record at
+/// `record_offset` of `record` (the clamp's scratch buffer, in the common
+/// state: after [`done`]) into the arguments of a compute dispatch (at 0)
+/// and of a draw of `group_vertices` vertices a group (at
+/// [`MESH_DRAW_ARGS`]), for at most `most` groups. Returns the buffer that
+/// holds them, in `INDIRECT_ARGUMENT`; `record` is left in the common
+/// state. Replaces the list's compute root signature and pipeline (callers
+/// bind theirs after). [`mesh_args_done`] follows the two executions.
+pub(crate) fn mesh_args(
+    list: &HostList,
+    (record, record_offset): (&ID3D12Resource, u64),
+    most: u32,
+    group_vertices: u32,
+) -> Option<&'static ID3D12Resource> {
+    let (c, arguments) = (mesh_convert()?, crate::host::mesh_args_buffer()?);
+    record_mesh_args(c, &list.list, (record, record_offset), arguments, most, group_vertices).then_some(arguments)
+}
+
+fn record_mesh_args(
+    c: &Clamp,
+    l: &ID3D12GraphicsCommandList,
+    (record, record_offset): (&ID3D12Resource, u64),
+    arguments: &ID3D12Resource,
+    most: u32,
+    group_vertices: u32,
+) -> bool {
+    let Ok(record_offset) = u32::try_from(record_offset) else {
+        return false;
+    };
+    if !record_offset.is_multiple_of(4) {
+        return false;
+    }
+    let constants = [record_offset, most, group_vertices, 0];
+    // SAFETY: an open list; our root signature and pipeline; live buffers.
+    // `record` is promoted from the common state by the read and brought
+    // back; `arguments` goes COMMON -> UNORDERED_ACCESS ->
+    // INDIRECT_ARGUMENT.
+    unsafe {
+        let (record_gpu, arguments_gpu) = (record.GetGPUVirtualAddress(), arguments.GetGPUVirtualAddress());
+        l.ResourceBarrier(&[transition(
+            arguments,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        )]);
+        l.SetComputeRootSignature(&c.root);
+        l.SetPipelineState(&c.pso);
+        l.SetComputeRoot32BitConstants(0, 4, constants.as_ptr().cast(), 0);
+        l.SetComputeRootShaderResourceView(1, record_gpu);
+        l.SetComputeRootUnorderedAccessView(2, arguments_gpu);
+        l.Dispatch(1, 1, 1);
+        l.ResourceBarrier(&[
+            transition(
+                arguments,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            ),
+            transition(
+                record,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_COMMON,
+            ),
+        ]);
+    }
+    true
+}
+
+/// After the executions that read [`mesh_args`]' buffer: back to the
+/// common state for the next use.
+pub(crate) fn mesh_args_done(list: &HostList, arguments: &ID3D12Resource) {
+    done_on(&list.list, arguments);
+}
+
 fn uav_barrier() -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
@@ -1150,6 +1294,47 @@ void main() {
             assert_eq!(rec[5], 0xCAFE_0000 | (i as u32));
         }
         assert_eq!((kept, zeroed), (2, (RECORDS as usize) - 2));
+    }
+
+    /// The pass for indirect mesh dispatches run as compute, on the host
+    /// card: a dispatch and a draw of the groups asked, of those the record
+    /// buffer holds if more are asked, of none for an empty record.
+    #[test]
+    fn mesh_arguments_are_a_dispatch_and_a_draw_of_the_groups_that_fit() {
+        let Some(host) = super::host() else {
+            return;
+        };
+        let (Some(convert), Ok(list)) = (mesh_convert(), host.new_list()) else {
+            return;
+        };
+        let (Some((record, record_at)), Some((arguments, arguments_at))) =
+            (host.shared_buffer(256), host.shared_buffer(64 << 10))
+        else {
+            return;
+        };
+        const AT: usize = 16;
+        const GROUP_VERTICES: u32 = 384;
+        for (asked, most, groups) in [([5u32, 1, 1], 3u32, 3u32), ([2, 1, 1], 3, 2), ([7, 0, 1], 3, 0), ([0, 1, 1], 3, 0)] {
+            // SAFETY: mapped host buffers of these sizes.
+            unsafe {
+                record_at.add(AT).cast::<[u32; 3]>().write_volatile(asked);
+                std::ptr::write_bytes(arguments_at, 0xff, 32);
+            }
+            assert!(record_mesh_args(convert, &list.list, (&record, AT as u64), &arguments, most, GROUP_VERTICES));
+            done_on(&list.list, &arguments);
+            list.close();
+            host.execute(&[&list]);
+            list.reset();
+            // SAFETY: as above; the list has run.
+            let words = unsafe { arguments_at.cast::<[u32; 8]>().read_volatile() };
+            assert_eq!(
+                words,
+                [groups, 1, 1, 0, groups * GROUP_VERTICES, u32::from(groups > 0), 0, 0],
+                "asked {asked:?} with room for {most}"
+            );
+        }
+        // A record not on four bytes is refused.
+        assert!(!record_mesh_args(convert, &list.list, (&record, 6), &arguments, 3, GROUP_VERTICES));
     }
 
     /// Exercises `HostList::indirect_scratch`, `bound`, `done`, `Host::execute`,
