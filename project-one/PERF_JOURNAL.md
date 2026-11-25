@@ -20,6 +20,40 @@ Machine : Ryzen 7 5700, 15,8 Go de RAM, RX 5600 XT 6 Go. Branche `project-one/sc
 Ces centiles sont ceux de moyennes sur 5 secondes : les centiles image par image n'existent
 que depuis le commit `7a95d07`.
 
+## Lancements mesurés image par image (25/11, depuis 11 h 48)
+
+Lancés par moi : profil `rapide` (1280 × 720, textures:2, aucun effet laissé de côté), A
+pressé jusqu'au monde, puis la cinématique d'ouverture sans rien toucher, fermeture par le
+numéro de processus. Les temps sont ceux du fichier `.images.csv`, monde uniquement.
+
+| Heure | Version | Règle des textures | Durée dans le monde | Temps d'image : médiane / 95 % / 99 % | 60 dernières images : médiane, processeur + carte + recopie | Textures chargées | Blocages de 30 images sans envoi | Fin |
+|---|---|---|---|---|---|---|---|---|
+| 11 h 57 | normale | réserve (`dfca70d`) | 99 s | 724 / 2 702 / 7 076 ms | 720 ms, 235 + 167 + 157 | 66 018 | 0 | **carte perdue** |
+| 12 h 01 | diagnostic, temps par commande | réserve | 241 s | 558 / 1 837 / 3 201 ms | 543 ms, 146 + 316 + 67 | 76 660 | 0 | fermé par le test |
+| 12 h 06 | normale | ancienne (`VICTORY_STREAM_POOL=0`) | 242 s | 455 / 1 901 / 2 496 ms | 510 ms, 142 + 281 + 67 | 53 832 | **3** (88 images de suite au plus) | fermé par le test |
+| 12 h 11 | diagnostic, couche de validation | réserve | 150 s | 853 / 2 799 / 4 098 ms | — | 74 892 | 0 | fermé par le test ; aucun appel invalide signalé |
+| 12 h 15 | diagnostic, traces | réserve | 242 s | 507 / 1 814 / 2 524 ms | 497 ms, 151 + 267 + 68 | 83 494 | 0 | fermé par le test |
+| 12 h 21 | normale, traces | réserve | 302 s | 466 / 1 502 / 2 704 ms | 456 ms, 129 + 257 + 66 | 84 553 | 0 | fermé par le test |
+
+Ce que ces lancements établissent :
+
+- **La réserve des textures fait ce qu'elle doit** : aucun blocage en cinq lancements, là où
+  l'ancienne règle se bloque trois fois en quatre minutes, et 56 % de textures en plus au
+  même instant (84 183 contre 53 832 après 240 s de monde).
+- **Elle ne change pas le temps d'image** : 456 à 510 ms en régime établi dans les deux cas,
+  soit environ 2 images par seconde.
+- **Une perte de carte intermittente existe dans la version normale** : à 11 h 48 (lancement
+  avec passage automatique des menus) et à 11 h 57, pas à 12 h 21 ni avec l'ancienne règle
+  à 12 h 06, et jamais dans les quatre lancements de la version diagnostic. Cause non
+  trouvée ; depuis `ee55801` le journal de la version normale donne l'adresse fautive.
+- **Où part le temps de la carte en 1280 × 720** (12 h 01, temps par commande) : 189 ms par
+  image en tout, dont 136 ms dans 4 549 dessins indirects de programmes mesh, 32 ms dans
+  3 860 calculs, 13 ms dans 388 dessins mesh directs. Les personnages (12 ms en 200
+  commandes) et les ombres en cascade (environ 22 ms en 1 200 commandes) sont en tête.
+- **Dessins sans pipeline, par image** (12 h 01) : 631 calculs d'ombrage de lancer de rayons
+  et 347 étapes du constructeur de structures, laissés de côté exprès ; 34 dessins de
+  cheveux en mèches et 4 de peau refusés faute de barycentriques ; 4 d'un filtre de halo.
+
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |
