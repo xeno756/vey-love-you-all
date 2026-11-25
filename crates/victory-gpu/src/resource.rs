@@ -1132,6 +1132,9 @@ pub(crate) struct HostTexture {
     /// Whether its contents come from title memory ([`fills`]): counted in
     /// [`KINDS`] while it lives.
     filled: bool,
+    /// How many of the title texture's first levels it leaves out
+    /// ([`lowered_levels`]): its level 0 is the title's level `skip`.
+    pub(crate) skip: u32,
 }
 
 /// What a title texture has on the host: its host copy and, for a depth
@@ -1162,6 +1165,9 @@ struct Hosted {
     gone: std::sync::atomic::AtomicBool,
     /// A texture of [`PLACED_TEXTURES`].
     placed: std::sync::atomic::AtomicBool,
+    /// Something copied from or into it on the host: its host copy has
+    /// every level from then on ([`host_resource_whole`]).
+    whole: std::sync::atomic::AtomicBool,
 }
 
 /// Counts for the memory line: host copies of textures the title fills
@@ -1295,12 +1301,35 @@ pub(crate) fn host_waits(this: This) -> bool {
 /// `make` says so. `None` for buffers and for textures the host refuses.
 #[cfg(windows)]
 fn hosted(this: This, make: bool) -> Option<Made> {
+    hosted_as(this, make, false)
+}
+
+/// [`hosted`]; with `whole`, a host copy with every level of the title's
+/// texture: one made without its first levels ([`lowered_levels`]) is let
+/// go and made again whole, and stays whole.
+#[cfg(windows)]
+fn hosted_as(this: This, make: bool, whole: bool) -> Option<Made> {
     use std::sync::atomic::Ordering::Relaxed;
     let r = resource(this);
     if r.desc.dimension == BUFFER {
         return None;
     }
     let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+    if whole {
+        r.host.whole.store(true, Relaxed);
+        if made.as_ref().is_some_and(|(host, _)| host.skip > 0) {
+            // Under the lock, as the sweep does: the next use must not find
+            // the staging state of the copy let go.
+            crate::texture::unstage(this);
+            if let Some((host, _)) = made.take() {
+                LOWERED[2].fetch_add(1, Relaxed);
+                // The slots that show it are made again of the whole one
+                // before the next submission runs.
+                crate::descriptor::texture_replaced(&host.texture);
+                crate::host::retire(host);
+            }
+        }
+    }
     if made.is_none() {
         if !make || r.host.refused.load(Relaxed) {
             return None;
@@ -1310,7 +1339,12 @@ fn hosted(this: This, make: bool) -> Option<Made> {
             .clear
             .as_ref()
             .map_or(std::ptr::null(), |c| std::ptr::from_ref(c).cast::<c_void>());
-        let Some(texture) = host_texture(&r.desc, r.host.state, clear) else {
+        let skip = if r.host.whole.load(Relaxed) {
+            0
+        } else {
+            lowered_levels(&r.desc, skip_levels())
+        };
+        let Some(texture) = host_texture(&lowered(&r.desc, skip), r.host.state, clear) else {
             r.host.refused.store(true, Relaxed);
             return None;
         };
@@ -1329,6 +1363,13 @@ fn hosted(this: This, make: bool) -> Option<Made> {
         let state = crate::host::legal_state(&texture, crate::host::texture_state(r.host.state));
         let mut host = HostTexture::new(texture, state);
         host.filled = fills(&r.desc);
+        host.skip = skip;
+        if skip > 0 {
+            LOWERED[0].fetch_add(1, Relaxed);
+            // What the whole copy would have taken beside this one.
+            let whole_bytes = host.bytes << (2 * skip);
+            LOWERED[1].fetch_add(whole_bytes.saturating_sub(host.bytes), Relaxed);
+        }
         if host.filled {
             KINDS[0].fetch_add(1, Relaxed);
             KINDS[1].fetch_add(host.bytes, Relaxed);
@@ -1575,6 +1616,7 @@ impl HostTexture {
             state: std::sync::atomic::AtomicU32::new(state),
             bytes,
             filled: false,
+            skip: 0,
         }
     }
 }
@@ -1628,6 +1670,134 @@ pub(crate) fn host_resource<'a>(
     // list and no slot holds and that nothing asked for in seconds (the
     // asking just made is noted under the same lock).
     Some(unsafe { &*std::ptr::from_ref(&host.texture) })
+}
+
+/// [`host_resource`] with every level of the title's texture, for what
+/// names levels or texels on the host itself: a copy from or into the
+/// texture, a resolve, a present. A host copy made without its first
+/// levels ([`lowered_levels`]) is made again whole first.
+#[cfg(windows)]
+pub(crate) fn host_resource_whole<'a>(
+    this: This,
+) -> Option<&'a windows::Win32::Graphics::Direct3D12::ID3D12Resource> {
+    if this.is_null() {
+        return None;
+    }
+    let (host, _) = hosted_as(this, true, true)?;
+    // SAFETY: as in `host_resource`.
+    Some(unsafe { &*std::ptr::from_ref(&host.texture) })
+}
+
+/// How many of title texture `this`'s first levels `texture`, a host copy
+/// of it, leaves out: told by the widths, so that it is said of the very
+/// copy the caller holds, whatever was made of the texture since.
+#[cfg(windows)]
+pub(crate) fn levels_left_out(this: This, texture: &windows::Win32::Graphics::Direct3D12::ID3D12Resource) -> u32 {
+    if this.is_null() {
+        return 0;
+    }
+    let title = resource(this).desc.width;
+    // SAFETY: a live resource.
+    let host = unsafe { texture.GetDesc() }.Width;
+    if host == 0 || title <= host {
+        return 0;
+    }
+    (title / host).trailing_zeros()
+}
+
+/// How many of the title texture's first levels the host copy of `this`
+/// leaves out (0 for one not made, or made whole).
+#[cfg(all(windows, test))]
+pub(crate) fn host_skip(this: This) -> u32 {
+    if this.is_null() {
+        return 0;
+    }
+    let r = resource(this);
+    if r.desc.dimension == BUFFER {
+        return 0;
+    }
+    r.host.made.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |(host, _)| host.skip)
+}
+
+/// `VICTORY_TEXTURE_SKIP_MIPS=<n>` (0 to 4, 0 by default): how many of
+/// their first levels the host copies of the textures the title fills
+/// leave out, where [`lowered_levels`] allows it. Each level left out
+/// halves the width and height of what the card holds and of what is
+/// read, detiled and sent up: three quarters of the bytes for one level,
+/// fifteen sixteenths for two. The picture loses that detail and nothing
+/// else: the views the title makes are made of the levels that are there.
+#[cfg(windows)]
+pub(crate) fn skip_levels() -> u32 {
+    #[cfg(test)]
+    if let Some(skip) = SKIP_FOR_TEST.get() {
+        return skip;
+    }
+    static SKIP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SKIP.get_or_init(|| {
+        let skip = std::env::var("VICTORY_TEXTURE_SKIP_MIPS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(0)
+            .min(4);
+        if skip > 0 {
+            tracing::info!(skip, "textures the title fills are kept without their first levels where they have them");
+        }
+        skip
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What [`skip_levels`] answers on a test's own thread.
+    static SKIP_FOR_TEST: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Host copies made without their first levels, the bytes that spared
+/// (against the whole copies), and those made again whole because
+/// something copied from or into them.
+#[cfg(windows)]
+pub(crate) static LOWERED: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+
+/// The smallest width or height a host copy is lowered to.
+const LOWERED_SMALLEST: u64 = 128;
+
+/// How many first levels (of `wanted`) the host copy of a texture
+/// described by `desc` may leave out: none unless it is a 2D texture (or
+/// an array of them, a cube) the title fills, in a block-compressed
+/// format, with levels to spare; and no more than leave it
+/// [`LOWERED_SMALLEST`] wide and high and with one level.
+///
+/// Block-compressed textures with a chain of levels are the title's
+/// streamed material textures, sampled by coordinates between 0 and 1,
+/// for which a smaller first level is the same picture with less detail.
+/// Textures read by texel (tables, masks, heights, glyphs) are not in such
+/// formats or have one level, and keep their size.
+fn lowered_levels(desc: &ResourceDesc, wanted: u32) -> u32 {
+    const TEXTURE2D: u32 = 3;
+    let compressed = matches!(pc_format(desc.format), 70..=84 | 94..=99);
+    if wanted == 0
+        || desc.dimension != TEXTURE2D
+        || desc.flags & 0x7 != 0
+        || desc.sample_count > 1
+        || !compressed
+    {
+        return 0;
+    }
+    let mut skip = wanted.min(u32::from(desc.mip_levels).saturating_sub(1));
+    while skip > 0 && (desc.width >> skip < LOWERED_SMALLEST || u64::from(desc.height) >> skip < LOWERED_SMALLEST) {
+        skip -= 1;
+    }
+    skip
+}
+
+/// `desc` without its first `skip` levels.
+fn lowered(desc: &ResourceDesc, skip: u32) -> ResourceDesc {
+    ResourceDesc {
+        width: (desc.width >> skip).max(1),
+        height: (desc.height >> skip).max(1),
+        mip_levels: desc.mip_levels.saturating_sub(skip as u16).max(1),
+        ..*desc
+    }
 }
 
 /// A title texture's host copy, shared, for a list to hold.
@@ -1845,6 +2015,7 @@ fn hand_out_resource(
             refused: std::sync::atomic::AtomicBool::new(false),
             gone: std::sync::atomic::AtomicBool::new(false),
             placed: std::sync::atomic::AtomicBool::new(false),
+            whole: std::sync::atomic::AtomicBool::new(false),
         },
     });
     // The host copy waits for the texture's first use ([`Hosted`]).
@@ -2367,6 +2538,119 @@ mod tests {
             S_OK
         );
         heap
+    }
+
+    /// Which textures lose first levels on the host, and how many: 2D
+    /// textures the title fills, block-compressed, with levels to spare,
+    /// down to 128 texels at the smallest.
+    #[test]
+    fn only_compressed_textures_with_levels_to_spare_are_lowered() {
+        const BC1: u32 = 71;
+        const BC7: u32 = 98;
+        const RGBA8: u32 = 28;
+        // 2048 x 2048 with its twelve levels: two levels go (512 x 512).
+        assert_eq!(lowered_levels(&texture(2048, 2048, BC7, 12), 2), 2);
+        assert_eq!(lowered_levels(&texture(2048, 2048, BC7, 12), 1), 1);
+        assert_eq!(lowered_levels(&texture(2048, 2048, BC7, 12), 0), 0);
+        // Not below 128 texels: 256 x 256 loses one level, 128 x 128 none.
+        assert_eq!(lowered_levels(&texture(256, 256, BC1, 9), 2), 1);
+        assert_eq!(lowered_levels(&texture(512, 256, BC1, 10), 2), 1);
+        assert_eq!(lowered_levels(&texture(128, 128, BC1, 8), 2), 0);
+        // No more than the levels beside the last one.
+        assert_eq!(lowered_levels(&texture(4096, 4096, BC1, 2), 4), 1);
+        assert_eq!(lowered_levels(&texture(2048, 2048, BC1, 1), 2), 0);
+        // Read by texel, or written by the host: kept whole.
+        assert_eq!(lowered_levels(&texture(2048, 2048, RGBA8, 12), 2), 0);
+        let target = ResourceDesc {
+            flags: 1,
+            ..texture(2048, 2048, BC7, 12)
+        };
+        assert_eq!(lowered_levels(&target, 2), 0);
+        let volume = ResourceDesc {
+            dimension: 4,
+            ..texture(256, 256, BC1, 9)
+        };
+        assert_eq!(lowered_levels(&volume, 2), 0);
+        // The description the host copy is made from.
+        let d = lowered(&texture(2048, 1024, BC7, 12), 2);
+        assert_eq!((d.width, d.height, d.mip_levels), (512, 256, 10));
+        let same = lowered(&texture(2048, 1024, BC7, 12), 0);
+        assert_eq!((same.width, same.height, same.mip_levels), (2048, 1024, 12));
+    }
+
+    /// On the host card: a compressed texture the title fills gets a host
+    /// copy without its first two levels; a use that names its levels on
+    /// the host (a copy) makes it whole, and it stays whole.
+    #[cfg(windows)]
+    #[test]
+    fn a_lowered_texture_is_made_whole_for_a_copy() {
+        if crate::host::host().is_none() {
+            eprintln!("no host GPU; skipped");
+            return;
+        }
+        const BC3: u32 = 77;
+        SKIP_FOR_TEST.set(Some(2));
+        let null = std::ptr::null();
+        let mut sampled = null;
+        let desc = texture(1024, 512, BC3, 10);
+        assert_eq!(
+            create_committed(null, &PROPERTIES, 0, &desc, 0, null.cast(), &RESOURCE_IIDS[0], &mut sampled),
+            S_OK
+        );
+        let size = |t: &windows::Win32::Graphics::Direct3D12::ID3D12Resource| {
+            // SAFETY: a live resource.
+            let d = unsafe { t.GetDesc() };
+            (d.Width, d.Height, d.MipLevels, d.Format.0)
+        };
+        let lowered_before = LOWERED[0].load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(size(host_resource(sampled).expect("a host copy")), (256, 128, 8, BC3 as i32));
+        assert_eq!(host_skip(sampled), 2);
+        assert!(LOWERED[0].load(std::sync::atomic::Ordering::Relaxed) > lowered_before);
+        // The same copy while nothing asks for more.
+        assert_eq!(size(host_resource(sampled).expect("a host copy")), (256, 128, 8, BC3 as i32));
+        assert_eq!(size(host_resource_whole(sampled).expect("a whole host copy")), (1024, 512, 10, BC3 as i32));
+        assert_eq!(host_skip(sampled), 0);
+        assert_eq!(size(host_resource(sampled).expect("a host copy")), (1024, 512, 10, BC3 as i32));
+        // A slot that showed the lowered copy shows the whole one once the
+        // slots are made again, as before each submission.
+        let mut other = null;
+        assert_eq!(
+            create_committed(null, &PROPERTIES, 0, &desc, 0, null.cast(), &RESOURCE_IIDS[0], &mut other),
+            S_OK
+        );
+        if let Some(heap) = crate::descriptor::host::HostHeap::new(false, 8) {
+            let raw = |t: &windows::Win32::Graphics::Direct3D12::ID3D12Resource| {
+                windows::core::Interface::as_raw(t) as usize
+            };
+            let slot = [0u64; 4];
+            let handle = slot.as_ptr() as u64;
+            crate::descriptor::create_srv(null, other, std::ptr::null(), handle);
+            let low = host_resource(other).expect("a host copy").clone();
+            assert_eq!(size(&low).0, 256);
+            assert_eq!(levels_left_out(other, &low), 2);
+            heap.mirror(3, handle, true);
+            assert_eq!(heap.shown(3), Some(raw(&low)));
+            let whole = raw(host_resource_whole(other).expect("a whole host copy"));
+            assert_ne!(whole, raw(&low));
+            // Not before: the slot holds the copy it shows.
+            assert_eq!(heap.shown(3), Some(raw(&low)));
+            heap.remake_showing(&[raw(&low)]);
+            assert_eq!(heap.shown(3), Some(whole));
+            assert_eq!(levels_left_out(other, host_resource(other).expect("a host copy")), 0);
+        }
+        // A texture the host renders to is never lowered.
+        let mut target = null;
+        let rendered = ResourceDesc {
+            flags: 1,
+            ..texture(1024, 512, 28, 1)
+        };
+        assert_eq!(
+            create_committed(null, &PROPERTIES, 0, &rendered, 0, null.cast(), &RESOURCE_IIDS[0], &mut target),
+            S_OK
+        );
+        assert_eq!(size(host_resource(target).expect("a target")).0, 1024);
+        assert_eq!(host_skip(target), 0);
+        SKIP_FOR_TEST.set(None);
     }
 
     /// Textures are made whatever the card's budget up to 2 GiB, or a

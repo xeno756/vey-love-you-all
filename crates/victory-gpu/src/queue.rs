@@ -822,7 +822,7 @@ extern "system" fn present(
         && !plane.resources.is_null()
         // SAFETY: the plane lists `count` resources.
         && let resource = unsafe { *plane.resources }
-        && let Some(texture) = crate::resource::host_resource(resource)
+        && let Some(texture) = crate::resource::host_resource_whole(resource)
         && let Some(host) = crate::host::host()
     {
         const COPY_SOURCE: u32 = 0x800;

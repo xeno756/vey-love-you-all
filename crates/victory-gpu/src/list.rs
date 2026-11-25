@@ -847,8 +847,8 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             return;
         };
         if let (Some(to), Some(from)) = (
-            crate::resource::host_resource(dst),
-            crate::resource::host_resource(src),
+            crate::resource::host_resource_whole(dst),
+            crate::resource::host_resource_whole(src),
         ) {
             if unlike(dst, src) {
                 return;
@@ -918,7 +918,7 @@ extern "system" fn copy_texture_region(
         else {
             return;
         };
-        let Some(to) = crate::resource::host_resource(dst.resource) else {
+        let Some(to) = crate::resource::host_resource_whole(dst.resource) else {
             // Texture to buffer: a read back. The list copies the texels
             // into a host buffer of ours; once it has run they go to the
             // title's buffer (`HostList::defer_read_back`).
@@ -934,7 +934,7 @@ extern "system" fn copy_texture_region(
                 if made.is_err() && REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 16 {
                     return;
                 }
-                let source = crate::resource::host_resource(src.resource).map(|r| {
+                let source = crate::resource::host_resource_whole(src.resource).map(|r| {
                     // SAFETY: a live resource.
                     let d = unsafe { r.GetDesc() };
                     format!("{}x{} f{} mips {}", d.Width, d.Height, d.Format.0, d.MipLevels)
@@ -981,7 +981,7 @@ extern "system" fn copy_texture_region(
             }
             _upload = buffer;
         } else {
-            let Some(texture) = crate::resource::host_resource(src.resource) else {
+            let Some(texture) = crate::resource::host_resource_whole(src.resource) else {
                 return;
             };
             list.twin_use(src.resource, false, false);
@@ -1075,7 +1075,7 @@ fn read_back(
     // The title's buffer holds every row at its own pitch.
     let bytes = pitch * (rows - 1) + row;
     let data = buffer_range(dst.resource, dst.footprint.offset, bytes).ok_or("a destination outside its buffer")?;
-    let texture = crate::resource::host_resource(src.resource).ok_or("no host texture")?;
+    let texture = crate::resource::host_resource_whole(src.resource).ok_or("no host texture")?;
     let buffer = host.read_back_buffer(size).ok_or("no read-back buffer")?;
     // As a texture source of any copy: what shaders wrote to a depth twin
     // and what the title wrote itself first, then the state.
@@ -1133,8 +1133,8 @@ extern "system" fn resolve(
     #[cfg(windows)]
     if let Some(list) = host_list(this)
         && let (Some(to), Some(from)) = (
-            crate::resource::host_resource(dst),
-            crate::resource::host_resource(src),
+            crate::resource::host_resource_whole(dst),
+            crate::resource::host_resource_whole(src),
         )
     {
         use windows::Win32::Foundation::RECT;

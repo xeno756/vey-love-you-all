@@ -613,6 +613,46 @@ static WAITING: std::sync::Mutex<std::collections::BTreeMap<usize, Vec<u64>>> =
 #[cfg(windows)]
 static MADE_LATE: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
+/// Host textures replaced by another copy of their title texture since
+/// [`remake_replaced`] last ran, by address.
+#[cfg(windows)]
+static REPLACED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// `old`, a title texture's host copy, was replaced by another (called
+/// under that texture's own lock: nothing else is locked here). The slots
+/// that show it hold it; they are made again before the next submission.
+#[cfg(windows)]
+pub(crate) fn texture_replaced(old: &windows::Win32::Graphics::Direct3D12::ID3D12Resource) {
+    REPLACED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(windows::core::Interface::as_raw(old) as usize);
+}
+
+/// Makes again the host slots that show a host texture replaced since the
+/// last call. Called before a submission runs, by the thread that submits.
+#[cfg(windows)]
+pub(crate) fn remake_replaced() {
+    let replaced = std::mem::take(&mut *REPLACED.lock().unwrap_or_else(|e| e.into_inner()));
+    if replaced.is_empty() {
+        return;
+    }
+    let heaps: Vec<usize> = SHADER_HEAPS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|&(_, _, at)| at)
+        .collect();
+    for at in heaps {
+        // SAFETY: registered heaps are live (removed when dropped); the
+        // title drops none while it submits.
+        let heap = unsafe { &*(at as *const Heap) };
+        if let Some(Some(host)) = heap.host.get() {
+            host.remake_showing(&replaced);
+        }
+    }
+}
+
 /// Title texture `resource` was given its host copy (called under that
 /// texture's own lock: nothing else is locked here).
 #[cfg(windows)]

@@ -43,6 +43,10 @@ pub(crate) struct Staging {
     layout: victory_formats::texture::Layout,
     /// Mips per array slice.
     mips: u32,
+    /// The title texture's first levels the host texture leaves out
+    /// (`crate::resource::lowered_levels`): its level `m` is the title's
+    /// level `m + skip`.
+    skip: u32,
     /// The staging buffer's bytes (counted in `STAGED` while it lives).
     bytes: u64,
     memory: *const u8,
@@ -115,8 +119,8 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
     const COPY_DEST: u32 = 0x400;
     const COPY_SOURCE: u32 = 0x800;
     let (Some(to), Some(from)) = (
-        crate::resource::host_resource(placed),
-        crate::resource::host_resource(source),
+        crate::resource::host_resource_whole(placed),
+        crate::resource::host_resource_whole(source),
     ) else {
         return false;
     };
@@ -795,7 +799,7 @@ impl Staging {
             };
             if let Err(e) =
                 self.layout
-                    .detile(tiled, mip, slice, linear, pitch, pitch * rows as usize)
+                    .detile(tiled, mip + self.skip, slice, linear, pitch, pitch * rows as usize)
             {
                 tracing::warn!(?e, mip, slice, "texture not detiled");
                 return;
@@ -1087,6 +1091,7 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
         rows,
         layout,
         mips: u32::from(d.MipLevels),
+        skip: crate::resource::levels_left_out(resource, texture),
         bytes: total,
         memory,
         last: Mutex::default(),

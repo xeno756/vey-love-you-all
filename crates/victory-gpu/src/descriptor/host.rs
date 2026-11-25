@@ -964,6 +964,53 @@ impl HostHeap {
         self.keep(index, None);
     }
 
+    /// Makes again, from the views they were made from, the slots that show
+    /// one of `replaced` (host textures, by address): a title texture whose
+    /// host copy was replaced by another has its views on the new one.
+    /// Dynamic slots are a list's own and go with it.
+    pub(crate) fn remake_showing(&self, replaced: &[usize]) {
+        if self.sampler {
+            return;
+        }
+        let showing: Vec<u32> = {
+            let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
+            kept.iter()
+                .take(self.count as usize)
+                .enumerate()
+                .filter(|(_, shown)| {
+                    shown
+                        .as_ref()
+                        .is_some_and(|r| replaced.contains(&(windows::core::Interface::as_raw(r) as usize)))
+                })
+                .map(|(index, _)| index as u32)
+                .collect()
+        };
+        if showing.is_empty() {
+            return;
+        }
+        let made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        for index in showing {
+            let key = made.get(index as usize).copied().unwrap_or(0);
+            let Some(view) = (key != 0).then(|| view_at(key as u32, (key >> 32) as u32)).flatten() else {
+                continue;
+            };
+            let kept = make(&view, self.cpu(index));
+            if kept.is_none() {
+                null_for(&view, self.cpu(index));
+            }
+            self.keep(index, kept.flatten());
+        }
+    }
+
+    /// The host resource slot `index` shows, by address.
+    #[cfg(test)]
+    pub(crate) fn shown(&self, index: u32) -> Option<usize> {
+        let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
+        kept.get(index as usize)?
+            .as_ref()
+            .map(|r| windows::core::Interface::as_raw(r) as usize)
+    }
+
     /// Title slot `index` is a table's ([`HostHeap::tabled`]). `read`: a
     /// draw read it through the table and brought what it views up to
     /// date, so the slot leaves the queue of textures picked by index; the
@@ -1437,6 +1484,53 @@ macro_rules! once {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| tracing::warn!($($arg)*));
     }};
+}
+
+/// The title's levels `first..first + count` (`count` `u32::MAX`: to the
+/// last) as levels of a host texture that leaves the title's first `skip`
+/// out: what is left of them, or the host's first level alone for a view of
+/// levels left out (the nearest there is).
+fn lowered_levels_of(first: u32, count: u32, skip: u32) -> (u32, u32) {
+    let from = first.max(skip);
+    let count = match count {
+        u32::MAX => u32::MAX,
+        n => (first.saturating_add(n)).saturating_sub(from).max(1),
+    };
+    (from - skip, count)
+}
+
+/// Rewrites a 2D texture view for a host texture without the title
+/// texture's first `skip` levels (`crate::resource::lowered_levels`: 2D
+/// textures, their arrays and cubes).
+fn lower_view(desc: &mut D3D12_SHADER_RESOURCE_VIEW_DESC, skip: u32) {
+    let clamp = |lod: f32| (lod - skip as f32).max(0.0);
+    // SAFETY: the union member the view's dimension names; each begins
+    // with the first level and the level count.
+    unsafe {
+        match desc.ViewDimension {
+            D3D12_SRV_DIMENSION_TEXTURE2D => {
+                let v = &mut desc.Anonymous.Texture2D;
+                (v.MostDetailedMip, v.MipLevels) = lowered_levels_of(v.MostDetailedMip, v.MipLevels, skip);
+                v.ResourceMinLODClamp = clamp(v.ResourceMinLODClamp);
+            }
+            D3D12_SRV_DIMENSION_TEXTURE2DARRAY => {
+                let v = &mut desc.Anonymous.Texture2DArray;
+                (v.MostDetailedMip, v.MipLevels) = lowered_levels_of(v.MostDetailedMip, v.MipLevels, skip);
+                v.ResourceMinLODClamp = clamp(v.ResourceMinLODClamp);
+            }
+            D3D12_SRV_DIMENSION_TEXTURECUBE => {
+                let v = &mut desc.Anonymous.TextureCube;
+                (v.MostDetailedMip, v.MipLevels) = lowered_levels_of(v.MostDetailedMip, v.MipLevels, skip);
+                v.ResourceMinLODClamp = clamp(v.ResourceMinLODClamp);
+            }
+            D3D12_SRV_DIMENSION_TEXTURECUBEARRAY => {
+                let v = &mut desc.Anonymous.TextureCubeArray;
+                (v.MostDetailedMip, v.MipLevels) = lowered_levels_of(v.MostDetailedMip, v.MipLevels, skip);
+                v.ResourceMinLODClamp = clamp(v.ResourceMinLODClamp);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A view description from its words, with the format as the host has it.
@@ -1968,6 +2062,14 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
                     }
                 }
                 let mut desc = desc.as_ref().map(srv_desc);
+                // A host copy without the title texture's first levels: the
+                // view is of the levels it has.
+                let skip = crate::resource::levels_left_out(resource, texture);
+                if skip > 0
+                    && let Some(d) = desc.as_mut()
+                {
+                    lower_view(d, skip);
+                }
                 if !fits(texture, desc.as_mut().map(|d| &mut d.Format), false) {
                     return None;
                 }
@@ -2298,6 +2400,42 @@ mod tests {
 
     /// A null texture UAV keeps the title's dimension (3D for the world's
     /// wind field), and is 2D when the title names none.
+    /// A view's levels on a host texture without the title texture's
+    /// first levels: what is left of them, the nearest level for a view of
+    /// levels left out.
+    #[test]
+    fn views_of_a_lowered_texture_take_the_levels_it_has() {
+        const ALL: u32 = u32::MAX;
+        // Every level from the first: every level the host has.
+        assert_eq!(lowered_levels_of(0, ALL, 2), (0, ALL));
+        // Levels 0 to 4 of the title: its levels 2 to 4, the host's 0 to 2.
+        assert_eq!(lowered_levels_of(0, 5, 2), (0, 3));
+        // Levels 3 and 4: the host's 1 and 2.
+        assert_eq!(lowered_levels_of(3, 2, 2), (1, 2));
+        assert_eq!(lowered_levels_of(3, ALL, 2), (1, ALL));
+        // The first level alone, which the host does not have: its first.
+        assert_eq!(lowered_levels_of(0, 1, 2), (0, 1));
+        assert_eq!(lowered_levels_of(1, 1, 2), (0, 1));
+        // Nothing left out: as the title asks.
+        assert_eq!(lowered_levels_of(1, 3, 0), (1, 3));
+        let mut view = D3D12_SHADER_RESOURCE_VIEW_DESC {
+            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_SRV {
+                    MostDetailedMip: 1,
+                    MipLevels: 6,
+                    PlaneSlice: 0,
+                    ResourceMinLODClamp: 3.5,
+                },
+            },
+            ..Default::default()
+        };
+        lower_view(&mut view, 2);
+        // SAFETY: the member the dimension names.
+        let v = unsafe { view.Anonymous.Texture2D };
+        assert_eq!((v.MostDetailedMip, v.MipLevels, v.ResourceMinLODClamp), (0, 5, 1.5));
+    }
+
     #[test]
     fn null_uavs_keep_the_titles_dimension() {
         let d = null_uav_desc(Some(8));

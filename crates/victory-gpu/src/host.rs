@@ -533,7 +533,8 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
         "frame account: limited by {}: the card {:.0}% of the frame, preparing {:.0}%, copying back {:.0}%, the rest {:.0}% \
          (the title's own work and waits); memory: the card {} MB in use of a budget of {} MB, {} MB of the PC's memory \
          shared with it; the process {} MB committed, {} MB of it in memory, the PC {} MB free; textures the title renders \
-         to or shaders write: {} sizes asked for so far, the largest {}x{}, {} megapixels made in all; presented at {}x{}",
+         to or shaders write: {} sizes asked for so far, the largest {}x{}, {} megapixels made in all; presented at {}x{}; \
+         textures the title fills kept without their first levels: {} so far, {} MB spared, {} made whole again for a copy",
         limited_by(ms, parts, making),
         share(card),
         share(preparing),
@@ -550,7 +551,10 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
         largest.1,
         pixels / 1_000_000,
         PRESENTED[0].load(Ordering::Relaxed),
-        PRESENTED[1].load(Ordering::Relaxed)
+        PRESENTED[1].load(Ordering::Relaxed),
+        crate::resource::LOWERED[0].load(Ordering::Relaxed),
+        crate::resource::LOWERED[1].load(Ordering::Relaxed) >> 20,
+        crate::resource::LOWERED[2].load(Ordering::Relaxed)
     );
 }
 
@@ -4241,6 +4245,8 @@ impl Host {
         // The slots that waited for a texture's host copy, before the
         // lists that may read them run.
         crate::descriptor::make_waiting();
+        // And those that showed a host copy replaced since.
+        crate::descriptor::remake_replaced();
         let this_submission = STARTED.fetch_add(1, Ordering::AcqRel) + 1;
         // The ranges shaders write are counted for it (with the relay).
         crate::shadow::preparing(this_submission);
