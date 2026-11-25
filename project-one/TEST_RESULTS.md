@@ -25,6 +25,30 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | 5. PROJECT ONE après la session performances | `a803c87` + 12 commits de code | incrémentale, 0 avertissement | 526 | 0 | 9 (dont le banc d'essai, lancé à la main) |
 | 6. **PROJECT ONE avec les graphismes réduits (25/11)** | `5db5360` | incrémentale, 0 avertissement | **532** | **0** | 9 |
 
+| 7. **PROJECT ONE avec la définition réelle et l'introduction (25/11)** | `6dad160` | incrémentale, 0 avertissement | **542** | **0** | 9 |
+| 8. Branche `project-one/scarlettport` (fusion ScarlettPort) | `60bd4da` | 0 avertissement | **752** | **0** | 12 |
+
+Mesure 7 : un test de cadencement du fork (`waits_end_on_ticks_and_count_frames`, des tops de
+5 ms) a échoué une fois pendant qu'une préparation de shaders occupait tous les cœurs ; relancé
+seul, il passe trois fois sur trois. Ce n'est pas un test ajouté par PROJECT ONE.
+
+Mesure 8 : 752 tests dont ceux de ScarlettPort. Un test de l'étage géométrie y est ignoré, il
+échoue aussi dans l'arbre de ScarlettPort sur cette machine. Les tests qui lisaient des
+enregistrements du cache de pipelines du jeu ont été retirés avec leurs fichiers.
+
+### Les 10 tests ajoutés pour la définition et l'introduction (25/11)
+
+| Test | Module | Vérifie | Sur la carte ? |
+|---|---|---|---|
+| `scales_outside_the_floor_are_refused`, `half_scale_patches_both_upscalers`, `odd_scales_patch_only_the_own_upscaler` | victory-loader (repris de ScarlettPort) | les modifications de l'échelle de rendu | non |
+| `output_sizes_are_read_as_width_by_height` | victory-loader | lecture de `VICTORY_OUTPUT_SIZE` : 640×360 à 3840×2160, pair | non |
+| `the_settings_getter_is_sent_to_the_hook` | victory-loader | les 16 octets écrits à l'entrée de la fonction du jeu | non |
+| `the_hook_puts_the_size_asked_for_in_the_settings` | victory-loader | le hook écrit la taille demandée aux deux positions, et rien d'autre | non |
+| `the_titles_video_calls_are_counted_on_their_way` | victory-loader | chaque appel vidéo atteint la bibliothèque avec ses arguments ; lecteurs, images, sauts et décodages comptés | non |
+| `a_frame_is_shown_for_the_refreshes_its_interval_holds` | victory-gpu | 2 rafraîchissements à 60 Hz pour 30 images par seconde, jamais plus que l'intervalle | non |
+| `display_modes_named_59_run_at_59_94` | victory-gpu | fréquences d'écran | non |
+| `presents_off_the_titles_interval_are_counted` | victory-gpu | présentations en avance et en retard | non |
+
 ### Les 6 tests ajoutés le 25/11
 
 | Test | Module | Vérifie | Sur la carte ? |

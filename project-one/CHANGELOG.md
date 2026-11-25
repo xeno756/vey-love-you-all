@@ -26,9 +26,11 @@ PROJECT GAME.
   présentations, images en avance ou en retard, temps de présentation : dans `frame account`.
 - **Textures plus grossières.** Jusqu'à 6 niveaux en moins, plancher réglable
   (`textures:6 plancher:32`).
-- **ScarlettPort étudié en entier.** Sa pile VIctory part du même fork que PROJECT ONE et peut
-  être fusionnée ; la fusion est commencée sur la branche `project-one/scarlettport`
-  (19 fichiers en conflit, 7 résolus). XCL (GPL-2.0 seule) n'est pas repris.
+- **ScarlettPort étudié en entier et fusionné.** Sa pile VIctory part du même fork que
+  PROJECT ONE. Elle est fusionnée sur la branche `project-one/scarlettport` : 20 fichiers en
+  conflit résolus, leur traducteur repris tel quel avec nos programmes mesh en calcul par-dessus,
+  une seule commande de préparation, 752 tests réussis. Pas encore essayée en jeu, donc pas
+  encore dans la branche stable. XCL (GPL-2.0 seule) n'est pas repris.
 
 ## 25/11/2026 — Series X : graphismes réduits et diagnostic par image
 

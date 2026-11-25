@@ -113,17 +113,21 @@ traducteur, pipelines graphiques précompilés depuis le cache du jeu, programme
 laissés de côté), et notre commande `prepare` reste l'outil qui la déclenche avant le lancement.
 Ce qui est propre à cette carte (mesh shaders en calcul) reste et s'y ajoute.
 
-La fusion est **en cours sur la branche `project-one/scarlettport`**, pas terminée :
+La fusion est **faite sur la branche `project-one/scarlettport`** (dossier de travail
+`..\victory-scarlettport`, avec son propre cache) :
 
-- le patch `patches/victory-stack.patch` s'applique en fusion à trois voies : 51 fichiers sans
-  conflit, 43 fichiers nouveaux, **19 fichiers en conflit (52 points)** ;
-- résolus et gardés dans `..\references\merge-resolved` : les manifestes, `run.rs`, `sgd5.rs`,
-  `shader_cache.rs`, `pipeline/make.rs`, `pipeline/library.rs`, `pipeline.rs` ;
-- restent : `pipeline/host.rs` (6), `descriptor/host.rs` (4), `texture.rs` (4), `draw.rs` (3),
-  `host.rs` (3), `resource.rs` (2), `indirect.rs` (1) et cinq fichiers du traducteur (18).
+- le patch `patches/victory-stack.patch` s'applique en fusion à trois voies : 49 fichiers sans
+  conflit, 42 fichiers nouveaux, 20 fichiers en conflit, tous résolus ;
+- le traducteur de shaders est **celui de ScarlettPort tel quel**, avec nos seuls changements
+  réappliqués dessus (les programmes mesh en calcul) ;
+- une seule commande de préparation, `prepare`, qui sait aussi compiler les pipelines graphiques
+  que le cache de pipelines du jeu liste (`--graphics-pipelines`, repris de leur
+  `precompile-graphics`) ; leur commande `warm`, qui faisait une partie de la nôtre, est retirée ;
+- **752 tests réussis, 0 échec**, lint propre, politique du dépôt respectée.
 
-Tant qu'elle n'est pas finie, compilée et testée, la branche stable reste
-`project-one/integration`. La procédure de reprise est dans [REPRISE.md](../../REPRISE.md).
+Elle n'a **pas encore tourné avec PROJECT GAME**. Tant que ce n'est pas fait, la branche stable
+reste `project-one/integration`. Le détail des résolutions et la façon de l'essayer sont dans
+[REPRISE.md](../../REPRISE.md).
 
 ### Compatibilité avec la RX 5600 XT
 
