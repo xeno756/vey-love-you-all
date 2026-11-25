@@ -66,11 +66,42 @@ fn named(shaders: &[Arc<Shader>], name: &[u8]) -> bool {
 /// before the clean-up passes (`emit::shader_opt`), AMD's took a core and
 /// 0.8 GB more every 10 s for it and did not finish (RX 7800 XT: 47 GB after
 /// 8 minutes); cleaned up, it takes 85 s and 1.3 GB, once.
-/// `VICTORY_ACTIVATE_RAYS=0` leaves it out.
+/// `VICTORY_ACTIVATE_RAYS=0` leaves it out, `1` makes it.
+///
+/// (PROJECT ONE) Unset, it is left out on an AMD card while the clean-up
+/// passes are off, as they are by default here: counted on an RX 5600 XT
+/// with 16 GB, the compile took 0.8 GB more every 5 to 10 s (4.4 GB after
+/// 37 s) and did not end. In a run it began at the world's first frame, on
+/// a PC with 1 GB free, and the card was lost 17 s later (run of 25/11,
+/// "device removed" with this pipeline 17.6 s in the making); the
+/// preparation before a run spent a quarter of an hour on it.
 fn too_dear(shaders: &[Arc<Shader>]) -> bool {
     static OUT: OnceLock<bool> = OnceLock::new();
-    let out = *OUT.get_or_init(|| std::env::var_os("VICTORY_ACTIVATE_RAYS").is_some_and(|v| v == "0"));
+    let out = *OUT.get_or_init(|| {
+        let asked = std::env::var("VICTORY_ACTIVATE_RAYS").ok();
+        let out = too_dear_by(
+            asked.as_deref().map(str::trim),
+            crate::host::host().is_some_and(|h| h.amd()),
+            victory_shader::emit::shader_opt() != 0,
+        );
+        if out && asked.is_none() {
+            tracing::warn!(
+                "the screen probes' ray activation is left out: AMD's compiler does not finish it as it is translated                  without the clean-up passes (VICTORY_ACTIVATE_RAYS=1 makes it, VICTORY_SHADER_OPT=on cleans it up)"
+            );
+        }
+        out
+    });
     out && named(shaders, b"CS_ScreenProbes_ActivateRays")
+}
+
+/// Whether the program is left out: as asked (`"0"` out, `"1"` made), else
+/// on an AMD card whose translations are not cleaned up.
+fn too_dear_by(asked: Option<&str>, amd: bool, cleaned_up: bool) -> bool {
+    match asked {
+        Some("0") => true,
+        Some("1") => false,
+        _ => amd && !cleaned_up,
+    }
 }
 
 /// Whether a shader only shades what the console's ray-tracing structures
@@ -592,6 +623,17 @@ fn drained() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The program AMD's compiler does not finish is left out on an AMD
+    /// card unless its translation is cleaned up, or as asked.
+    #[test]
+    fn the_program_amds_compiler_does_not_finish_is_left_out_there() {
+        assert!(too_dear_by(None, true, false));
+        assert!(!too_dear_by(None, true, true), "cleaned up, it compiles");
+        assert!(!too_dear_by(None, false, false), "another vendor's compiler takes it");
+        assert!(too_dear_by(Some("0"), false, true));
+        assert!(!too_dear_by(Some("1"), true, false));
+    }
 
     /// A first use queues the pipeline and, within the budget, gets the
     /// worker's answer (here: no host pipeline for no shaders).

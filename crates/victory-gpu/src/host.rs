@@ -7643,6 +7643,14 @@ impl Host {
         Some([own.Budget, own.CurrentUsage, shared.Budget, shared.CurrentUsage])
     }
 
+    /// Whether the card is AMD's (its compiler takes some of the title's
+    /// programs badly: `pipeline::make::too_dear`).
+    pub(crate) fn amd(&self) -> bool {
+        const AMD: u32 = 0x1002;
+        // SAFETY: a live adapter.
+        self.adapter.as_ref().and_then(|a| unsafe { a.GetDesc2() }.ok()).is_some_and(|d| d.VendorId == AMD)
+    }
+
     /// The adapter's name and where it can be interrupted ([`preemption`]),
     /// for the log and the removal report.
     pub(crate) fn adapter_note(&self) -> String {

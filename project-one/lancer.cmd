@@ -153,6 +153,8 @@ if defined ECHELLE (
     set "TAG=%TAG%-echelle%ECHELLE%"
 )
 if not defined WATCHDOG set "VICTORY_NO_WATCHDOG=1"
+rem Le journal dit tout ce que la version stable disait (cette branche n'ecrit sinon que ses avertissements).
+if not defined VICTORY_LOG set "VICTORY_LOG=info"
 if defined TEXTURES (
     set "VICTORY_TEXTURE_SKIP_MIPS=%TEXTURES%"
     set "TAG=%TAG%-textures%TEXTURES%"
