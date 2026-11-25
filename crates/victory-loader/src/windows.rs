@@ -100,7 +100,7 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
         );
     }
     // SAFETY: just mapped, and no title code has run.
-    unsafe { crate::hooks::output_size(loaded.base(), &prepared.original_hash) };
+    unsafe { crate::hooks::output_size(loaded.base(), loaded.info.size_of_image as usize, &prepared.original_hash) };
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),
         preferred = format_args!("{:#x}", loaded.info.image_base),

@@ -254,6 +254,49 @@ extern "system" fn settings_with_output_size() -> *mut u8 {
     settings
 }
 
+/// Where the title makes its back buffers it sets memory aside for them at
+/// its own size (64 MiB on a Series X) and checks that they took all of it
+/// but 2 MiB: a breakpoint otherwise, which ends it. Smaller back buffers
+/// take less (1920x1080 leaves 49 MiB, 1280x720 56 MiB: both runs of
+/// 25/11 ended there, 3.5 s after their start). The branch over the
+/// breakpoint is taken whatever is left.
+const BACK_BUFFER_MEMORY: Patch<'static> = Patch {
+    what: "output size: the back buffers' memory check",
+    rva: 0x247af2b,
+    // jbe +1 ; int3
+    expect: &[0x76, 0x01, 0xCC],
+    // jmp +1 ; int3
+    new: &[0xEB, 0x01, 0xCC],
+};
+
+/// The title's executable in memory while it is given a size that is not
+/// its own: where it starts and ends (0: no such size).
+static CHECKED_IMAGE: [std::sync::atomic::AtomicUsize; 2] = [const { std::sync::atomic::AtomicUsize::new(0) }; 2];
+
+/// Whether a breakpoint at `rip` is one of the title's own checks to pass
+/// over: the title was given a size in place of its own
+/// ([`OUTPUT_SIZE_ENV`]), and the breakpoint is in its executable. Its
+/// checks compare what it made with what its own size takes (memory set
+/// aside, counts), and stop it where they differ; the one known is patched
+/// ([`BACK_BUFFER_MEMORY`]), any other is passed over here and said, the
+/// first times, with its place, so that it can be looked at.
+/// `VICTORY_TITLE_CHECKS=1` keeps them all fatal.
+pub(crate) fn title_check(rip: usize) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (start, end) = (CHECKED_IMAGE[0].load(Relaxed), CHECKED_IMAGE[1].load(Relaxed));
+    if start == 0 || !(start..end).contains(&rip) {
+        return false;
+    }
+    static SAID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if SAID.fetch_add(1, Relaxed) < 64 {
+        tracing::warn!(
+            rva = format_args!("{:#x}", rip - start),
+            "resolution: a check of the title's own stopped it with a size that is not its own; passed over"
+        );
+    }
+    true
+}
+
 /// The size `VICTORY_OUTPUT_SIZE` asks for, if it is one a title can be
 /// given: `WxH`, 640x360 to 3840x2160, both even.
 fn parse_size(text: &str) -> Option<(u32, u32)> {
@@ -284,7 +327,7 @@ fn output_size_patch(hook: usize) -> OwnedPatch {
 ///
 /// # Safety
 /// As `disarm_watchdog`.
-pub(crate) unsafe fn output_size(base: usize, hash: &blake3::Hash) -> bool {
+pub(crate) unsafe fn output_size(base: usize, size: usize, hash: &blake3::Hash) -> bool {
     use std::sync::atomic::Ordering::Relaxed;
     let Some(text) = std::env::var(OUTPUT_SIZE_ENV).ok().filter(|v| !v.trim().is_empty()) else {
         return false;
@@ -305,6 +348,12 @@ pub(crate) unsafe fn output_size(base: usize, hash: &blake3::Hash) -> bool {
     let applied = unsafe { apply(base, &p) };
     if applied {
         tracing::warn!(width, height, "resolution: the title is given this size as the size of its picture ({OUTPUT_SIZE_ENV})");
+        // SAFETY: forwarded from this function's contract.
+        unsafe { apply(base, &BACK_BUFFER_MEMORY) };
+        if std::env::var_os("VICTORY_TITLE_CHECKS").is_none_or(|v| v != "1") {
+            CHECKED_IMAGE[1].store(base + size, Relaxed);
+            CHECKED_IMAGE[0].store(base, Relaxed);
+        }
     }
     applied
 }
@@ -357,6 +406,29 @@ mod tests {
         assert_eq!(p[2].new, [0xC5, 0xFA, 0x10, 0x05, 0x22, 0x78, 0x6D, 0x03]);
         assert_eq!(p[3].new, ((base + 0x28ef680) as u64).to_le_bytes());
         assert!(p.iter().all(|p| p.new.len() == p.expect.len()));
+    }
+
+    /// A breakpoint is passed over only in the executable of a title given
+    /// a size that is not its own.
+    #[test]
+    fn only_the_titles_own_checks_are_passed_over() {
+        use std::sync::atomic::Ordering::Relaxed;
+        assert!(!title_check(0x7ff0_0000_1000), "no size given: every breakpoint is fatal");
+        CHECKED_IMAGE[1].store(0x7ff0_0b00_0000, Relaxed);
+        CHECKED_IMAGE[0].store(0x7ff0_0000_0000, Relaxed);
+        assert!(title_check(0x7ff0_0247_af2d));
+        assert!(!title_check(0x7ff0_0b00_0000), "past the executable");
+        assert!(!title_check(0x7fe0_0000_1000), "before it");
+        CHECKED_IMAGE[0].store(0, Relaxed);
+        CHECKED_IMAGE[1].store(0, Relaxed);
+    }
+
+    /// The back buffers' memory check: the same three bytes with the
+    /// branch always taken.
+    #[test]
+    fn the_back_buffer_check_keeps_its_length() {
+        assert_eq!(BACK_BUFFER_MEMORY.expect.len(), BACK_BUFFER_MEMORY.new.len());
+        assert_eq!(BACK_BUFFER_MEMORY.new, [0xEB, 0x01, 0xCC]);
     }
 
     #[test]

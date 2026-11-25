@@ -361,6 +361,21 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if unsafe { emulate_amd_only(info) } {
         return -1; // EXCEPTION_CONTINUE_EXECUTION
     }
+    // A check of the title's own, tripped by a size given to it in place
+    // of its own (`hooks::title_check`): the breakpoint is one byte, and
+    // the title goes on after it.
+    // SAFETY: the system passes valid exception pointers; the byte at the
+    // instruction pointer is readable, the CPU just fetched it.
+    unsafe {
+        let context = &mut *(*info).ContextRecord;
+        if (*(*info).ExceptionRecord).ExceptionCode == EXCEPTION_BREAKPOINT
+            && (context.Rip as *const u8).read() == 0xCC
+            && crate::hooks::title_check(context.Rip as usize)
+        {
+            context.Rip += 1;
+            return -1; // EXCEPTION_CONTINUE_EXECUTION
+        }
+    }
     // SAFETY: as above.
     if FATAL.contains(&unsafe { (*(*info).ExceptionRecord).ExceptionCode }) {
         // SAFETY: as above.
