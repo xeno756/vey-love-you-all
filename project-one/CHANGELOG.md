@@ -4,6 +4,28 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (matin) — les trois défauts de vos essais
+
+Causes et preuves : [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
+Aucune de ces corrections n'a encore tourné avec PROJECT GAME.
+
+- **`1080p` et `720p` se fermaient au démarrage.** Le jeu vérifie que ses images de sortie
+  utilisent la mémoire qu'il leur a réservée à sa taille d'origine, et s'arrête sinon. Cette
+  vérification ne l'arrête plus ; toute autre vérification du jeu rencontrée avec une taille
+  imposée est franchie et écrite dans le journal.
+- **La branche fusionnée perdait la carte à l'entrée du monde.** Le pilote AMD ne finit pas de
+  compiler un programme de l'éclairage indirect et prend 0,8 Go de plus toutes les 5 à 10
+  secondes (reproduit hors jeu). Ce programme n'est plus compilé sur une carte AMD. La
+  préparation de cette branche passe de 18 min 47 s à 21 s, cache chaud.
+- **L'introduction saccadait sur la branche stable.** Ce n'était pas le calage sur l'écran (le
+  vôtre est à 280 Hz et les images sortaient bien toutes les 33,3 ms) : le runtime ne disait
+  pas au jeu quand ses images étaient affichées. La branche fusionnée le disait déjà ; la
+  branche stable le dit maintenant aussi.
+- **Deux vidéos en même temps ?** Non. Le compteur vidéo montre que la séquence d'avant le logo
+  n'est pas un film, et qu'un seul film est lu à la fois.
+- **La meilleure version** est la branche fusionnée avec ces corrections, dans
+  `..\victory-scarlettport`.
+
 ## 25/11/2026 (suite) — définition réelle, introduction, ScarlettPort
 
 Détail : [docs/technical/08-resolution-scarlettport-intro.md](docs/technical/08-resolution-scarlettport-intro.md).

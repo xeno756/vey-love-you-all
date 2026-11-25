@@ -11,6 +11,18 @@ Mis à jour le 25/11/2026.
 | `project-one/before-scarlettport` | étiquette : l'état avant la mission du 25/11 (retour arrière possible) |
 | `project-one/scarlettport` | la pile VIctory de ScarlettPort fusionnée avec PROJECT ONE, dans le dossier `..\victory-scarlettport`. Compilée et testée hors jeu, **pas encore essayée en jeu** |
 
+## La meilleure version aujourd'hui
+
+La branche fusionnée (`project-one/scarlettport`), lancée par `project-one/meilleure.cmd` avec
+les mêmes options que `lancer.cmd`. Les trois défauts des essais du 25/11 au matin y sont
+corrigés (causes et preuves : [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md)) ;
+aucune de ces corrections n'a encore tourné avec le jeu.
+
+Si un lancement se ferme encore, chercher dans son journal, dans cet ordre : `resolution: a
+check of the title's own…` (une vérification du jeu franchie, avec sa position), `first-chance
+exception` (l'endroit du plantage), `host GPU device removed` (la carte, avec ce qui était en
+cours).
+
 ## Fait le 25/11 sur `project-one/integration`
 
 | Commit | Contenu |
@@ -18,6 +30,8 @@ Mis à jour le 25/11/2026.
 | `ebfaa24` | définition : hooks de ScarlettPort (échelle de rendu, upscaler, chien de garde) et taille de sortie du jeu (`VICTORY_OUTPUT_SIZE`) ; dessins comptés par taille de viewport |
 | `ec60820` | présentations calées sur l'écran ; compteur du lecteur vidéo du jeu |
 | `6dad160` | textures jusqu'à 6 niveaux en moins, plancher réglable |
+| `fc73e53` | les vérifications internes du jeu ne l'arrêtent plus quand sa taille d'image est imposée (plantage de `1080p` et `720p`) |
+| `c6e9908` | le jeu apprend quand ses images ont été affichées (introduction saccadée) |
 
 Détail et mesures attendues : [docs/technical/08-resolution-scarlettport-intro.md](docs/technical/08-resolution-scarlettport-intro.md).
 
@@ -36,6 +50,7 @@ leurs caches l'une l'autre.
 | `7a8a970` | la fusion : 113 fichiers de ScarlettPort, 20 conflits résolus, nos fonctions gardées |
 | `60bd4da` | une seule commande de préparation (`prepare`), qui peut aussi compiler les pipelines graphiques du cache du jeu |
 | `1fdb0bf` | mélange à deux sources gardé sur la première cible seulement : 1 868 pipelines de plus acceptés par la carte |
+| `da761fb` | le programme que le pilote AMD ne finit pas de compiler n'est plus compilé (carte perdue à l'entrée du monde) |
 
 État : compile, **752 tests réussis, 0 échec**, lint propre avec et sans la fonction
 `diagnostics`, politique du dépôt respectée. **Pas encore lancée avec le jeu.**
