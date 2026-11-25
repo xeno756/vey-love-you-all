@@ -27,13 +27,18 @@ use super::HostShader;
 use crate::ShaderError;
 
 /// The root UAV (compute) and root SRV (vertex shader) of the record buffer,
-/// in [`ROOT_CBV_SPACE`]: next to the translator's own slots
-/// (`SLOT_FAULTS` 253 up).
-pub const SLOT_MESH_RECORDS: u8 = 252;
+/// in [`ROOT_CBV_SPACE`]: below the translator's own slots
+/// ([`super::shader::SLOT_WORDS`] 252 up). It must be none of them: the
+/// host leaves this slot to the mesh dispatch, and at 252 it left the table
+/// of descriptor words of nearly every shader unset (the card was lost at
+/// the world's first frames, runs of 25/11).
+pub const SLOT_MESH_RECORDS: u8 = 251;
+const _: () = assert!(SLOT_MESH_RECORDS < super::shader::SLOT_WORDS);
 
-/// `RootType::Other` code of a user-data dword the host computes: the
-/// console group number of the dispatch's first group.
-pub const USER_MESH_GROUP_BASE: u32 = 0x104;
+/// `RootType::Other` code of a user-data dword the host sets: the console
+/// group number of the dispatch's first group. The word a one-dimensional
+/// compute program takes its first group from, which it is.
+pub const USER_MESH_GROUP_BASE: u32 = super::shader::USER_GROUP_BASE;
 
 /// A primitive word of a culled primitive (bit 31, as the console's own).
 pub const CULLED: u32 = 1 << 31;

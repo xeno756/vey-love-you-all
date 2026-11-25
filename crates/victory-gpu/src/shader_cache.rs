@@ -51,6 +51,13 @@ fn cache() -> Option<&'static Cache> {
             let name = build_name(build());
             match open_for(dir, &name) {
                 Ok(cache) => {
+                    // The same name in `prepare` and in the run after it,
+                    // or the run translates everything again.
+                    tracing::info!(
+                        build = %name,
+                        view_limit = victory_shader::emit::view_heap_limit(),
+                        "shader cache: this build's translations"
+                    );
                     let dir = dir.clone();
                     let spawned = std::thread::Builder::new().name("victory-shader-cache".into()).spawn(move || {
                         let removed = prune(&dir, &name);
@@ -147,6 +154,12 @@ pub(crate) fn counts() -> (u64, u64) {
 fn build() -> &'static [u8; 32] {
     static BUILD: OnceLock<[u8; 32]> = OnceLock::new();
     BUILD.get_or_init(|| {
+        // The key holds the host's view limit, which the first translation
+        // sets. A look into the cache before it (`is_cached`, for the
+        // pipelines made early in a run) keyed the run on no limit: a run
+        // read none of what `prepare` had translated and made it all again
+        // (two folders of the same translations, runs of 25/11).
+        crate::descriptor::host::probe_view_limit();
         let limit = victory_shader::emit::loop_limit();
         if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
             tracing::warn!(
@@ -826,6 +839,9 @@ mod tests {
         assert!(victory_shader::SOURCE_HASH.bytes().all(|b| b.is_ascii_hexdigit()));
         // and, unless the executable is asked for, the key is made of it
         if std::env::var_os("VICTORY_SHADER_CACHE_KEY").is_none() {
+            // (The key first: making it asks the host for the view limit
+            // the settings hold.)
+            let made = build();
             let expected = with_host_settings(key(
                 &[&CACHE_SCHEMA_VERSION.to_le_bytes()[..], victory_shader::SOURCE_HASH.as_bytes()].concat(),
                 victory_shader::emit::loop_limit(),
@@ -833,7 +849,7 @@ mod tests {
                 &SWITCHES.map(|name| (name, std::env::var_os(name))),
                 victory_shader::emit::shader_opt(),
             ));
-            assert_eq!(build(), &expected);
+            assert_eq!(made, &expected);
         }
     }
 

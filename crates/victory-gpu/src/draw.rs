@@ -356,9 +356,6 @@ pub(crate) struct State {
     /// bound: its bindings read the graphics roots the title set for the
     /// mesh draw ([`State::roots_ref`]).
     mesh_roots: bool,
-    /// The console group number of the first group of that compute
-    /// dispatch (`USER_MESH_GROUP_BASE`).
-    mesh_base: u32,
 }
 
 impl Drop for State {
@@ -911,15 +908,13 @@ impl State {
         memory: Option<&crate::memory::Ready>,
     ) -> u32 {
         use victory_shader::emit::{USER_GROUP_BASE, USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS};
-        // Set between the parts of a large dispatch (`group_base`).
+        // Set between the parts of a large dispatch (`group_base`) and of
+        // a mesh dispatch run as compute (`mesh_as_compute`).
         if kind == USER_GROUP_BASE {
             return 0;
         }
         if kind == USER_MEMORY_BASE {
             return memory.map_or(0, |m| m.base);
-        }
-        if kind == victory_shader::emit::mesh_compute::USER_MESH_GROUP_BASE {
-            return self.mesh_base;
         }
         if kind == USER_VIEW_BIAS {
             // The view begins on 16 bytes of the copy the address finds
@@ -2328,7 +2323,6 @@ impl State {
         while first < x {
             let n = (x - first).min(part);
             if first == 0 {
-                self.mesh_base = 0;
                 self.mesh_roots = true;
                 let bound = self.bind(list, &a.pipeline, true);
                 self.mesh_roots = false;
@@ -2426,7 +2420,6 @@ impl State {
         // That pass set a compute root signature and pipeline of its own.
         self.host_pipeline = 0;
         self.host_roots[1] = 0;
-        self.mesh_base = 0;
         self.mesh_roots = true;
         let bound = self.bind(list, &a.pipeline, true);
         self.mesh_roots = false;
