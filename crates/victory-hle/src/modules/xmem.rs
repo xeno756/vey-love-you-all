@@ -162,7 +162,85 @@ pub extern "system" fn XMemVirtualAlloc(
             "XMemVirtualAlloc"
         );
     }
+    // For what the title is told it uses ([`title_used`]). A placeholder
+    // takes physical pages, which are counted as such.
+    if !at.is_null() && !placeholder && kind & MEM_RESERVE != 0 {
+        reserved().push((at as usize, size));
+    }
     at
+}
+
+/// Reservations the title made with `XMemVirtualAlloc` (placeholders left
+/// out): base and size.
+static RESERVED: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+fn reserved() -> MutexGuard<'static, Vec<(usize, usize)>> {
+    RESERVED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The bytes committed in the allocation reserved at `base`, `size` bytes
+/// long; `None` if the title has released it since.
+fn committed_in(base: usize, size: usize) -> Option<usize> {
+    let (mut at, end, mut bytes) = (base, base.saturating_add(size), 0);
+    while at < end {
+        // SAFETY: plain data; zero is a valid value.
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: our own process and a structure of the size passed.
+        let filled = unsafe {
+            VirtualQueryEx(
+                GetCurrentProcess(),
+                at as *const c_void,
+                &mut info,
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        };
+        if filled == 0 || info.RegionSize == 0 {
+            break;
+        }
+        // Free memory has no allocation base; another base is another
+        // allocation made there since.
+        if info.AllocationBase as usize != base {
+            if at == base {
+                return None;
+            }
+            break;
+        }
+        let region_end = (info.BaseAddress as usize).saturating_add(info.RegionSize);
+        if info.State == MEM_COMMIT {
+            bytes += region_end.min(end) - at;
+        }
+        at = region_end;
+    }
+    Some(bytes)
+}
+
+/// The title's own memory, as the console counts it: what it has committed
+/// in its `XMemVirtualAlloc` reservations, and the physical pages it
+/// holds. Reservations it has released are forgotten here. The walk over
+/// the reservations (the title makes some twenty) runs at most four times
+/// a second.
+/// shortcut: memory the title takes with the host's own `VirtualAlloc`,
+/// which is passed through, is not counted.
+fn title_used() -> usize {
+    static LAST: Mutex<Option<(std::time::Instant, usize)>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, used)) = *last
+        && at.elapsed() < std::time::Duration::from_millis(250)
+    {
+        return used;
+    }
+    let pages = physical().pages.len() * PAGE;
+    let mut committed = 0;
+    reserved().retain(|&(base, size)| match committed_in(base, size) {
+        Some(bytes) => {
+            committed += bytes;
+            true
+        }
+        None => false,
+    });
+    let used = pages + committed;
+    *last = Some((std::time::Instant::now(), used));
+    used
 }
 
 /// `MEMORY_BASIC_INFORMATION` (the console's first 0x30 bytes are the
@@ -864,8 +942,26 @@ pub struct WorkingSet {
     pub kernel_pool_limit: u32,
 }
 
-/// The title's budget and our process's commit as what it uses. No tools
-/// memory: a retail console.
+/// Whether the title is told all our process has committed as what it
+/// uses (`VICTORY_TITLE_USED=process`, as before) instead of its own
+/// memory ([`title_used`]).
+fn process_as_title_used() -> bool {
+    static ON: LazyLock<bool> =
+        LazyLock::new(|| std::env::var("VICTORY_TITLE_USED").is_ok_and(|v| v == "process"));
+    *ON
+}
+
+/// The title's budget and what it uses of it. No tools memory: a retail
+/// console.
+///
+/// "Used" was all our process had committed: the layer's own memory and
+/// the card's copies included (27 GB in run 60's gameplay against a limit
+/// of 13.5 GB). A title that budgets its streaming from the two figures
+/// then believes it is over its limit. The title asks only as a
+/// Series S, where the budget is tight: told 6,082 MB of 7,776 MB used
+/// three seconds after its start, it never opened its next pack (2,380
+/// frames of the first screen, where as a Series X it opens it after ten
+/// seconds). It is told its own memory now.
 // shortcut: all fields are filled whatever the flags ask for, and use is
 // not split by bandwidth class (GPU-optimal use reads 0); track
 // allocations per class if a title budgets from that field.
@@ -880,20 +976,19 @@ pub extern "system" fn XMemGetWorkingSetStatistics(_which: u32, out: *mut Workin
     // SAFETY: our own process and a sized structure.
     unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
     let (gpu_optimal, standard) = victory_gpu::console::current().title_memory();
+    let own = title_used();
     let stats = WorkingSet {
         title_limit: gpu_optimal + standard - TRANSFERRED.load(Ordering::Relaxed),
-        title_used: counters.PagefileUsage,
+        title_used: if process_as_title_used() {
+            counters.PagefileUsage
+        } else {
+            own
+        },
         gpu_optimal_limit: gpu_optimal,
         ..Default::default()
     };
     // What the title is told, logged at the first asking and at every
-    // 1,024th: "used" is all the process has committed, the layer's own
-    // memory and the card's included (27 GB in run 60's gameplay against a
-    // limit of 13.5 GB). A title that budgets its streaming from these two
-    // figures believes it is far over its limit.
-    // shortcut: the figure is not yet the title's own memory alone (its
-    // heaps and the pages it mapped); count those if this line shows the
-    // title asking.
+    // 1,024th, with what the whole process has committed beside it.
     static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let asked = ASKED.fetch_add(1, Ordering::Relaxed);
     if asked.is_multiple_of(1024) {
@@ -902,6 +997,8 @@ pub extern "system" fn XMemGetWorkingSetStatistics(_which: u32, out: *mut Workin
             which = _which,
             limit_mb = stats.title_limit >> 20,
             used_mb = stats.title_used >> 20,
+            own_mb = own >> 20,
+            process_mb = counters.PagefileUsage >> 20,
             "the title asks how much memory it uses"
         );
     }
@@ -956,6 +1053,54 @@ pub(crate) fn module() -> HleModule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the title is told it uses follows what it commits in its own
+    /// reservations, and a reservation it released is forgotten.
+    #[test]
+    fn title_use_counts_what_the_title_committed() {
+        let size = 16 * MIB;
+        let base = XMemVirtualAlloc(std::ptr::null_mut(), size, MEM_RESERVE, 7 << 12, PAGE_READWRITE);
+        assert!(!base.is_null());
+        let tracked = |base: *mut c_void| reserved().iter().any(|&(b, s)| b == base as usize && s == size);
+        assert!(tracked(base), "a reservation is remembered");
+        assert_eq!(committed_in(base as usize, size), Some(0));
+        // The title commits 3 MiB in the middle, then 1 MiB at the start.
+        // SAFETY: inside the reservation above.
+        let middle = unsafe { base.byte_add(5 * MIB) };
+        assert_eq!(XMemVirtualAlloc(middle, 3 * MIB, MEM_COMMIT, 0, PAGE_READWRITE), middle);
+        assert_eq!(XMemVirtualAlloc(base, MIB, MEM_COMMIT, 0, PAGE_READWRITE), base);
+        assert_eq!(committed_in(base as usize, size), Some(4 * MIB));
+        // Only the part inside the range asked about counts.
+        assert_eq!(committed_in(base as usize, 6 * MIB), Some(2 * MIB));
+        // It decommits the megabyte at the start.
+        // SAFETY: memory committed above.
+        assert_ne!(unsafe { VirtualFree(base, MIB, windows_sys::Win32::System::Memory::MEM_DECOMMIT) }, 0);
+        assert_eq!(committed_in(base as usize, size), Some(3 * MIB));
+        // Released: no longer its allocation.
+        // SAFETY: the reservation above, whole.
+        assert_ne!(unsafe { VirtualFree(base, 0, MEM_RELEASE) }, 0);
+        assert_eq!(committed_in(base as usize, size), None);
+    }
+
+    /// The figure is the title's memory, not all the process has committed.
+    #[test]
+    fn working_set_statistics_report_the_titles_own_memory() {
+        let mut stats = WorkingSet::default();
+        assert_eq!(XMemGetWorkingSetStatistics(0x2000_0001, &mut stats), 1);
+        let mut counters = PROCESS_MEMORY_COUNTERS {
+            cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: our own process and a sized structure.
+        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+        assert!(stats.title_limit > 0);
+        assert!(
+            stats.title_used < counters.PagefileUsage,
+            "the title's own {} against the process's {}",
+            stats.title_used,
+            counters.PagefileUsage
+        );
+    }
 
     fn query(address: *const c_void) -> BasicInformation {
         // SAFETY: plain data; zero is a valid value.
