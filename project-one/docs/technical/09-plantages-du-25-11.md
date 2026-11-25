@@ -86,10 +86,15 @@ C'est la branche fusionnée (`project-one/scarlettport`, dossier `..\victory-sca
 ces corrections : elle a l'introduction fluide, traduit tous les shaders du jeu, compile
 d'avance les pipelines graphiques et contient tout ce que PROJECT ONE avait ajouté.
 
-| Commande (lanceur de la branche fusionnée) | Effet |
-|---|---|
-| `lancer.cmd series-x` | comme hier, sans le programme que le pilote ne compile pas |
-| `lancer.cmd series-x 1080p` | image et rendu 3D en 1920 × 1080 |
-| `lancer.cmd series-x 720p minimal` | 1280 × 720, textures et effets réduits |
+Elle se lance par `project-one/meilleure.cmd`, avec les mêmes options que `lancer.cmd` :
 
-La branche stable reste telle quelle, en secours.
+| Commande | Effet |
+|---|---|
+| `meilleure.cmd series-x` | la définition du jeu (rendu 3D en 2560 × 1440), sans le programme que le pilote ne compile pas |
+| `meilleure.cmd series-x 1080p` | image et rendu 3D en 1920 × 1080 |
+| `meilleure.cmd series-x 720p minimal` | 1280 × 720, textures et effets réduits |
+
+Mesuré hors jeu sur cette version : 756 tests réussis, 0 échec ; préparation des shaders en 15 à
+20 secondes, cache chaud, 0 pipeline refusé ; 24 801 pipelines graphiques du jeu déjà compilés.
+
+La branche stable est recompilée avec les mêmes corrections et reste en secours (`lancer.cmd`).
