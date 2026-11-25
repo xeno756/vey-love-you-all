@@ -22,6 +22,9 @@ laissés de côté) sont écrits et testés hors jeu, pas encore essayés en jeu
   [docs/technical/06-performances.md](docs/technical/06-performances.md).
 - Définition, graphismes au minimum, écran de lancement, ordre d'essai :
   [docs/technical/07-graphismes-minimaux.md](docs/technical/07-graphismes-minimaux.md).
+- Définition réelle en 1080p, ScarlettPort, cinématique d'introduction :
+  [docs/technical/08-resolution-scarlettport-intro.md](docs/technical/08-resolution-scarlettport-intro.md).
+- Où en est le travail et comment le reprendre : [REPRISE.md](REPRISE.md).
 - Le remplacement des mesh shaders :
   [docs/technical/04-shaders-ecran-noir.md](docs/technical/04-shaders-ecran-noir.md), section 3 bis.
 - Le reste : [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
@@ -85,7 +88,12 @@ Rien de PROJECT GAME n'est stocké ici (voir `docs/asset-policy.md` à la racine
 | `lancer.cmd series-x capture` | version diagnostic (`target\diag\victory.exe`) : enregistre des images de l'écran et des tampons internes du jeu (normales, profondeur, couleurs) dans `..\victory-captures`, hors du dépôt |
 | `lancer.cmd series-x profil` | version diagnostic : mesure le temps de la carte commande par commande (plus lent) |
 | `lancer.cmd series-x test` | montre ce qui serait lancé, sans rien lancer |
-| `lancer.cmd series-x textures:2` | textures du jeu sans leurs 2 premiers niveaux de détail (1 à 4) : moins de mémoire vidéo, textures plus floues |
+| `lancer.cmd series-x 1080p` | **définition réelle** : le jeu calcule son image et son rendu 3D en 1920 × 1080 (`720p` : 1280 × 720, `540p` : 960 × 540) |
+| `lancer.cmd series-x sortie:1920x1080` | taille de l'image du jeu seule ; son rendu 3D en fait les deux tiers |
+| `lancer.cmd series-x echelle:0.5` | part de l'image à laquelle la 3D est calculée (0,2 à 1) |
+| `lancer.cmd series-x sans-synchro` | présente les images sans les caler sur l'écran, comme avant (pour comparer) |
+| `lancer.cmd series-x chien-de-garde` | laisse le jeu se fermer lui-même après 30 secondes sans avancer (désarmé par défaut) |
+| `lancer.cmd series-x textures:2` | textures du jeu sans leurs 2 premiers niveaux de détail (1 à 6) : moins de mémoire vidéo, textures plus floues. `plancher:32` descend jusqu'à 32 pixels de côté |
 | `lancer.cmd series-x sans:vent+particules` | laisse de côté les passes de calcul de groupes d'effets (fichiers `..\victory-profils\<groupe>.txt`) ; jamais un dessin |
 | `lancer.cmd series-x minimal` | `textures:2` et les groupes à faible risque : `particules`, `vent`, `flou-et-halos`, `reflets` |
 

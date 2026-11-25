@@ -4,6 +4,32 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (suite) — définition réelle, introduction, ScarlettPort
+
+Détail : [docs/technical/08-resolution-scarlettport-intro.md](docs/technical/08-resolution-scarlettport-intro.md).
+Reprise du travail : [REPRISE.md](REPRISE.md). Rien de cette section n'a encore tourné avec
+PROJECT GAME.
+
+- **Définition réelle.** `lancer.cmd series-x 1080p` : le jeu lui-même calcule son image et son
+  rendu 3D en 1920 × 1080 (`720p` et `540p` aussi). `sortie:WxH` règle la taille de l'image du
+  jeu, `echelle:N` la part de cette image à laquelle la 3D est calculée. Le journal donne la
+  taille demandée par le jeu, celle mise à la place, celle du swap chain, et le nombre de dessins
+  par taille de viewport.
+- **Hooks de ScarlettPort** repris pour cette version du jeu (GPL-3.0-or-later) : échelle de
+  rendu, upscaler du jeu, chien de garde. Le chien de garde du jeu (fermeture après 30 secondes
+  sans avancer) est désarmé par défaut ; `chien-de-garde` le remet.
+- **Cinématique d'introduction.** Les images sont présentées calées sur l'écran (deux
+  rafraîchissements par image à 60 Hz pour 30 images par seconde) au lieu de partir au premier
+  rafraîchissement venu. `sans-synchro` remet l'ancien comportement.
+- **Mesures vidéo.** Lecteurs vidéo ouverts, images montrées, images sautées pour retard, temps
+  de décodage : une ligne `video:` toutes les deux secondes de lecture. Écarts entre
+  présentations, images en avance ou en retard, temps de présentation : dans `frame account`.
+- **Textures plus grossières.** Jusqu'à 6 niveaux en moins, plancher réglable
+  (`textures:6 plancher:32`).
+- **ScarlettPort étudié en entier.** Sa pile VIctory part du même fork que PROJECT ONE et peut
+  être fusionnée ; la fusion est commencée sur la branche `project-one/scarlettport`
+  (19 fichiers en conflit, 7 résolus). XCL (GPL-2.0 seule) n'est pas repris.
+
 ## 25/11/2026 — Series X : graphismes réduits et diagnostic par image
 
 Détail, mesures et ordre d'essai : [docs/technical/07-graphismes-minimaux.md](docs/technical/07-graphismes-minimaux.md).
