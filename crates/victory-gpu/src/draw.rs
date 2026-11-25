@@ -198,6 +198,13 @@ pub(crate) struct State {
     root_uav_slots: std::collections::HashMap<(usize, u64), RootSlot>,
     /// The list ran and its dynamic slots were given back.
     tables_gone: bool,
+    /// Set while the compute half of a mesh pipeline run as compute is
+    /// bound: its bindings read the graphics roots the title set for the
+    /// mesh draw ([`State::roots_ref`]).
+    mesh_roots: bool,
+    /// The console group number of the first group of that compute
+    /// dispatch (`USER_MESH_GROUP_BASE`).
+    mesh_base: u32,
 }
 
 impl Drop for State {
@@ -698,6 +705,9 @@ impl State {
         if kind == USER_MEMORY_BASE {
             return memory.map_or(0, |m| m.base);
         }
+        if kind == victory_shader::emit::mesh_compute::USER_MESH_GROUP_BASE {
+            return self.mesh_base;
+        }
         if kind == USER_VIEW_BIAS {
             // The view begins on 16 bytes of the copy the address finds
             // (`root_uav`, `root_srv_table`).
@@ -961,6 +971,11 @@ impl State {
             }
             for (views, srv) in [(&stage.root_cbvs, false), (&stage.root_srvs, true)] {
                 for &(slot, param) in views {
+                    if slot == victory_shader::emit::mesh_compute::SLOT_MESH_RECORDS {
+                        // Ours: bound by the mesh dispatch, which knows
+                        // where it put them.
+                        continue;
+                    }
                     if srv && slot == victory_shader::emit::SLOT_MEMORY {
                         // Ours: the directory of title memory by address.
                         if let Some(m) = &memory {
@@ -1039,6 +1054,9 @@ impl State {
                 }
             }
             for &(slot, param) in &stage.root_uavs {
+                if slot == victory_shader::emit::mesh_compute::SLOT_MESH_RECORDS {
+                    continue;
+                }
                 if slot == victory_shader::emit::SLOT_FAULTS {
                     // Ours: where shaders note the pages they found empty.
                     if let Some(m) = &memory {
@@ -1875,6 +1893,19 @@ impl State {
         self.window = None;
         #[cfg(feature = "diagnostics")]
         self.trace("mesh", x, 0);
+        if let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This)
+            && p.as_compute.is_some()
+        {
+            let ran = mesh_test() != 1 && mesh_kept(self.pipeline) && self.mesh_as_compute(list, p, x);
+            if ran {
+                DRAWN.fetch_add(1, Ordering::Relaxed);
+            } else {
+                DROPPED.fetch_add(1, Ordering::Relaxed);
+                #[cfg(feature = "diagnostics")]
+                dropped(self.pipeline);
+            }
+            return;
+        }
         let ran = mesh_test() != 1
             && mesh_kept(self.pipeline)
             && self.prepare_for(list, false, true)
@@ -1898,8 +1929,121 @@ impl State {
         }
     }
 
+    /// A mesh dispatch of `x` groups with a pipeline run as compute
+    /// ([`HostPipeline::as_compute`]), in parts of as many groups as the
+    /// list's record buffer holds: the compute pipeline writes the part's
+    /// records, then this pipeline's vertex shader draws them as a triangle
+    /// list. The compute half binds the graphics roots the title set for
+    /// the draw. False if nothing was drawn.
+    fn mesh_as_compute(&mut self, list: &HostList, p: &HostPipeline, x: u32) -> bool {
+        use victory_shader::emit::mesh_compute::{SLOT_MESH_RECORDS, USER_MESH_GROUP_BASE};
+        let Some(a) = p.as_compute.as_deref() else {
+            return false;
+        };
+        if x == 0 {
+            return true;
+        }
+        let layout = a.layout;
+        let group = u64::from(layout.group_bytes());
+        let part = (crate::host::mesh_records_cap() / group).clamp(1, 65_535) as u32;
+        let Some(records) = list.mesh_records(u64::from(part.min(x)) * group) else {
+            once!("no record buffer for a mesh program run as compute: its draws are dropped");
+            return false;
+        };
+        let cs = &a.pipeline.stages[0];
+        let find = |views: &[(u8, u32)]| views.iter().find(|v| v.0 == SLOT_MESH_RECORDS).map(|v| v.1);
+        let (Some(uav), Some(srv)) = (find(&cs.root_uavs), p.stages.first().and_then(|vs| find(&vs.root_srvs)))
+        else {
+            once!("a mesh pipeline run as compute without its record views: its draws are dropped");
+            return false;
+        };
+        // Where the console group number of the part's first group goes.
+        let base = cs.user_data.and_then(|(param, _)| {
+            cs.translated()
+                .host
+                .user_data
+                .iter()
+                .find(|u| u.root == RootType::Other(USER_MESH_GROUP_BASE))
+                .map(|u| (param, u.index))
+        });
+        // SAFETY: a live buffer.
+        let gpu = unsafe { records.GetGPUVirtualAddress() };
+        let to_read = [crate::host::transition(
+            &records,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        )];
+        let to_write = [crate::host::transition(
+            &records,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        )];
+        let l = &list.list;
+        let mut first = 0;
+        while first < x {
+            let n = (x - first).min(part);
+            if first == 0 {
+                self.mesh_base = 0;
+                self.mesh_roots = true;
+                let bound = self.bind(list, &a.pipeline, true);
+                self.mesh_roots = false;
+                if !bound {
+                    return false;
+                }
+            } else {
+                // The compute root signature and its arguments are still
+                // set: only the pipeline and the part's first group change.
+                // SAFETY: an open list and a live pipeline the list keeps.
+                unsafe { l.SetPipelineState(&a.pipeline.pso) };
+                self.host_pipeline = a.pipeline.pso.as_raw() as usize;
+                if let Some((param, index)) = base {
+                    // SAFETY: an open list; the dword is in the parameter.
+                    unsafe { l.SetComputeRoot32BitConstant(param, first, index) };
+                }
+            }
+            // SAFETY: an open list with everything set; the record buffer
+            // is the list's (unordered access between mesh dispatches, or
+            // common at the list's start, which the dispatch promotes).
+            unsafe {
+                l.SetComputeRootUnorderedAccessView(uav, gpu);
+                l.Dispatch(n, 1, 1);
+                l.ResourceBarrier(&to_read);
+            }
+            if first == 0 {
+                if !self.prepare_for(list, false, true) {
+                    // SAFETY: an open list.
+                    unsafe { l.ResourceBarrier(&to_write) };
+                    return false;
+                }
+                // SAFETY: an open list.
+                unsafe { l.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY(4)) };
+                #[cfg(feature = "diagnostics")]
+                list.note_op(|| self.op_text(format!("mesh {x} as compute"), false));
+                self.mesh_scissor(list, true);
+            } else {
+                // SAFETY: an open list and a live pipeline the list keeps.
+                unsafe { l.SetPipelineState(&p.pso) };
+                self.host_pipeline = p.pso.as_raw() as usize;
+            }
+            // SAFETY: an open list with everything set; the records were
+            // written above.
+            unsafe {
+                l.SetGraphicsRootShaderResourceView(srv, gpu);
+                l.DrawInstanced(layout.draw_vertices(n), 1, 0, 0);
+                l.ResourceBarrier(&to_write);
+            }
+            first += n;
+        }
+        self.mesh_scissor(list, false);
+        // The title's own topology for its next draws.
+        if self.topology_set {
+            self.set_topology(list, self.topology);
+        }
+        true
+    }
+
     fn roots_ref(&self, compute: bool) -> &Vec<Root> {
-        if compute {
+        if compute && !self.mesh_roots {
             &self.compute
         } else {
             &self.graphics
@@ -2378,6 +2522,13 @@ impl State {
             && !p.inputs.iter().any(|e| !e.per_instance);
         if made_rects {
             once!("indirect rectangles without vertex inputs drawn as their first triangle");
+        }
+        if kind == MESH && p.as_compute.is_some() {
+            // shortcut: not yet; the arguments' group count must be read on
+            // the GPU into a dispatch, then a draw.
+            once!("indirect mesh dispatches of mesh pipelines run as compute are dropped");
+            why("an indirect mesh dispatch of a mesh pipeline run as compute");
+            return false;
         }
         let matches_kind = match kind {
             DRAW | INDEXED => {

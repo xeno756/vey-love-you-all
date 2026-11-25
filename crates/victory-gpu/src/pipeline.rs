@@ -63,6 +63,10 @@ pub(crate) struct Shader {
     container: Vec<u8>,
     #[cfg(windows)]
     translated: OnceLock<Option<Translated>>,
+    /// A mesh program's other translation, as compute plus a vertex shader
+    /// ([`Shader::mesh_variant`]).
+    #[cfg(windows)]
+    mesh_variant: OnceLock<Option<MeshVariant>>,
 }
 
 impl std::fmt::Debug for Shader {
@@ -113,6 +117,8 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 container: bytes.to_vec(),
                 #[cfg(windows)]
                 translated: OnceLock::new(),
+                #[cfg(windows)]
+                mesh_variant: OnceLock::new(),
             })
         })
         .clone()
@@ -167,6 +173,81 @@ impl Shader {
                     ),
                 }
                 done.ok()
+            })
+            .as_ref()
+    }
+}
+
+/// A mesh program for a host without mesh shaders
+/// (`victory_shader::emit::mesh_compute`): the compute shader that runs it
+/// and writes each group's vertices and triangles to a record buffer, and
+/// the vertex shader that draws the records with the title's pixel shader.
+#[cfg(windows)]
+pub(crate) struct MeshVariant {
+    /// Reads and stores what the mesh program does (its `used` and
+    /// `stores` are the program's), and writes the records besides.
+    pub(crate) compute: Translated,
+    /// Reads the records only.
+    pub(crate) vertex: Translated,
+    pub(crate) layout: victory_shader::emit::mesh_compute::RecordLayout,
+}
+
+#[cfg(windows)]
+impl Shader {
+    /// The mesh program as compute plus a vertex shader, made on first use
+    /// (after [`Shader::translated`]); a program that does not translate so
+    /// is logged once.
+    /// shortcut: translated again each run, not kept in the shader cache.
+    pub(crate) fn mesh_variant(&self) -> Option<&MeshVariant> {
+        self.mesh_variant
+            .get_or_init(|| {
+                let program = self.translated()?;
+                let done = victory_shader::emit::mesh_compute::translate_mesh_as_compute(&self.container)
+                    .and_then(|m| Ok((m.vertex_shader()?, m)))
+                    .map_err(|e| e.to_string());
+                let (vertex, m) = match done {
+                    Ok(done) => done,
+                    Err(error) => {
+                        tracing::warn!(
+                            hash = %self.hash,
+                            %error,
+                            "mesh program does not translate as compute; its draws are dropped"
+                        );
+                        return None;
+                    }
+                };
+                if let Some(dir) = std::env::var_os("VICTORY_SHADER_SAVE") {
+                    let dir = std::path::PathBuf::from(dir);
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::fs::write(dir.join(format!("{}.mesh-compute.dxil", self.hash)), &m.cs.dxil);
+                    let _ = std::fs::write(dir.join(format!("{}.mesh-vertex.dxil", self.hash)), &vertex.dxil);
+                }
+                KEPT[2].fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+                KEPT[3].fetch_add(
+                    (m.cs.dxil.len() + vertex.dxil.len()) as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                tracing::info!(
+                    hash = %self.hash,
+                    vertices = m.layout.max_vertices,
+                    primitives = m.layout.max_primitives,
+                    outputs = m.layout.vertex_slots,
+                    group_bytes = m.layout.group_bytes(),
+                    "mesh program translated as compute plus a vertex shader"
+                );
+                Some(MeshVariant {
+                    compute: Translated {
+                        host: m.cs,
+                        used: program.used.clone(),
+                        stores: program.stores,
+                    },
+                    vertex: Translated {
+                        host: vertex,
+                        used: Vec::new(),
+                        stores: false,
+                    },
+                    layout: m.layout,
+                })
             })
             .as_ref()
     }

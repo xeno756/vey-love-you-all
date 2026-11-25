@@ -862,6 +862,9 @@ pub(crate) struct HostList {
     /// Device-local scratch buffer for clamped indirect arguments (`indirect`),
     /// grown to the largest indirect execution recorded on the list.
     indirect_args: Mutex<Option<(ID3D12Resource, u64)>>,
+    /// Device-local record buffer of mesh programs run as compute
+    /// (`State::dispatch_mesh`), grown up to [`mesh_records_cap`].
+    mesh_records: Mutex<Option<(ID3D12Resource, u64)>>,
     /// Counts the list in [`ALIVE`] while it lives.
     _alive: Counted,
     /// The texts of the markers `note_op` set, in order (for device-removed
@@ -3106,6 +3109,7 @@ impl Host {
                 pipelines: Mutex::default(),
                 budget: OnceLock::new(),
                 indirect_args: Mutex::default(),
+                mesh_records: Mutex::default(),
                 _alive: Counted::new(),
                 #[cfg(feature = "diagnostics")]
                 notes: Mutex::default(),
@@ -5312,6 +5316,31 @@ impl HostList {
         Some(buffer)
     }
 
+    /// The list's record buffer for mesh programs run as compute: at least
+    /// `size` bytes (at most [`mesh_records_cap`] are asked for), reused by
+    /// every mesh dispatch of the list, each of which leaves it in the
+    /// unordered-access state. A smaller buffer replaced mid-list stays
+    /// alive until [`HostList::reset`].
+    pub(crate) fn mesh_records(&self, size: u64) -> Option<ID3D12Resource> {
+        let needed = size.max(64 << 10).next_multiple_of(64 << 10);
+        let mut slot = self.mesh_records.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((buffer, cap)) = &*slot
+            && *cap >= needed
+        {
+            return Some(buffer.clone());
+        }
+        let prev = slot.as_ref().map_or(0, |(_, cap)| *cap);
+        let alloc = prev.saturating_mul(2).clamp(needed, needed.max(mesh_records_cap()));
+        let buffer = host()?.uav_buffer(alloc)?;
+        name(&buffer, || format!("mesh records {alloc:#x}"));
+        let old = slot.replace((buffer.clone(), alloc));
+        drop(slot);
+        if let Some((old_buf, _)) = old {
+            self.keep(&old_buf);
+        }
+        Some(buffer)
+    }
+
     /// Keeps `object` alive until the list is reset.
     pub(crate) fn keep(&self, object: &impl Interface) {
         if let Ok(object) = object.cast::<windows::core::IUnknown>() {
@@ -6566,6 +6595,21 @@ fn in_flight(history: &[D3D12_AUTO_BREADCRUMB_OP], markers: &[(u32, String)], do
     text
 }
 
+/// The most a list's mesh record buffer grows to
+/// (`VICTORY_MESH_RECORDS_MB`, 8 MiB by default): a mesh dispatch whose
+/// records do not fit runs in parts.
+pub(crate) fn mesh_records_cap() -> u64 {
+    static CAP: OnceLock<u64> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("VICTORY_MESH_RECORDS_MB")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&mb| (1..=1024).contains(&mb))
+            .unwrap_or(8)
+            << 20
+    })
+}
+
 pub(crate) fn transition(
     resource: &ID3D12Resource,
     before: D3D12_RESOURCE_STATES,
@@ -6918,5 +6962,47 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         assert_eq!(ram_idle_ms(Some(0)), 2_000);
         // Missing falls back to normal
         assert_eq!(ram_idle_ms(None), 10_000);
+    }
+}
+
+#[cfg(test)]
+mod mesh_record_tests {
+    use windows::core::Interface;
+
+    /// A list's mesh record buffer is reused while big enough, grows to
+    /// what a dispatch asks for (up to the cap), and stays across resets.
+    #[test]
+    fn a_list_reuses_and_grows_its_mesh_records_up_to_the_cap() {
+        let Some(host) = super::host() else {
+            return;
+        };
+        let Ok(list) = host.new_list() else {
+            return;
+        };
+        let cap = super::mesh_records_cap();
+        let a = list.mesh_records(1000).expect("records");
+        let b = list.mesh_records(64 << 10).expect("records");
+        assert_eq!(a.as_raw(), b.as_raw(), "a buffer big enough is reused");
+        // SAFETY: a live buffer.
+        assert_eq!(unsafe { a.GetDesc() }.Width, 64 << 10);
+        let c = list.mesh_records(cap).expect("records");
+        assert_ne!(c.as_raw(), a.as_raw(), "a bigger part grows the buffer");
+        // SAFETY: a live buffer.
+        assert_eq!(unsafe { c.GetDesc() }.Width, cap);
+        list.close();
+        host.execute(&[&list]);
+        list.reset();
+        let d = list.mesh_records(cap / 2).expect("records");
+        assert_eq!(d.as_raw(), c.as_raw(), "the grown buffer stays across resets");
+        list.close();
+        host.execute(&[&list]);
+        list.reset();
+    }
+
+    #[test]
+    fn the_mesh_record_cap_defaults_to_8_mib() {
+        if std::env::var_os("VICTORY_MESH_RECORDS_MB").is_none() {
+            assert_eq!(super::mesh_records_cap(), 8 << 20);
+        }
     }
 }
