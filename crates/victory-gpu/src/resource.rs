@@ -1342,8 +1342,12 @@ fn hosted_as(this: This, make: bool, whole: bool) -> Option<Made> {
         let skip = if r.host.whole.load(Relaxed) {
             0
         } else {
-            // The run's setting, or more as the pool fills (`pressure`).
-            lowered_levels(&r.desc, skip_levels().max(PRESSURE.load(Relaxed)))
+            // The run's setting, and more as the pool fills (`pressure`):
+            // added to it, or a run that already asks for two levels less
+            // got coarser copies in the pool's last quarter alone, which
+            // then filled (run of 25/11, 13:58: 36,000 textures in five
+            // minutes where 84,000 were made with a larger budget).
+            lowered_levels(&r.desc, (skip_levels() + PRESSURE.load(Relaxed)).min(6))
         };
         let Some(texture) = host_texture(&lowered(&r.desc, skip), r.host.state, clear) else {
             r.host.refused.store(true, Relaxed);
@@ -1510,9 +1514,10 @@ pub(crate) fn pool_budget(budget: u64, used: u64, filled: u64) -> u64 {
     (budget / 10 * 9).saturating_sub(fixed).max(POOL_LEAST)
 }
 
-/// How many of their first levels new host copies leave out for the room
-/// left in a pool of `pool` bytes holding `filled`: none in its first
-/// quarter, then one more by quarter, three in the last and past it. Each
+/// How many more of their first levels than the run asks new host copies
+/// leave out for the room left in a pool of `pool` bytes holding `filled`:
+/// none in its first quarter, then one more by quarter, three in the last
+/// and past it (no copy gets smaller than [`lowered_smallest`]). Each
 /// level is a quarter of the bytes, so the pool's quarters hold 1, 4, 16
 /// and 64 times their own size of the title's textures: a pool of 512 MiB
 /// takes 10.9 GiB of them, coarser as it fills, where it took 512 MiB and

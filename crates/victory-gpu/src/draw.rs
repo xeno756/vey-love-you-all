@@ -536,7 +536,7 @@ pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
 
 /// The textures picked by index a frame makes whatever their pool says,
 /// and the bytes staged for them at most: the progress every frame is owed.
-const PROGRESS: [u64; 2] = [16, 8 << 20];
+const PROGRESS: [u64; 2] = [64, 8 << 20];
 /// Those made so in this frame and their bytes; and in all.
 static FORCED: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 /// Slots that waited for room in this frame.
