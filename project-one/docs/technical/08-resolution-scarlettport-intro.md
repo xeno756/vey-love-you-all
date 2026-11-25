@@ -129,6 +129,31 @@ Elle n'a **pas encore tourné avec PROJECT GAME**. Tant que ce n'est pas fait, l
 reste `project-one/integration`. Le détail des résolutions et la façon de l'essayer sont dans
 [REPRISE.md](../../REPRISE.md).
 
+### Mesuré sur la RX 5600 XT avec la branche fusionnée (sans lancer le jeu)
+
+| Mesure | Branche stable | Branche fusionnée |
+|---|---|---|
+| Shaders du jeu qui se traduisent | 25 467 sur 25 563 (96 non traduisibles) | **25 563 sur 25 563** |
+| Pipelines de calcul et moitiés calcul des programmes mesh | 11 486, 0 refusé | 10 498, 1 refusé (ceux que le pilote AMD met 5 à 9 s à compiler ne sont plus faits : aucun lancement ne les demande) |
+| Durée de `preparer`, cache vide | 3 à 4 min | 18 min 47 s (la machine faisait tourner des tests en même temps) |
+| Le cache survit à une recompilation | non : chaque recompilation le vide | oui, tant que le traducteur n'est pas modifié |
+| Pipelines **graphiques** du cache de pipelines du jeu | non compilés d'avance | **24 801 créés sur 25 471 enregistrements** en 6 min 40 s (`preparer-graphiques`) |
+
+Les 670 enregistrements restants : 403 pipelines refusés par la carte, 246 doublons, 21 dont
+un shader n'est pas dans l'archive.
+
+Cette précompilation a servi de banc d'essai : elle a montré, hors jeu, deux défauts qui
+faisaient disparaître de la géométrie.
+
+| Défaut | Pipelines touchés | État |
+|---|---|---|
+| Mélange « à deux sources » déclaré sur toutes les cibles de rendu : Direct3D 12 ne l'accepte que sur la première et refuse tout le pipeline | 1 868 (dont 1 537 pipelines mesh) | **corrigé** sur la branche fusionnée (`1fdb0bf`) : refus passés de 2 271 à 403 |
+| Pixel shaders qui lisent les barycentriques, absents de la RX 5600 XT (RDNA1) | 403 (290 mesh, 113 autres), soit 1,6 % des pipelines graphiques du jeu | **limite matérielle, non corrigée**. Piste : faire porter les poids des trois coins par une sortie interpolée du shader de sommets généré |
+
+Pour que le jeu se serve de ces pipelines graphiques précompilés pendant un lancement, il faut
+l'option `pipelines-du-jeu` du lanceur de la branche fusionnée (`VICTORY_PRECOMPILED_GRAPHICS=1`,
+expérimental chez ScarlettPort aussi).
+
 ### Compatibilité avec la RX 5600 XT
 
 | Point | Constat |
@@ -137,6 +162,8 @@ reste `project-one/integration`. Le détail des résolutions et la façon de l'e
 | Ondes | le traducteur de leur pile lit la plus grande onde de la carte (`host_max_wave`) et l'inclut dans la clé du cache : un cache fait sur NVIDIA n'est jamais servi à une AMD |
 | Shader Model | 6.6 demandé par eux à cause des mesh shaders ; nos chemins de calcul n'en dépendent pas |
 | Pilote AMD | leur pile laisse de côté les programmes qui bloquent le compilateur AMD : à reprendre tel quel |
+| Barycentriques | absents sur RDNA1 : 403 pipelines du jeu sont refusés (voir ci-dessus) |
+| Mélange à deux sources | accepté sur la première cible seulement : corrigé sur la branche fusionnée |
 
 ## 3. La cinématique d'introduction
 
