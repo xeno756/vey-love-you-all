@@ -106,13 +106,18 @@ pub(crate) fn creating_readback() -> bool {
     let creator = match CREATOR.get() {
         Some(c) => *c,
         None => {
-            let mut frame = std::ptr::null_mut();
-            // SAFETY: room for one frame: the creation method's caller.
-            if unsafe { RtlCaptureStackBackTrace(1, 1, &mut frame, std::ptr::null_mut()) } != 1 {
-                return false;
-            }
-            let Some(c) = creator_from(frame as usize) else {
-                // A caller outside the executable (a title DLL): ask again later.
+            // (PROJECT ONE) The first of the nearest frames that is in the
+            // title executable: the creation method's caller, which is one
+            // frame up or two according to what the compiler made one
+            // function of. Taken as "one frame up" alone, it was this
+            // runtime's own method in our build: the creator was never
+            // found, no buffer was tagged, and with the switch on nothing
+            // was copied back at all (a black picture, run of 25/11, 15:04).
+            let mut frames = [std::ptr::null_mut(); 6];
+            // SAFETY: room for six frames.
+            let n = unsafe { RtlCaptureStackBackTrace(0, 6, frames.as_mut_ptr(), std::ptr::null_mut()) };
+            let Some(c) = frames[..usize::from(n)].iter().find_map(|&f| creator_from(f as usize)) else {
+                // No caller in the executable (a title DLL): ask again later.
                 return false;
             };
             tracing::warn!(begin = format_args!("{:#x}", c.0), end = format_args!("{:#x}", c.1), "read-back creator found");
@@ -158,16 +163,36 @@ pub(crate) fn tagged_in(start: u64, len: u64) -> bool {
         .overlaps(start, start.saturating_add(len))
 }
 
+/// `VICTORY_COPY_BACK_SMALL_KB=<n>` (PROJECT ONE; with the switch on):
+/// ranges of at most `n` KiB are copied back whatever made their buffer.
+/// With the title's read-back buffers alone the picture was black (run of
+/// 25/11, 15:22: 81 buffers tagged, 110 ranges copied back a frame): the
+/// title reads other small results of its shaders on the CPU. What costs is
+/// the large ranges (265 of the 300 MB looked through a frame are in copies
+/// of 1 MiB or more).
+fn small() -> u64 {
+    static SMALL: OnceLock<u64> = OnceLock::new();
+    *SMALL.get_or_init(|| {
+        let kib = std::env::var("VICTORY_COPY_BACK_SMALL_KB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+        if kib > 0 && enabled() {
+            tracing::warn!(kib, "VICTORY_COPY_BACK_SMALL_KB: shader writes to ranges up to this size are copied back too");
+        }
+        kib << 10
+    })
+}
+
 /// Whether shader writes to `[start, start + len)` are copied back: always
-/// with the switch off; with it on, only where a read-back buffer lies.
+/// with the switch off; with it on, only where a read-back buffer lies, or
+/// in a range of at most [`small`] bytes.
 pub(crate) fn copy_back(start: u64, len: u64) -> bool {
     if !enabled() {
         return true;
     }
-    let back = TAGGED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .overlaps(start, start.saturating_add(len));
+    let back = len <= small()
+        || TAGGED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .overlaps(start, start.saturating_add(len));
     if back {
         crate::memcopy::add(crate::memcopy::M::BackGoes, 1);
     } else {

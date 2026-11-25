@@ -74,7 +74,11 @@ rem                                         de controle du cote du processeur
 rem                                         (reglages de ScarlettPort, non mesures)
 rem   lancer.cmd series-x rapide vitesse:2  en plus, ce que les shaders ecrivent
 rem                                         n'est recopie que la ou le jeu le relit
-rem                                         (plus risque : a essayer en dernier)
+rem                                         et dans les petites zones : 40 %% plus
+rem                                         rapide le 25/11, mais la carte a ete
+rem                                         perdue une fois apres 72 s (experimental)
+rem   lancer.cmd series-x rapide relais     les commandes partent vers la carte sans
+rem                                         attendre les precedentes (10 %% de mieux)
 rem
 rem Le dossier du jeu vient de victory.toml, a la racine du depot (non suivi
 rem par git), ou du fichier que VICTORY_CONFIG designe. Chaque lancement garde
@@ -96,6 +100,7 @@ set "ECHELLE="
 set "WATCHDOG="
 set "VITESSE="
 set "QUALITE="
+set "RELAIS="
 set "PROFIL="
 :args
 if "%~2"=="" goto args_done
@@ -113,6 +118,7 @@ if /i "%~2"=="minimal" call :minimal
 if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
 if /i "%~2"=="sans-synchro" set "VICTORY_PRESENT_SYNC=0"
 if /i "%~2"=="qualite-s" call :quality_s
+if /i "%~2"=="relais" call :relay
 if /i "%~2"=="1080p" call :size 1920x1080
 if /i "%~2"=="720p" call :size 1280x720
 if /i "%~2"=="540p" call :size 960x540
@@ -203,6 +209,7 @@ rem chemin plus long que Windows n'en accepte.
 if defined PROFIL set "TAG=-scarlettport-%PROFIL%"
 if defined VITESSE set "TAG=%TAG%-vitesse%VITESSE%"
 if defined QUALITE set "TAG=%TAG%-qualite-%QUALITE%"
+if defined RELAIS set "TAG=%TAG%-relais"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -307,6 +314,16 @@ if not defined VITESSE set "VITESSE=1"
 set "VICTORY_FAST_HASH=1"
 set "VICTORY_KNOWN_WRITES=1"
 if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_ONLY_READBACK=1"
+rem (Sans les petites zones l'image du jeu est noire : il relit d'autres
+rem resultats que ceux de ses tampons de relecture.)
+if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_SMALL_KB=1024"
+goto :eof
+
+rem Les commandes partent vers la carte sans attendre la fin des precedentes
+rem (le relais du fork) : environ 10 %% d'images en plus le 25/11.
+:relay
+set "VICTORY_RELAY=1"
+set "RELAIS=1"
 goto :eof
 
 rem Les reglages bas du jeu lui-meme (ceux qu'il prend sur une Series S), la
