@@ -4,6 +4,7 @@
 //! the user's cache directory (outside the repository).
 
 mod census;
+mod effects;
 mod inspect;
 mod prepare;
 mod run;

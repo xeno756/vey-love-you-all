@@ -1764,6 +1764,13 @@ impl State {
             crate::pipeline::note_drop(self.pipeline as This);
             return;
         }
+        // An effect the list given leaves out (`crate::pipeline::leave_out`).
+        if crate::pipeline::is_left_out(self.pipeline as This) {
+            crate::pipeline::LEFT_OUT_COUNT[0].fetch_add(1, Ordering::Relaxed);
+            #[cfg(feature = "diagnostics")]
+            crate::pipeline::note_why("a compute shader the list given leaves out".to_owned());
+            return;
+        }
         // The ray-tracing structure builder's stages run all or none.
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -2582,6 +2589,14 @@ impl State {
         if crate::pipeline::is_skipped(self.pipeline as This) {
             crate::pipeline::note_drop(self.pipeline as This);
             return false;
+        }
+        // An effect the list given leaves out: done, as far as the title's
+        // call goes (it is not one the host could not run).
+        if crate::pipeline::is_left_out(self.pipeline as This) {
+            crate::pipeline::LEFT_OUT_COUNT[0].fetch_add(1, Ordering::Relaxed);
+            #[cfg(feature = "diagnostics")]
+            crate::pipeline::note_why("a compute shader the list given leaves out".to_owned());
+            return true;
         }
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             return false;

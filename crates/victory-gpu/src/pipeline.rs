@@ -344,6 +344,45 @@ pub(crate) fn builder_quarantined(this: This) -> bool {
     is_builder(this) && *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_QUARANTINE").is_some_and(|v| v == "1"))
 }
 
+/// The compute shaders whose dispatches are left out, by hash as logs
+/// print it ([`leave_out`]).
+static LEFT_OUT: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+
+/// Dispatches left out since the start, and the compute pipelines the
+/// title made with a shader of the list.
+pub(crate) static LEFT_OUT_COUNT: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// Leaves out every dispatch of the compute shaders named by `hashes` (the
+/// 16 digits logs print): the effect they compute is not computed, and
+/// what reads its result reads what was there. Compute pipelines only: a
+/// hash of another stage's shader leaves out no draw, so that no list can
+/// take geometry away. Once, before the title makes its pipelines; false if
+/// a list was given already.
+pub fn leave_out(hashes: impl IntoIterator<Item = String>) -> bool {
+    let list: std::collections::HashSet<String> = hashes.into_iter().map(|h| h.to_ascii_lowercase()).collect();
+    tracing::info!(
+        shaders = list.len(),
+        "the dispatches of compute pipelines made of these shaders are left out for this run; no draw is"
+    );
+    LEFT_OUT.set(list).is_ok()
+}
+
+/// Whether a pipeline of `shaders` is left out: a compute pipeline
+/// (`graphics` false) with a shader of the list.
+#[cfg(windows)]
+fn left_out(shaders: &[Arc<Shader>], graphics: bool) -> bool {
+    !graphics
+        && LEFT_OUT
+            .get()
+            .is_some_and(|list| !list.is_empty() && shaders.iter().any(|s| list.contains(&s.hash)))
+}
+
+/// Whether the dispatches of the title's pipeline `this` are left out.
+#[cfg(windows)]
+pub(crate) fn is_left_out(this: This) -> bool {
+    !this.is_null() && pipeline(this).left_out
+}
+
 /// Whether the title's pipeline `this` is one of the structure builder's.
 #[cfg(windows)]
 pub(crate) fn is_builder(this: This) -> bool {
@@ -437,6 +476,9 @@ struct Pipeline {
     /// One of the ray-tracing structure builder's ([`Builder`]).
     #[cfg(windows)]
     builder: bool,
+    /// A compute pipeline whose dispatches are left out ([`leave_out`]).
+    #[cfg(windows)]
+    left_out: bool,
 }
 const _: () = assert!(offset_of!(Pipeline, packet) == 0x10);
 
@@ -583,6 +625,12 @@ fn hand_out(
 ) -> HRESULT {
     tracing::trace!(?shaders, "pipeline state");
     #[cfg(windows)]
+    let left_out = left_out(&shaders, graphics.is_some());
+    #[cfg(windows)]
+    if left_out && LEFT_OUT_COUNT[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64 {
+        tracing::info!(?shaders, "a compute pipeline whose dispatches are left out, as the list given asks");
+    }
+    #[cfg(windows)]
     let host = Arc::new(make::Pending::new(shaders.clone(), graphics));
     #[cfg(windows)]
     make::early(&host);
@@ -602,6 +650,8 @@ fn hand_out(
         host,
         #[cfg(windows)]
         builder,
+        #[cfg(windows)]
+        left_out,
         shaders,
         bound: std::sync::atomic::AtomicBool::new(false),
     });
@@ -960,6 +1010,21 @@ mod tests {
         if let Ok(done) = super::prepare(&[b"not a container", &[0u8; 64]], true, true, 2, &|_| {}) {
             assert_eq!(done, super::Prepared::default());
         }
+    }
+
+    /// Only compute pipelines made of a listed shader are left out: a
+    /// listed shader in a pipeline that draws leaves out no draw.
+    #[cfg(windows)]
+    #[test]
+    fn only_compute_pipelines_of_listed_shaders_are_left_out() {
+        let listed = super::shader("compute", b"a compute shader the list names");
+        let other = super::shader("compute", b"a compute shader it does not name");
+        assert!(!super::left_out(std::slice::from_ref(&listed), false), "no list yet");
+        assert!(super::leave_out([listed.hash.to_ascii_uppercase()]));
+        assert!(super::left_out(std::slice::from_ref(&listed), false));
+        assert!(!super::left_out(std::slice::from_ref(&other), false));
+        assert!(!super::left_out(&[other, listed], true), "never a draw");
+        assert!(!super::leave_out([String::new()]), "one list a run");
     }
 
     #[cfg(all(windows, feature = "diagnostics"))]

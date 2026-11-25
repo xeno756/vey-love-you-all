@@ -14,6 +14,18 @@ rem   lancer.cmd series-x test       montre ce qui serait lance, sans rien lance
 rem   (capture, profil et test peuvent se combiner ; preparer suit la version
 rem   choisie : la version diagnostic a son propre cache de shaders)
 rem
+rem Graphismes reduits (chaque option se teste seule, puis se combine) :
+rem   lancer.cmd series-x textures:2        textures du jeu sans leurs 2 premiers
+rem                                         niveaux de detail (1 a 4)
+rem   lancer.cmd series-x sans:vent         laisse de cote un groupe d'effets ;
+rem                                         plusieurs : sans:vent+particules
+rem   lancer.cmd series-x minimal           textures:2 et les groupes a faible
+rem                                         risque (particules, vent, flou-et-halos,
+rem                                         reflets)
+rem Un groupe est un fichier ..\victory-profils\<groupe>.txt : des morceaux de
+rem noms de shaders de calcul, un par ligne. Seuls des calculs sont laisses de
+rem cote, jamais un dessin : aucun modele ne disparait par ces listes.
+rem
 rem Le dossier du jeu vient de victory.toml, a la racine du depot (non suivi
 rem par git), ou du fichier que VICTORY_CONFIG designe. Chaque lancement garde
 rem son journal dans ..\victory-logs.
@@ -25,12 +37,19 @@ set "CAPTURE="
 set "PROFILE="
 set "PREPARE="
 set "DRY="
+set "TEXTURES="
+set "SANS="
 :args
 if "%~2"=="" goto args_done
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
 if /i "%~2"=="preparer" set "PREPARE=1"
 if /i "%~2"=="test" set "DRY=1"
+if /i "%~2"=="minimal" call :minimal
+for /f "tokens=1,* delims=:" %%a in ("%~2") do (
+    if /i "%%a"=="textures" set "TEXTURES=%%b"
+    if /i "%%a"=="sans" call :without "%%b"
+)
 shift /2
 goto args
 :args_done
@@ -78,7 +97,20 @@ rem Hors du depot : journaux et images viennent du jeu.
 for %%d in ("%ROOT%\..\victory-logs") do set "LOGS=%%~fd"
 set "STAMP=run"
 for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%t"
-set "NAME=%STAMP%-%CONSOLE%-%MODE%"
+rem Les graphismes reduits demandes : dans le nom du journal aussi.
+for %%d in ("%ROOT%\..\victory-profils") do set "PROFILS=%%~fd"
+set "TAG="
+set "BAD="
+set "VICTORY_SKIP_SHADERS="
+if defined TEXTURES (
+    set "VICTORY_TEXTURE_SKIP_MIPS=%TEXTURES%"
+    set "TAG=-textures%TEXTURES%"
+)
+if not defined SANS goto groups_done
+for %%g in (%SANS:+= %) do call :group %%g
+if defined BAD exit /b 1
+:groups_done
+set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
 set "OUT=%LOGS%\%NAME%.out.log"
@@ -92,6 +124,8 @@ if defined PREPARE (
     echo   console : %CONSOLE%
 )
 echo   journal : %LOG%
+if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
+if defined SANS echo   sans    : %SANS%
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
     set "VICTORY_CAPTURE_WORLD=1"
@@ -118,3 +152,31 @@ rem Le dernier journal, la ou les anciens lancements l'ecrivaient.
 copy /y "%LOG%" "%TEMP%\victory-err.log" >nul
 copy /y "%OUT%" "%TEMP%\victory-out.log" >nul
 endlocal
+exit /b 0
+
+rem Le profil minimal : les textures sans 2 niveaux, et les groupes a faible risque.
+:minimal
+if not defined TEXTURES set "TEXTURES=2"
+call :without "particules+vent+flou-et-halos+reflets"
+goto :eof
+
+rem Ajoute des groupes d'effets (separes par +) a ceux a laisser de cote.
+:without
+if defined SANS (set "SANS=%SANS%+%~1") else set "SANS=%~1"
+goto :eof
+
+rem Ajoute la liste d'un groupe d'effets a celles que le runtime lit.
+:group
+if not exist "%PROFILS%\%~1.txt" (
+    echo Groupe d'effets inconnu : %~1
+    echo   attendu : %PROFILS%\%~1.txt
+    set "BAD=1"
+    goto :eof
+)
+if defined VICTORY_SKIP_SHADERS (
+    set "VICTORY_SKIP_SHADERS=%VICTORY_SKIP_SHADERS%;%PROFILS%\%~1.txt"
+) else (
+    set "VICTORY_SKIP_SHADERS=%PROFILS%\%~1.txt"
+)
+set "TAG=%TAG%-sans-%~1"
+goto :eof

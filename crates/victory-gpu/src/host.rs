@@ -534,7 +534,8 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
          (the title's own work and waits); memory: the card {} MB in use of a budget of {} MB, {} MB of the PC's memory \
          shared with it; the process {} MB committed, {} MB of it in memory, the PC {} MB free; textures the title renders \
          to or shaders write: {} sizes asked for so far, the largest {}x{}, {} megapixels made in all; presented at {}x{}; \
-         textures the title fills kept without their first levels: {} so far, {} MB spared, {} made whole again for a copy",
+         textures the title fills kept without their first levels: {} so far, {} MB spared, {} made whole again for a copy; \
+         compute dispatches left out as asked: {} so far, of {} pipelines",
         limited_by(ms, parts, making),
         share(card),
         share(preparing),
@@ -554,7 +555,9 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
         PRESENTED[1].load(Ordering::Relaxed),
         crate::resource::LOWERED[0].load(Ordering::Relaxed),
         crate::resource::LOWERED[1].load(Ordering::Relaxed) >> 20,
-        crate::resource::LOWERED[2].load(Ordering::Relaxed)
+        crate::resource::LOWERED[2].load(Ordering::Relaxed),
+        crate::pipeline::LEFT_OUT_COUNT[0].load(Ordering::Relaxed),
+        crate::pipeline::LEFT_OUT_COUNT[1].load(Ordering::Relaxed)
     );
 }
 
