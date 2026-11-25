@@ -665,33 +665,7 @@ impl HostPipeline {
         }
         let variant = ms.mesh_variant()?;
         let host = host()?;
-
-        let (cs_stages, cs_root, cs_blob) =
-            root_for(host, &[(ms, Variant::MeshCompute, D3D12_SHADER_VISIBILITY_ALL)], true, shaders)?;
-        let cs = &variant.compute.host.dxil;
-        let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-            // SAFETY: a borrowed pointer the description never releases.
-            pRootSignature: unsafe { std::mem::transmute_copy(&cs_root) },
-            CS: bytecode(cs),
-            ..Default::default()
-        };
-        let name = super::library::name("mesh as compute", &cs_blob, &[cs], "");
-        let made = super::library::pipeline(
-            &name,
-            // SAFETY: the description points at live data.
-            |library, name| unsafe { library.LoadComputePipeline(name, &desc) },
-            // SAFETY: as above.
-            || unsafe { host.device.CreateComputePipelineState(&desc) },
-        );
-        let cs_pso = match made {
-            Ok(pso) => pso,
-            Err(e) => {
-                tracing::warn!(error = %e, ?shaders, "host compute pipeline of a mesh program refused");
-                host.log_messages();
-                return None;
-            }
-        };
-        crate::host::name(&cs_pso, || format!("{shaders:?} as compute"));
+        let compute = Self::mesh_compute_half(shaders, ms)?;
 
         let mut stages = vec![(ms, Variant::MeshVertex, D3D12_SHADER_VISIBILITY_VERTEX)];
         stages.extend(ps.map(|ps| (ps, Variant::Title, D3D12_SHADER_VISIBILITY_PIXEL)));
@@ -752,21 +726,57 @@ impl HostPipeline {
             rects: false,
             state: g.short(),
             as_compute: Some(Box::new(AsCompute {
-                pipeline: HostPipeline {
-                    compute: true,
-                    mesh: false,
-                    pso: cs_pso,
-                    root: cs_root,
-                    stages: cs_stages,
-                    name: format!("{shaders:?} as compute"),
-                    slots: 0,
-                    inputs: Vec::new(),
-                    rects: false,
-                    state: String::new(),
-                    as_compute: None,
-                },
+                pipeline: compute,
                 layout: variant.layout,
             })),
+        })
+    }
+
+    /// The compute pipeline that runs the mesh program `ms` and writes its
+    /// records: the half of [`Self::mesh_as_compute`] that depends on the
+    /// mesh program alone, so it can be made before a run
+    /// (`crate::pipeline::prepare`). `shaders` names the pipeline in logs.
+    pub(crate) fn mesh_compute_half(shaders: &[Arc<Shader>], ms: &Arc<Shader>) -> Option<HostPipeline> {
+        let variant = ms.mesh_variant()?;
+        let host = host()?;
+        let (stages, root, blob) =
+            root_for(host, &[(ms, Variant::MeshCompute, D3D12_SHADER_VISIBILITY_ALL)], true, shaders)?;
+        let cs = &variant.compute.host.dxil;
+        let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            // SAFETY: a borrowed pointer the description never releases.
+            pRootSignature: unsafe { std::mem::transmute_copy(&root) },
+            CS: bytecode(cs),
+            ..Default::default()
+        };
+        let name = super::library::name("mesh as compute", &blob, &[cs], "");
+        let made = super::library::pipeline(
+            &name,
+            // SAFETY: the description points at live data.
+            |library, name| unsafe { library.LoadComputePipeline(name, &desc) },
+            // SAFETY: as above.
+            || unsafe { host.device.CreateComputePipelineState(&desc) },
+        );
+        let pso = match made {
+            Ok(pso) => pso,
+            Err(e) => {
+                tracing::warn!(error = %e, ?shaders, "host compute pipeline of a mesh program refused");
+                host.log_messages();
+                return None;
+            }
+        };
+        crate::host::name(&pso, || format!("{shaders:?} as compute"));
+        Some(HostPipeline {
+            compute: true,
+            mesh: false,
+            pso,
+            root,
+            stages,
+            name: format!("{shaders:?} as compute"),
+            slots: 0,
+            inputs: Vec::new(),
+            rects: false,
+            state: String::new(),
+            as_compute: None,
         })
     }
 }

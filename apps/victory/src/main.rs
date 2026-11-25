@@ -5,6 +5,7 @@
 
 mod census;
 mod inspect;
+mod prepare;
 mod run;
 mod shader;
 mod translate;
@@ -105,6 +106,24 @@ enum Command {
         #[arg(last = true)]
         title_args: Vec<String>,
     },
+    /// Before a run: translate the title's shaders into the shader cache
+    /// (a run with this build then reads them from it) and, with the
+    /// options below, make the host pipelines that need no run. Looks in
+    /// the given files or folders, else in the configured game folder.
+    Prepare {
+        paths: Vec<PathBuf>,
+        /// Also make every compute pipeline, kept in the pipeline library.
+        #[arg(long)]
+        compute_pipelines: bool,
+        /// Also make the compute pipeline of every mesh program (on a card
+        /// without mesh shaders, where they run as compute): thousands of
+        /// them, several minutes.
+        #[arg(long)]
+        mesh_pipelines: bool,
+        /// Worker threads (default: the logical processors less two).
+        #[arg(long)]
+        jobs: Option<usize>,
+    },
     /// Show the resolved configuration and check it.
     Config,
 }
@@ -171,6 +190,12 @@ fn main() -> Result<()> {
             console,
             title_args: _,
         } => run::run(&exe, unimplemented, strict, execute, console),
+        Command::Prepare {
+            paths,
+            compute_pipelines,
+            mesh_pipelines,
+            jobs,
+        } => prepare::run(paths, compute_pipelines, mesh_pipelines, jobs),
         Command::Config => show_config(),
     }
 }

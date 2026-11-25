@@ -799,6 +799,146 @@ pub fn use_pipeline_cache(dir: std::path::PathBuf) {
     library::use_pipeline_cache(dir);
 }
 
+/// What [`prepare`] did with the containers it was given.
+#[cfg(windows)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Prepared {
+    /// Containers of a stage a run translates (vertex, pixel, mesh,
+    /// compute); the others are left alone.
+    pub shaders: usize,
+    /// Of them, those that translate, and those that do not.
+    pub translated: usize,
+    pub untranslated: usize,
+    /// Translations the shader cache held already.
+    pub cached: usize,
+    /// Host pipelines in the library now (made, or loaded from it: made by
+    /// an earlier run), and those the host refused.
+    pub pipelines: usize,
+    pub loaded: usize,
+    pub refused: usize,
+}
+
+/// The stage of the program a run takes from a container, as pipelines
+/// name stages.
+#[cfg(windows)]
+fn stage_of(container: &[u8]) -> Option<&'static str> {
+    use victory_shader::{Container, FourCC, HwStage};
+    let c = Container::parse(container).ok()?;
+    let programs = victory_shader::native_programs(c.part(FourCC::DXIL)?.data).ok()?;
+    // A container with a geometry or tessellation program is one of those
+    // stages', which a run does not translate.
+    if programs.iter().any(|p| !matches!(p.stage, HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs)) {
+        return None;
+    }
+    programs.iter().find_map(|p| match p.stage {
+        HwStage::Vs => Some("vertex"),
+        HwStage::Ps => Some("pixel"),
+        HwStage::Ms => Some("mesh"),
+        HwStage::Cs => Some("compute"),
+        _ => None,
+    })
+}
+
+/// Before a run, apart from any title: translates shader `containers` into
+/// the shader cache ([`crate::shader_cache`]), so that a run with this
+/// build reads the translations instead of making them, and makes the host
+/// pipelines that depend on one shader alone, which the pipeline library
+/// then holds: with `compute`, the compute pipelines; with `mesh`, on a
+/// host where mesh pipelines run as compute, the compute half of each mesh
+/// program. Vertex and pixel pipelines need the title's graphics state,
+/// known only in a run.
+///
+/// `jobs` threads work through the containers; `progress` is told now and
+/// then how many are done. The caches must be set
+/// ([`crate::shader_cache::use_shader_cache`], [`use_pipeline_cache`]).
+#[cfg(windows)]
+pub fn prepare(
+    containers: &[&[u8]],
+    compute: bool,
+    mesh: bool,
+    jobs: usize,
+    progress: &(dyn Fn(usize) + Sync),
+) -> Result<Prepared, String> {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    if crate::host::host().is_none() {
+        return Err("no host GPU: nothing is prepared".to_owned());
+    }
+    // A translation depends on it (a view index past a capped heap).
+    crate::descriptor::host::probe_view_limit();
+    let mesh = mesh && host::mesh_as_compute();
+    let (hits, _) = crate::shader_cache::counts();
+    let loaded = library::LOADED.load(Relaxed);
+    let next = AtomicUsize::new(0);
+    // Shaders, translated, untranslated, pipelines, refused.
+    let counts = [const { AtomicUsize::new(0) }; 5];
+    let count = |i: usize| {
+        counts[i].fetch_add(1, Relaxed);
+    };
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.max(1) {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Relaxed);
+                    let Some(&container) = containers.get(i) else {
+                        break;
+                    };
+                    if i.is_multiple_of(64) {
+                        progress(i);
+                    }
+                    let Some(stage) = stage_of(container) else {
+                        continue;
+                    };
+                    count(0);
+                    // The translation into the cache first, not kept in
+                    // memory. A failure of the system's (the cache's file
+                    // under this many threads: "insufficient system
+                    // resources", once in 1,850 shaders) is tried again.
+                    let translated = match crate::shader_cache::host_shader(container) {
+                        Ok(_) => true,
+                        Err(e) if e.contains("os error") => {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            crate::shader_cache::host_shader(container).is_ok()
+                        }
+                        Err(_) => false,
+                    };
+                    if !translated {
+                        count(2);
+                        continue;
+                    }
+                    count(1);
+                    if !(stage == "compute" && compute || stage == "mesh" && mesh) {
+                        continue;
+                    }
+                    // From the cache now.
+                    let shader = shader(stage, container);
+                    if shader.translated().is_none() {
+                        count(4);
+                        continue;
+                    }
+                    let shaders = [shader.clone()];
+                    let made = if stage == "mesh" {
+                        host::HostPipeline::mesh_compute_half(&shaders, &shader)
+                    } else {
+                        host::HostPipeline::new(&shaders, None)
+                    };
+                    count(if made.is_some() { 3 } else { 4 });
+                }
+            });
+        }
+    });
+    library::save(true);
+    let [shaders, translated, untranslated, pipelines, refused] = counts.map(|c| c.load(Relaxed));
+    Ok(Prepared {
+        shaders,
+        translated,
+        untranslated,
+        cached: (crate::shader_cache::counts().0 - hits) as usize,
+        pipelines,
+        loaded: (library::LOADED.load(Relaxed) - loaded) as usize,
+        refused,
+    })
+}
+
 /// Saves the pipeline cache now if anything was added (at the end of a run).
 #[cfg(windows)]
 pub fn save_pipeline_cache() {
@@ -807,6 +947,19 @@ pub fn save_pipeline_cache() {
 
 #[cfg(test)]
 mod tests {
+    /// Bytes that are no shader container are left alone by a
+    /// preparation, and nothing is counted for them.
+    #[cfg(windows)]
+    #[test]
+    fn a_preparation_leaves_what_is_no_shader_alone() {
+        assert_eq!(super::stage_of(&[]), None);
+        assert_eq!(super::stage_of(b"DXBC, but no container at all"), None);
+        // (Without a host card there is nothing to prepare with.)
+        if let Ok(done) = super::prepare(&[b"not a container", &[0u8; 64]], true, true, 2, &|_| {}) {
+            assert_eq!(done, super::Prepared::default());
+        }
+    }
+
     #[cfg(all(windows, feature = "diagnostics"))]
     #[test]
     fn skip_hashes_accepts_full_hashes_only() {
