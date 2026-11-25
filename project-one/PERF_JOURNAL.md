@@ -146,6 +146,29 @@ Banc d'essai versionné : `project-one\banc.ps1` (lance, appuie jusqu'au monde, 
 résume : médiane, 95e et 99e centiles, images de plus de 50 et de 200 ms, pipelines refusés,
 carte perdue).
 
+### Le processeur : comparaisons confiées à la carte (25/11, 16 h 50 à 17 h 40)
+
+Avant chaque image, le processeur prenait une copie de 380 Mo de tampons du jeu pour trouver
+ensuite ce que les shaders y avaient écrit : 349 Mo de ces copies font entre 1 et 16 Mio, sous
+le seuil à partir duquel le runtime les met sur la carte (16 Mio sur une carte de 6 Go).
+
+| Réglage ajouté à `rapide` (version normale, mêmes plans) | Médiane | 95 % sous | 99 % sous | Processeur + carte + recopie | Image (captures du runtime) |
+|---|---|---|---|---|---|
+| aucun (référence de 16 h 32) | 334 ms | 411 | 839 | 110 + 168 + 54 | cheveux faux |
+| copies de 1 Mio et plus sur la carte (`a867de6`, désormais dans `rapide`) | **318 ms** | 430 | **537** | **78** + 207 + **34** | **cheveux justes**, quelques taches bleues sur un mur |
+| les mêmes + relais | 293 ms | 354 | 495 | 81 + 208 + 56 | **taches et mosaïques partout** |
+| les mêmes + relais + fenêtres et fusion d'indirects, attentes allégées | 265 ms | 300 | 377 | 71 + 189 + 50 | **taches et mosaïques partout** |
+| les mêmes sans relais + fenêtres, fusion, attentes allégées (diagnostic) | 350 ms contre 354 | — | — | — | plus de taches bleues |
+
+Retenu : les copies sur la carte, sans relais ni réglages de synchronisation, qui abîment
+l'image. La carte devient le premier poste (207 ms par image).
+
+Ce que la carte fait de ces 207 ms (mesure par commande du 25/11, 12 h 01) : 136 ms dans
+4 549 dessins indirects de programmes mesh par image, soit 30 µs chacun ; chaque dessin passe
+par 4 à 6 synchronisations de la carte (bornage des arguments, conversion en arguments de
+calcul et de dessin, calcul des enregistrements, dessin). C'est le prochain chantier : grouper
+ces dessins pour ne plus synchroniser la carte à chacun.
+
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
@@ -164,4 +187,5 @@ premier `rapide`, 335 ms maintenant.
 | 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
 | 25/11 | `2d8ba5a` | 5, recopie | ne pas donner `vitesse:2` | image noire avec `VICTORY_COPY_BACK_ONLY_READBACK` | image présente avec `VICTORY_COPY_BACK_SMALL_KB=1024`, environ 250 ms contre 400 | carte perdue une fois après 72 s : expérimental |
 | 25/11 | `12e7c2b` | 3, pipelines | `VICTORY_BARYCENTRIC_GS=0` | 3 à 8 pipelines refusés, 42 dessins par image perdus | 0 refusé, aucun dessin perdu pour refus ; même temps d'image | cheveux dessinés mais mal rendus |
+| 25/11 | `a867de6` | 5, processeur | `VICTORY_CARD_BUFFERS_MIN_MB=16` | processeur 110 ms, recopie 54, 99 % sous 839 ms | processeur 78, recopie 34, 99 % sous 537 ; médiane 318 | la carte prend 1 Go de plus pour ces copies (les textures en ont moins) |
 | 25/11 | `fd37912` | 2, figement | `sortie:960x540` le redonne | `maximum` : resté sur l'écran des licences | **non mesuré** ; `maximum` demande 1280 × 720, la taille vue en jeu | `maximum` laisse 8 groupes d'effets de côté : image possiblement fausse |
