@@ -1467,8 +1467,17 @@ pub(crate) fn room_in(pool: u64) -> bool {
     let filled = KINDS[1].load(Relaxed);
     POOL[0].store(pool, Relaxed);
     POOL[1].store(filled, Relaxed);
-    PRESSURE.store(pressure(filled, pool), Relaxed);
+    PRESSURE.store(if pressure_on() { pressure(filled, pool) } else { 0 }, Relaxed);
     filled < pool
+}
+
+/// `VICTORY_STREAM_PRESSURE=0`: new host copies leave out what the run's
+/// own setting says and no more, however full their pool is ([`pressure`]
+/// off; the pool and the progress every frame is owed stay).
+#[cfg(windows)]
+fn pressure_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_STREAM_PRESSURE").is_none_or(|v| v != "0"))
 }
 
 /// `VICTORY_STREAM_POOL=0`: [`room`] by the card's whole use, as before
