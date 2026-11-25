@@ -33,6 +33,9 @@ pub(crate) struct Pending {
     /// whether a draw or dispatch has requested it yet.
     key: String,
     used: AtomicBool,
+    /// The last title frame a draw or dispatch asked for it while it was
+    /// not made: the workers take the one asked for last first.
+    wanted: AtomicU64,
 }
 
 // SAFETY: D3D12 objects are free-threaded; the graphics state (whose input
@@ -56,6 +59,7 @@ impl Pending {
             made: OnceLock::new(),
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
+            wanted: AtomicU64::new(0),
         }
     }
 
@@ -124,8 +128,10 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         super::library::note_used(&p.key);
     }
     if p.made.get().is_none() {
+        let frame = crate::frame::current();
+        p.wanted.store(frame, Ordering::Relaxed);
         start(p, REQUESTED);
-        wait(p, crate::frame::current());
+        wait(p, frame);
     }
     p.made.get()?.as_ref()
 }
@@ -247,8 +253,24 @@ impl Queue {
         Some(prev == NOT_QUEUED)
     }
 
+    /// The next pipeline to make: of those draws asked for, the one asked
+    /// for in the latest frame (the first queued of those), then the ones
+    /// started at creation in their order.
+    ///
+    /// The requested ones were taken in the order they were first asked
+    /// for. The title's first world frame asks for over 1,200 at once and a
+    /// card makes three or four a second: a pipeline a later shot of the
+    /// cutscene needed waited behind hundreds no draw used any more, and
+    /// its draws were dropped for minutes (run of 24/11: 649 to 4,180 draws
+    /// a frame without a host pipeline for four and a half minutes).
     fn pop(&mut self) -> Option<Arc<Pending>> {
-        let p = self.requested.pop_front().or_else(|| {
+        let latest = self
+            .requested
+            .iter()
+            .enumerate()
+            .max_by_key(|(i, p)| (p.wanted.load(Ordering::Relaxed), std::cmp::Reverse(*i)))
+            .map(|(i, _)| i);
+        let p = latest.and_then(|i| self.requested.remove(i)).or_else(|| {
             // An early entry can have been promoted and claimed already.
             std::iter::from_fn(|| self.early.pop_front())
                 .find(|p| p.queue_state.load(Ordering::Relaxed) == EARLY)
@@ -398,6 +420,24 @@ mod tests {
         assert!(Arc::ptr_eq(&queue.pop().unwrap(), &promoted));
         assert_eq!(queue.push(&promoted, REQUESTED), None);
         assert!(Arc::ptr_eq(&queue.pop().unwrap(), &earlier));
+        assert!(queue.pop().is_none());
+    }
+
+    /// Of the pipelines draws wait for, the workers take the one a draw
+    /// asked for in the latest frame, and the first queued among equals.
+    #[test]
+    fn the_pipeline_asked_for_last_is_made_first() {
+        let pipelines: Vec<Arc<Pending>> = (0..4).map(|_| Arc::new(Pending::new(Vec::new(), None))).collect();
+        let mut queue = Queue::new();
+        for (p, frame) in pipelines.iter().zip([5u64, 9, 9, 2]) {
+            p.wanted.store(frame, Ordering::Relaxed);
+            assert_eq!(queue.push(p, REQUESTED), Some(true));
+        }
+        // A draw of a later frame asks again for the one first queued.
+        pipelines[3].wanted.store(12, Ordering::Relaxed);
+        for expected in [3, 1, 2, 0] {
+            assert!(Arc::ptr_eq(&queue.pop().unwrap(), &pipelines[expected]), "pipeline {expected}");
+        }
         assert!(queue.pop().is_none());
     }
 }
