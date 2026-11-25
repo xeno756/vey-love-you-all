@@ -37,12 +37,22 @@ fn files(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
 }
 
 /// Every distinct shader container of `file`, cut to its own length (the
-/// bytes a title passes when it makes a pipeline).
-fn containers_of(file: &Path, seen: &mut HashSet<[u8; 32]>, out: &mut Vec<Vec<u8>>) {
+/// bytes a title passes when it makes a pipeline), and for those stored
+/// with a name, the hash logs name the shader by and that name.
+fn containers_of(
+    file: &Path,
+    seen: &mut HashSet<[u8; 32]>,
+    out: &mut Vec<Vec<u8>>,
+    names: &mut Vec<(String, String)>,
+) {
     let Ok(data) = std::fs::read(file) else {
         return;
     };
     for source in sources(&data) {
+        let name = match &source {
+            crate::shader::Source::Packed(record) => record.name.map(str::to_owned),
+            crate::shader::Source::Raw { .. } => None,
+        };
         let Some(bytes) = source.bytes() else {
             continue;
         };
@@ -54,20 +64,38 @@ fn containers_of(file: &Path, seen: &mut HashSet<[u8; 32]>, out: &mut Vec<Vec<u8
         let Some(container) = bytes.get(..total) else {
             continue;
         };
-        if seen.insert(*blake3::hash(container).as_bytes()) {
+        let hash = blake3::hash(container);
+        if seen.insert(*hash.as_bytes()) {
             out.push(container.to_vec());
+            if let Some(name) = name {
+                names.push((hash.to_hex()[..16].to_owned(), name));
+            }
         }
     }
 }
 
-pub fn run(paths: Vec<PathBuf>, compute: bool, mesh: bool, jobs: Option<usize>) -> Result<()> {
+/// The file, in the cache folder, that lists each named shader as logs
+/// name it: its hash, then its name in the title's files.
+pub(crate) const NAMES_FILE: &str = "shader-names.txt";
+
+pub fn run(paths: Vec<PathBuf>, compute: bool, mesh: bool, jobs: Option<usize>, names_only: bool) -> Result<()> {
     let cfg = victory_core::Config::load()?;
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
     let started = Instant::now();
     let files = files(paths)?;
-    let (mut seen, mut containers) = (HashSet::new(), Vec::new());
+    let (mut seen, mut containers, mut names) = (HashSet::new(), Vec::new(), Vec::new());
     for file in &files {
-        containers_of(file, &mut seen, &mut containers);
+        containers_of(file, &mut seen, &mut containers, &mut names);
+    }
+    // What logs call a shader by its hash, by name: for reading logs and
+    // for lists of shaders by name.
+    names.sort_by(|a, b| a.1.cmp(&b.1));
+    let listed: String = names.iter().map(|(hash, name)| format!("{hash} {name}\n")).collect();
+    let names_path = cfg.cache_dir.join(NAMES_FILE);
+    std::fs::write(&names_path, listed).with_context(|| format!("writing {}", names_path.display()))?;
+    println!("names          {} shaders listed by hash and name in {}", names.len(), names_path.display());
+    if names_only {
+        return Ok(());
     }
     let bytes: usize = containers.iter().map(Vec::len).sum();
     println!(

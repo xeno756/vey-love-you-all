@@ -123,6 +123,10 @@ enum Command {
         /// Worker threads (default: the logical processors less two).
         #[arg(long)]
         jobs: Option<usize>,
+        /// Only list the shaders by hash and name (`shader-names.txt` in
+        /// the cache folder): nothing is translated.
+        #[arg(long)]
+        names_only: bool,
     },
     /// Show the resolved configuration and check it.
     Config,
@@ -195,7 +199,8 @@ fn main() -> Result<()> {
             compute_pipelines,
             mesh_pipelines,
             jobs,
-        } => prepare::run(paths, compute_pipelines, mesh_pipelines, jobs),
+            names_only,
+        } => prepare::run(paths, compute_pipelines, mesh_pipelines, jobs, names_only),
         Command::Config => show_config(),
     }
 }
