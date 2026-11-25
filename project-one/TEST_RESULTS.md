@@ -1,4 +1,4 @@
-# Résultats des tests (24/11/2026, sur cette machine)
+# Résultats des tests (24 et 25/11/2026, sur cette machine)
 
 Aucun test ne lance PROJECT GAME. Les tests « GPU » tournent sur la RX 5600 XT, ou sur WARP
 quand ils le demandent.
@@ -22,7 +22,19 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | 2. Fork à jour, sans nos changements | `a803c87` | 88 s | 504 | 0 | 8 |
 | 3. PROJECT ONE | `a803c87` + 3 commits | 38 s (incrémentale), 0 avertissement | 511 | 0 | 8 |
 | 4. PROJECT ONE avec le remplacement des mesh shaders | `a803c87` + 5 commits de code | incrémentale, 0 avertissement | 520 | 0 | 8 |
-| 5. **PROJECT ONE après la session performances** | `a803c87` + 12 commits de code | incrémentale, 0 avertissement | **526** | **0** | 9 (dont le banc d'essai, lancé à la main) |
+| 5. PROJECT ONE après la session performances | `a803c87` + 12 commits de code | incrémentale, 0 avertissement | 526 | 0 | 9 (dont le banc d'essai, lancé à la main) |
+| 6. **PROJECT ONE avec les graphismes réduits (25/11)** | `5db5360` | incrémentale, 0 avertissement | **532** | **0** | 9 |
+
+### Les 6 tests ajoutés le 25/11
+
+| Test | Module | Vérifie | Sur la carte ? |
+|---|---|---|---|
+| `a_frame_is_put_down_to_what_took_half_of_it` | victory-gpu | ce que la ligne `frame account` désigne comme limite d'une image | non |
+| `only_compressed_textures_with_levels_to_spare_are_lowered` | victory-gpu | quelles textures sont réduites et de combien : compressées, 2D, jamais sous 128 pixels, toujours en blocs entiers, jamais une texture de rendu | non |
+| `views_of_a_lowered_texture_take_the_levels_it_has` | victory-gpu | les vues du jeu sont refaites sur les niveaux présents | non |
+| `a_lowered_texture_is_made_whole_for_a_copy` | victory-gpu | une texture réduite redevient entière quand le jeu la recopie, et la vue qui la montrait est refaite | **oui** |
+| `only_compute_pipelines_of_listed_shaders_are_left_out` | victory-gpu | une liste ne laisse de côté que des pipelines de calcul, jamais un dessin | non |
+| `entries_name_shaders_by_hash_or_by_part_of_their_name` | victory | lecture des listes de groupes : noms partiels, numéros, commentaires | non |
 
 - **Clippy** (`-D warnings`) sur tout le dépôt (`cargo clippy --workspace --all-targets`), et
   avec la fonction `diagnostics` pour `victory`, `victory-gpu` et `victory-hle` : aucune erreur.
@@ -37,15 +49,15 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | `emit::rect::tests::rectangles_are_drawn_whole` | validateur DXIL 1.6 du SDK Windows trop ancien | `VICTORY_DXIL` vers DXC 1.9 |
 | `emit::rect::tests::the_rectangle_stage_is_a_geometry_shader` | même cause | même chose |
 
-## Par module (mesure 2 → mesure 5)
+## Par module (mesure 2 → mesure 6)
 
 | Binaire de test | Fork à jour | PROJECT ONE | Écart |
 |---|---|---|---|
-| victory (app) | 1 | 1 | — |
+| **victory (app)** | 1 | **2** | **+1 test ajouté** (25/11) |
 | victory_core | 11 | 11 | — |
 | victory_formats | 24 (+4 ignorés) | 24 (+4 ignorés) | — |
 | victory_game | 3 | 3 | — |
-| **victory_gpu** | 112 (+1 ignoré) | **127** (+2 ignorés) | **+15 tests ajoutés**, +1 banc d'essai |
+| **victory_gpu** | 112 (+1 ignoré) | **132** (+2 ignorés) | **+20 tests ajoutés** (15 le 24/11, 5 le 25/11), +1 banc d'essai |
 | **victory_hle** | 96 | **98** | **+2 tests ajoutés** |
 | no_dll_planting | 1 | 1 | — |
 | **victory_loader** | 24 | **22** | −2 : tests du code repris de XCL, retirés avec lui |
@@ -91,6 +103,7 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | Traduction de tous les shaders du jeu, sans cache | `victory translate <archive des shaders> --jobs 12` | 26 084 programmes en 2 min 40 s |
 | Préparation, cache vide | `victory prepare --compute-pipelines` | 25 466 shaders traduits et 2 723 pipelines de calcul en 9 min 41 s ; 3 min 21 s quand les pipelines sont déjà dans la bibliothèque |
 | Préparation des programmes mesh | `victory prepare --mesh-pipelines` | 8 762 programmes mesh traduits en calcul, 8 762 pipelines acceptés par la carte, 0 refusé, en 2 min 25 s |
+| Préparation complète, pipelines déjà dans la bibliothèque (25/11) | `victory prepare --compute-pipelines --mesh-pipelines` | 25 563 étapes : 25 467 traduites, 96 non traduisibles ; 11 486 pipelines dans la bibliothèque, 0 refusé ; 3 min 06 s |
 
 Détails et lecture : [docs/technical/06-performances.md](docs/technical/06-performances.md).
 

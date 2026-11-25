@@ -166,6 +166,19 @@ c'est l'intérêt de les essayer un par un.
 `preparer` a été refait pour les deux versions du runtime compilées le 25/11. Il est à refaire
 après chaque recompilation.
 
+### Interrupteurs du fork, non essayés ici
+
+Ils existent déjà dans le fork et se règlent avant d'appeler le lanceur, un seul à la fois :
+
+| Variable | Effet attendu | Risque |
+|---|---|---|
+| `VICTORY_LATE_WAIT=1` | la carte travaille pendant que le processeur prépare l'envoi suivant, au lieu d'attendre | mode expérimental du fork, désactivé par défaut |
+| `VICTORY_CARD_BUFFERS=0` | les copies de tampons du jeu quittent la mémoire vidéo (environ 490 Mo) | accès plus lents à ces tampons |
+
+```powershell
+$env:VICTORY_LATE_WAIT = "1"; project-one\lancer.cmd series-x
+```
+
 ## 6. Ce qui n'a pas été fait
 
 - Aucun essai en jeu de ce qui est décrit ici.
