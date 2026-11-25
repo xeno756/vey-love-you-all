@@ -146,7 +146,7 @@ set "VICTORY_SKIP_SHADERS="
 if defined SORTIE (
     set "VICTORY_OUTPUT_SIZE=%SORTIE%"
     set "VICTORY_DISPLAY_MODE=%SORTIE%"
-    set "TAG=-sortie%SORTIE%"
+    set "TAG=%TAG%-sortie%SORTIE%"
 )
 if defined ECHELLE (
     set "VICTORY_RENDER_SCALE=%ECHELLE%"
