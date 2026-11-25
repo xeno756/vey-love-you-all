@@ -24,6 +24,8 @@ laissés de côté) sont écrits et testés hors jeu, pas encore essayés en jeu
   [docs/technical/07-graphismes-minimaux.md](docs/technical/07-graphismes-minimaux.md).
 - Définition réelle en 1080p, ScarlettPort, cinématique d'introduction :
   [docs/technical/08-resolution-scarlettport-intro.md](docs/technical/08-resolution-scarlettport-intro.md).
+- Les plantages du 25/11 et leurs causes :
+  [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
 - Où en est le travail et comment le reprendre : [REPRISE.md](REPRISE.md).
 - Le remplacement des mesh shaders :
   [docs/technical/04-shaders-ecran-noir.md](docs/technical/04-shaders-ecran-noir.md), section 3 bis.
