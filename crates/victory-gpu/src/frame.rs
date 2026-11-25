@@ -23,9 +23,6 @@ const E_INVALIDARG: HRESULT = 0x8007_0057_u32 as HRESULT;
 
 /// What a wait returns when its time is up first.
 const TIMEOUT: HRESULT = S_FALSE;
-/// What `GetFrameStatisticsX` answers for a frame not flipped yet.
-const E_FAIL: HRESULT = 0x8000_4005_u32 as HRESULT;
-const E_INVALIDARG: HRESULT = 0x8007_0057_u32 as HRESULT;
 /// The frame-origin event: the one that starts frames and makes tokens.
 const ORIGIN: u32 = 0;
 /// Make the frame's token even if the wait times out (the title starts the
