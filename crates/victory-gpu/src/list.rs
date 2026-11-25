@@ -1983,6 +1983,11 @@ extern "system" fn execute_indirect(
 pub(crate) fn take_indirect() -> u64 {
     INDIRECT.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
+/// Indirect executions dropped since the last [`take_indirect`], left in
+/// place (the frame log reads it between two takes).
+pub(crate) fn indirect_now() -> u64 {
+    INDIRECT.load(std::sync::atomic::Ordering::Relaxed)
+}
 static INDIRECT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn count_dispatch() {
     DISPATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

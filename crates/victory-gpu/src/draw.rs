@@ -580,6 +580,32 @@ fn no_upload_run(run: u64, waited: u64, uploaded: u64) -> u64 {
     if waited > 0 && uploaded == 0 { run + 1 } else { 0 }
 }
 
+/// For the frame log: the texture queue's uploads so far and their bytes,
+/// the slots waiting, the frames without an upload (now in a row, the
+/// longest run, the stalls), the textures made past their pool, and the
+/// pool (its size, what it holds, the levels new copies leave out).
+pub(crate) fn stream_stats() -> [u64; 10] {
+    let load = |a: &AtomicU64| a.load(Ordering::Relaxed);
+    [
+        load(&HEAP_TEXTURES),
+        load(&HEAP_TEXTURE_BYTES),
+        load(&HEAP_TEXTURES_WAITING),
+        load(&NO_UPLOAD[0]),
+        load(&NO_UPLOAD[1]),
+        load(&NO_UPLOAD[2]),
+        load(&FORCED[2]),
+        load(&crate::resource::POOL[0]),
+        load(&crate::resource::POOL[1]),
+        u64::from(crate::resource::PRESSURE.load(Ordering::Relaxed)),
+    ]
+}
+
+/// Draws and dispatches dropped since the last [`take_dropped`], left in
+/// place (the frame log reads it between two takes).
+pub(crate) fn dropped_now() -> u64 {
+    DROPPED.load(Ordering::Relaxed)
+}
+
 /// Frames after a whole upload of a texture picked by index at which its
 /// memory is looked at again, each counted from the look before.
 const RECHECK_FRAMES: [u64; 5] = [4, 12, 40, 120, 400];

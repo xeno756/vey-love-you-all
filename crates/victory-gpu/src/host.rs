@@ -800,6 +800,7 @@ fn create() -> windows::core::Result<Host> {
             adapter,
         };
         profile(&host);
+        host.caps();
         Ok(host)
     }
 }
@@ -3650,7 +3651,56 @@ fn hand_back(back: &[Declared]) {
     }
 }
 
+/// What the card can do, of what the title's pipelines ask for
+/// ([`Host::caps`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Caps {
+    /// `D3D12_OPTIONS3.BarycentricsSupported`: pixel shaders may read
+    /// `SV_Barycentrics`.
+    pub(crate) barycentrics: bool,
+    pub(crate) view_instancing_tier: i32,
+    pub(crate) resource_binding_tier: i32,
+    pub(crate) tiled_resources_tier: i32,
+    pub(crate) conservative_rasterization_tier: i32,
+    pub(crate) raytracing_tier: i32,
+    /// The card shares the PC's memory (an integrated one).
+    pub(crate) uma: bool,
+}
+
 impl Host {
+    /// The card's capabilities, asked once and logged then: a pipeline it
+    /// refuses is told with the one it lacks (`pipeline::host`), not as
+    /// "unsupported".
+    pub(crate) fn caps(&self) -> Caps {
+        static CAPS: OnceLock<Caps> = OnceLock::new();
+        *CAPS.get_or_init(|| {
+            let mut o = D3D12_FEATURE_DATA_D3D12_OPTIONS::default();
+            let mut o3 = D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
+            let mut o5 = D3D12_FEATURE_DATA_D3D12_OPTIONS5::default();
+            let mut arch = D3D12_FEATURE_DATA_ARCHITECTURE1::default();
+            // SAFETY: each query writes its own structure of the given
+            // size; one the system does not know leaves it at its defaults.
+            unsafe {
+                let d = &self.device;
+                let _ = d.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, (&raw mut o).cast(), size_of_val(&o) as u32);
+                let _ = d.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, (&raw mut o3).cast(), size_of_val(&o3) as u32);
+                let _ = d.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, (&raw mut o5).cast(), size_of_val(&o5) as u32);
+                let _ = d.CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, (&raw mut arch).cast(), size_of_val(&arch) as u32);
+            }
+            let caps = Caps {
+                barycentrics: o3.BarycentricsSupported.as_bool(),
+                view_instancing_tier: o3.ViewInstancingTier.0,
+                resource_binding_tier: o.ResourceBindingTier.0,
+                tiled_resources_tier: o.TiledResourcesTier.0,
+                conservative_rasterization_tier: o.ConservativeRasterizationTier.0,
+                raytracing_tier: o5.RaytracingTier.0,
+                uma: arch.UMA.as_bool(),
+            };
+            tracing::info!(?caps, "host capabilities (D3D12 OPTIONS, OPTIONS3, OPTIONS5, ARCHITECTURE1)");
+            caps
+        })
+    }
+
     /// Whether the host runs mesh shaders at shader model 6.6 (translated
     /// mesh shaders need both); logged once.
     pub(crate) fn mesh_shaders(&self) -> bool {
@@ -6941,6 +6991,18 @@ impl Meter {
         {
             self.copy_stats_frames += 1;
         }
+        // (PROJECT ONE) Frame by frame, before the counters are taken below.
+        crate::framelog::frame(
+            [
+                SUBMISSION_US[0].load(Ordering::Relaxed),
+                SUBMISSION_US[1].load(Ordering::Relaxed),
+                COPY_BACK[0].load(Ordering::Relaxed),
+                crate::draw::drawn(),
+                crate::draw::dropped_now(),
+                crate::list::indirect_now(),
+            ],
+            crate::pipeline::making(),
+        );
         let elapsed = self.since.elapsed();
         if elapsed < std::time::Duration::from_secs(1) {
             return;
@@ -6964,6 +7026,7 @@ impl Meter {
         });
         let dropped = crate::draw::take_dropped() as f64 / frames;
         let indirect = crate::list::take_indirect() as f64 / frames;
+        crate::framelog::counters_taken();
         let mesh_largest = MESH_GROUPS[0].swap(0, Ordering::Relaxed);
         let mesh_groups = MESH_GROUPS[1].swap(0, Ordering::Relaxed) as f64 / frames;
         tracing::info!(
@@ -7132,6 +7195,7 @@ impl Meter {
                 objects = crate::descriptor::host::OBJECT_TEXTURE_SLOTS.load(Ordering::Relaxed)
             );
             frame_account_line(ms, [cpu, gpu, back_ms], crate::pipeline::making());
+            crate::framelog::line();
             crate::memcopy::log(frames);
             #[cfg(feature = "diagnostics")]
             {
@@ -7153,7 +7217,10 @@ impl Meter {
             self.caption = Some(buffer);
         }
         let Some(caption) = &self.caption else { return };
-        let text = format!(" | VIctory {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame");
+        let text = format!(
+            " | VIctory {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame{}",
+            crate::framelog::caption()
+        );
         let mut text: Vec<u16> = caption.iter().copied().chain(text.encode_utf16()).collect();
         text.push(0);
         // Setting the text waits for the window's thread (a title thread,
