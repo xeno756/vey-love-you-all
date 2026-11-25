@@ -78,7 +78,8 @@ rem                                         et dans les petites zones : 40 %% pl
 rem                                         rapide le 25/11, mais la carte a ete
 rem                                         perdue une fois apres 72 s (experimental)
 rem   lancer.cmd series-x rapide relais     les commandes partent vers la carte sans
-rem                                         attendre les precedentes (10 %% de mieux)
+rem                                         attendre les precedentes : 10 %% de mieux,
+rem                                         mais l'image se couvre de taches
 rem
 rem Le dossier du jeu vient de victory.toml, a la racine du depot (non suivi
 rem par git), ou du fichier que VICTORY_CONFIG designe. Chaque lancement garde
@@ -230,6 +231,7 @@ if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de d
 if defined SANS echo   sans    : %SANS%
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
+if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
 if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
@@ -293,6 +295,17 @@ rem n'execute pas encore : calcule sans lui, il couvre l'image de taches roses e
 rem bleues (captures du 25/11, 14 h 31). Laisse de cote, les taches partent, les
 rem murs restent, les interieurs sont plus sombres, et la carte gagne 90 ms.
 call :without "eclairage-indirect"
+call :card_copies
+goto :eof
+
+rem Les copies des tampons du jeu de 1 Mio et plus dans la memoire de la carte,
+rem et ce que les shaders y ecrivent trouve par la carte (sans cela le
+rem processeur compare 380 Mo par image). Mesure le 25/11 : processeur 113 ms
+rem -> 80, recopie 55 -> 34, 99 %% des images sous 444 ms au lieu de 839, et
+rem les cheveux justes. La carte y passe 35 ms de plus.
+:card_copies
+if not defined VICTORY_CARD_BUFFERS_MIN_MB set "VICTORY_CARD_BUFFERS_MIN_MB=1"
+if not defined VICTORY_CARD_BUFFERS_MB set "VICTORY_CARD_BUFFERS_MB=1024"
 goto :eof
 
 rem Le profil maximum : tout ce qui peut etre reduit sans retirer un dessin.
@@ -302,6 +315,7 @@ rem depasse l'ecran des licences.)
 set "PROFIL=maximum"
 call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
+call :card_copies
 call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
 goto :eof
 
@@ -320,7 +334,8 @@ if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_SMALL_KB=1024"
 goto :eof
 
 rem Les commandes partent vers la carte sans attendre la fin des precedentes
-rem (le relais du fork) : environ 10 %% d'images en plus le 25/11.
+rem (le relais du fork) : environ 10 %% d'images en plus le 25/11, mais l'image
+rem se couvre de taches et de mosaiques (captures du 25/11, 17 h 15).
 :relay
 set "VICTORY_RELAY=1"
 set "RELAIS=1"
