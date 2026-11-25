@@ -987,17 +987,20 @@ pub extern "system" fn XMemGetWorkingSetStatistics(_which: u32, out: *mut Workin
         gpu_optimal_limit: gpu_optimal,
         ..Default::default()
     };
-    // What the title is told, logged at the first asking and at every
-    // 1,024th, with what the whole process has committed beside it.
+    // What the title is told, logged at the first eight askings and at
+    // every 256th (how often it asks says whether it waits on the answer),
+    // with the physical pages in it and what the whole process has
+    // committed beside it.
     static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let asked = ASKED.fetch_add(1, Ordering::Relaxed);
-    if asked.is_multiple_of(1024) {
+    if asked < 8 || asked.is_multiple_of(256) {
         tracing::info!(
             asked = asked + 1,
             which = _which,
             limit_mb = stats.title_limit >> 20,
             used_mb = stats.title_used >> 20,
             own_mb = own >> 20,
+            pages_mb = (physical().pages.len() * PAGE) >> 20,
             process_mb = counters.PagefileUsage >> 20,
             "the title asks how much memory it uses"
         );
