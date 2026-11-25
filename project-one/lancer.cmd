@@ -63,6 +63,10 @@ rem   lancer.cmd series-x maximum           720p, textures:3 et tous les groupes
 rem                                         d'effets sauf volumetrie (sans elle
 rem                                         l'image peut etre noire) : reflets,
 rem                                         ombres et eclairage peuvent etre faux
+rem   lancer.cmd series-x rapide qualite-s  en plus, le jeu prend ses propres
+rem                                         reglages bas (niveau de detail des
+rem                                         modeles, ombres, effets : ceux de la
+rem                                         Series S), experimental
 rem   (540p : le jeu est reste sur l'ecran des licences au lancement du 25/11 a
 rem   10 h 13 ; aucun profil ne l'utilise plus)
 rem   lancer.cmd series-x rapide vitesse    en plus, moins de copies et de calculs
@@ -91,6 +95,7 @@ set "SORTIE="
 set "ECHELLE="
 set "WATCHDOG="
 set "VITESSE="
+set "QUALITE="
 set "PROFIL="
 :args
 if "%~2"=="" goto args_done
@@ -107,6 +112,7 @@ if /i "%~2"=="pipelines-du-jeu" set "VICTORY_PRECOMPILED_GRAPHICS=1"
 if /i "%~2"=="minimal" call :minimal
 if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
 if /i "%~2"=="sans-synchro" set "VICTORY_PRESENT_SYNC=0"
+if /i "%~2"=="qualite-s" call :quality_s
 if /i "%~2"=="1080p" call :size 1920x1080
 if /i "%~2"=="720p" call :size 1280x720
 if /i "%~2"=="540p" call :size 960x540
@@ -196,6 +202,7 @@ rem Un profil donne son nom au journal : la liste de ses reglages ferait un
 rem chemin plus long que Windows n'en accepte.
 if defined PROFIL set "TAG=-scarlettport-%PROFIL%"
 if defined VITESSE set "TAG=%TAG%-vitesse%VITESSE%"
+if defined QUALITE set "TAG=%TAG%-qualite-%QUALITE%"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -215,6 +222,7 @@ if defined ECHELLE echo   echelle : rendu 3D a %ECHELLE% de l'image du jeu
 if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
 if defined SANS echo   sans    : %SANS%
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
+if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
 if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
@@ -294,6 +302,16 @@ if not defined VITESSE set "VITESSE=1"
 set "VICTORY_FAST_HASH=1"
 set "VICTORY_KNOWN_WRITES=1"
 if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_ONLY_READBACK=1"
+goto :eof
+
+rem Les reglages bas du jeu lui-meme (ceux qu'il prend sur une Series S), la
+rem console restant une Series X pour tout le reste. Son propre agrandisseur
+rem d'image est demande avec : celui de la Series S (FSR) calculerait a deux
+rem tiers de la taille demandee.
+:quality_s
+set "VICTORY_SERIES_S_QUALITY=1"
+set "VICTORY_OWN_UPSCALER=1"
+set "QUALITE=s"
 goto :eof
 
 rem Ajoute des groupes d'effets (separes par +) a ceux a laisser de cote.

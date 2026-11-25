@@ -62,6 +62,37 @@ pub(crate) unsafe fn disarm_watchdog(base: usize, hash: &blake3::Hash) -> usize 
         .count()
 }
 
+/// Environment variable that gives the title its own Series S choices
+/// while the console stays a Series X for everything else. (PROJECT ONE.)
+pub(crate) const SERIES_S_QUALITY_ENV: &str = "VICTORY_SERIES_S_QUALITY";
+
+/// The title asks the console's type once and keeps "this is a Series S" in
+/// a flag that 70 places of its code read to pick the lower of two settings
+/// (the function at 0x75140: `call XSystemGetDeviceType; cmp eax, 6; sete
+/// flag`). Compared with 7 instead, a Series X answers yes: those places
+/// take the Series S setting, and whatever else asks for the type itself
+/// still gets a Series X.
+const SERIES_S_QUALITY: Patch<'static> = Patch {
+    what: "quality: the title's Series S choices on a Series X",
+    rva: 0x7518a,
+    // cmp eax, 6
+    expect: &[0x83, 0xF8, 0x06],
+    // cmp eax, 7
+    new: &[0x83, 0xF8, 0x07],
+};
+
+/// Applies [`SERIES_S_QUALITY`] if [`SERIES_S_QUALITY_ENV`] asks for it.
+///
+/// # Safety
+/// As `disarm_watchdog`.
+pub(crate) unsafe fn series_s_quality(base: usize, hash: &blake3::Hash) -> bool {
+    if std::env::var_os(SERIES_S_QUALITY_ENV).is_none_or(|v| v == "0") || !hash.to_hex().starts_with(BUILD_1_0_2_1) {
+        return false;
+    }
+    // SAFETY: forwarded from this function's contract.
+    unsafe { apply(base, &SERIES_S_QUALITY) }
+}
+
 /// Environment variable that pins the title's internal render scale
 /// (`0.2..=1.0` of the output size). Testing lever, off by default.
 pub(crate) const RENDER_SCALE_ENV: &str = "VICTORY_RENDER_SCALE";

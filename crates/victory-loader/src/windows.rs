@@ -101,6 +101,13 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
     }
     // SAFETY: just mapped, and no title code has run.
     unsafe { crate::hooks::output_size(loaded.base(), loaded.info.size_of_image as usize, &prepared.original_hash) };
+    // SAFETY: just mapped, and no title code has run.
+    if unsafe { crate::hooks::series_s_quality(loaded.base(), &prepared.original_hash) } {
+        tracing::warn!(
+            "the title takes its Series S choices on this Series X ({})",
+            crate::hooks::SERIES_S_QUALITY_ENV
+        );
+    }
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),
         preferred = format_args!("{:#x}", loaded.info.image_base),
