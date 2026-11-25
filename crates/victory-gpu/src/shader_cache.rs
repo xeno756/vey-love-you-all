@@ -8,8 +8,17 @@
 //! The entry is our own encoding of [`HostShader`]: a field added to it
 //! must be added to `encode` and `decode` too (entries of older builds
 //! are ignored anyway).
+//!
+//! Each build's translations are in a folder of their own
+//! (`builds/<build>`), so that what no build reads any more can be removed:
+//! the folders of this build and of the build used last before it stay (a
+//! normal and a diagnostics build, used in turn, each keep theirs), the
+//! others go ([`prune`]). One build's translations of a whole title are
+//! 1.3 GB (25,466 shaders, measured); kept in one folder for every build,
+//! as before, nothing told an old build's entries from the current one's
+//! and each new build added its own for good.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -18,18 +27,106 @@ use victory_shader::emit::{HostShader, StaticSampler, UserData};
 use victory_shader::resource::RootIndexedView;
 use victory_shader::{HwStage, RootType};
 
-static CACHE: OnceLock<Cache> = OnceLock::new();
+static DIR: OnceLock<PathBuf> = OnceLock::new();
+static CACHE: OnceLock<Option<Cache>> = OnceLock::new();
 static HITS: AtomicU64 = AtomicU64::new(0);
 static MISSES: AtomicU64 = AtomicU64::new(0);
 
-/// Keeps translated shaders in `dir` from now on.
+/// Builds whose translations stay: this one and the one used last before.
+const BUILDS_KEPT: usize = 2;
+
+/// Keeps translated shaders under `dir` from now on.
 pub fn use_shader_cache(dir: PathBuf) {
-    match Cache::open(dir) {
-        Ok(cache) => {
-            let _ = CACHE.set(cache);
+    let _ = DIR.set(dir);
+}
+
+/// This build's cache, opened at the first translation (the build's
+/// fingerprint needs the host's view limit), with a thread started that
+/// removes what no build reads any more.
+fn cache() -> Option<&'static Cache> {
+    CACHE
+        .get_or_init(|| {
+            let dir = DIR.get()?;
+            let name = build_name(build());
+            match open_for(dir, &name) {
+                Ok(cache) => {
+                    let dir = dir.clone();
+                    let spawned = std::thread::Builder::new().name("victory-shader-cache".into()).spawn(move || {
+                        let removed = prune(&dir, &name);
+                        if removed > 0 {
+                            tracing::info!(removed, "shader cache: folders of translations no build reads any more removed");
+                        }
+                    });
+                    if let Err(e) = spawned {
+                        tracing::warn!(error = %e, "old shader cache entries not removed");
+                    }
+                    Some(cache)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "no shader cache");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// The folder name of a build's translations.
+fn build_name(build: &[u8; 32]) -> String {
+    build[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Opens the folder of the build `name` under `dir` and marks it used now.
+fn open_for(dir: &Path, name: &str) -> anyhow::Result<Cache> {
+    let own = dir.join("builds").join(name);
+    let cache = Cache::open(&own)?;
+    // Written anew at each use: its time says when the build last ran.
+    std::fs::write(own.join("used"), b"")?;
+    Ok(cache)
+}
+
+/// Removes, under the shader cache folder `dir`, what no build reads any
+/// more: the entries kept in `dir` itself before builds had folders (the
+/// folders named by two hexadecimal digits), and the folders of builds
+/// other than `own` except the [`BUILDS_KEPT`]` - 1` used last. Returns how
+/// many folders went.
+fn prune(dir: &Path, own: &str) -> usize {
+    let folders = |of: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(of)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut removed = 0;
+    for folder in folders(dir) {
+        let n = name(&folder);
+        if n.len() == 2 && n.bytes().all(|b| b.is_ascii_hexdigit()) && std::fs::remove_dir_all(&folder).is_ok() {
+            removed += 1;
         }
-        Err(e) => tracing::warn!(error = %e, "no shader cache"),
     }
+    let used = |p: &Path| {
+        std::fs::metadata(p.join("used"))
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    };
+    let mut others: Vec<(std::time::SystemTime, PathBuf)> = folders(&dir.join("builds"))
+        .into_iter()
+        .filter(|p| name(p) != own)
+        .map(|p| (used(&p), p))
+        .collect();
+    others.sort_by_key(|other| std::cmp::Reverse(other.0));
+    for (_, folder) in others.into_iter().skip(BUILDS_KEPT - 1) {
+        if std::fs::remove_dir_all(&folder).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Shaders found in the cache and translated since the start.
@@ -97,7 +194,7 @@ fn build() -> &'static [u8; 32] {
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
     let translate = |c: &[u8]| victory_shader::emit::translate(c).map_err(|e| e.to_string());
-    match CACHE.get() {
+    match cache() {
         Some(cache) => cached(cache, build(), container, translate),
         None => translate(container),
     }
@@ -361,6 +458,44 @@ mod tests {
                 shift: 5,
             }],
         }
+    }
+
+    /// A build's translations are in its own folder; the entries of the
+    /// layout before, and the folders of all but the build used last
+    /// before this one, are removed.
+    #[test]
+    fn old_builds_translations_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Entries as they were kept before builds had folders.
+        for old in ["0a", "ff"] {
+            std::fs::create_dir_all(root.join(old)).unwrap();
+            std::fs::write(root.join(old).join("entry"), b"old").unwrap();
+        }
+        // Something else in the folder stays.
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        // Three earlier builds, used one, two and three hours ago.
+        let hour = std::time::Duration::from_secs(3600);
+        for (name, hours) in [("build-one", 1u32), ("build-two", 2), ("build-three", 3)] {
+            let folder = root.join("builds").join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            let used = std::fs::File::create(folder.join("used")).unwrap();
+            used.set_modified(std::time::SystemTime::now() - hour * hours).unwrap();
+        }
+        let own = build_name(&[7; 32]);
+        assert_eq!(own, "0707070707070707");
+        let cache = open_for(root, &own).unwrap();
+        assert!(root.join("builds").join(&own).join("used").is_file());
+        assert_eq!(prune(root, &own), 4);
+        let left = |p: &str| root.join(p).exists();
+        assert!(!left("0a") && !left("ff"), "entries of the old layout go");
+        assert!(left("notes"));
+        assert!(left("builds/build-one"), "the build used last before this one stays");
+        assert!(!left("builds/build-two") && !left("builds/build-three"));
+        // This build's cache works, and nothing more goes at the next look.
+        let got = cached(&cache, &[7; 32], b"a console container", |_| Ok(shader())).unwrap();
+        assert_eq!(got, shader());
+        assert_eq!(prune(root, &own), 0);
     }
 
     #[test]
