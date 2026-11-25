@@ -35,6 +35,13 @@ numéro de processus. Les temps sont ceux du fichier `.images.csv`, monde unique
 | 12 h 15 | diagnostic, traces | réserve | 242 s | 507 / 1 814 / 2 524 ms | 497 ms, 151 + 267 + 68 | 83 494 | 0 | fermé par le test |
 | 12 h 21 | normale, traces | réserve | 302 s | 466 / 1 502 / 2 704 ms | 456 ms, 129 + 257 + 66 | 84 553 | 0 | fermé par le test |
 
+| 12 h 28 | normale, traces | réserve | 63 s | 1 319 / 3 053 / 10 019 ms | — | 38 204 | 0 | **carte perdue** : défaut de page à une adresse hors de tout objet |
+| 12 h 33 | normale | réserve, détail fixe (`VICTORY_STREAM_PRESSURE=0`) | 301 s | 510 / 1 276 / 2 015 ms | 519 ms, 141 + 300 + 67 | 57 161 | 0 | fermé par le test |
+| 13 h 58 | normale, correctif du transfert | réserve | 302 s | 504 / 1 132 / 3 307 ms | 503 ms, 157 + 255 + 85 | 36 442 (réserve pleine : budget de la carte tombé à 3,9 Go, Edge et Discord rouverts) | 0 | fermé par le test |
+| 14 h 05 | normale, les deux correctifs, détail ajouté au réglage | réserve | 302 s | 506 / 1 713 / 2 542 ms | 515 ms, 160 + 266 + 84 | 66 333 | 0 | fermé par le test |
+| 14 h 12 | normale, les deux correctifs | réserve | 301 s | 668 / 1 995 / 4 388 ms | 656 ms, 145 + 419 + 82 (la carte était aussi prise par d'autres programmes) | 48 752 | 0 | fermé par le test |
+| 14 h 21 | normale, les deux correctifs, **réglages bas du jeu** (`qualite-s`) | réserve | 303 s | 442 / 1 636 / 2 564 ms | 440 ms, 128 + 240 + 66 | 69 725 | 0 | fermé par le test |
+
 Ce que ces lancements établissent :
 
 - **La réserve des textures fait ce qu'elle doit** : aucun blocage en cinq lancements, là où
@@ -42,10 +49,19 @@ Ce que ces lancements établissent :
   même instant (84 183 contre 53 832 après 240 s de monde).
 - **Elle ne change pas le temps d'image** : 456 à 510 ms en régime établi dans les deux cas,
   soit environ 2 images par seconde.
-- **Une perte de carte intermittente existe dans la version normale** : à 11 h 48 (lancement
-  avec passage automatique des menus) et à 11 h 57, pas à 12 h 21 ni avec l'ancienne règle
-  à 12 h 06, et jamais dans les quatre lancements de la version diagnostic. Cause non
-  trouvée ; depuis `ee55801` le journal de la version normale donne l'adresse fautive.
+- **La perte de carte de la version normale** : 11 h 48, 11 h 57 et 12 h 28 (2 fois sur 3
+  dans la même configuration, plus le lancement avec passage automatique des menus), jamais
+  avec un niveau de détail fixe ni dans la version diagnostic. Le journal de 12 h 28 donne un
+  défaut de page à une adresse qui n'appartient à aucun objet. Cause probable, corrigée par
+  `f69b10f` : l'état de transfert d'une texture servait pour une copie refaite à une autre
+  taille, et une copie pouvait être libérée entre le moment où on la regarde et celui où on
+  copie dedans. Depuis : 4 lancements de 300 s sans panne (13 h 58, 14 h 05, 14 h 12,
+  14 h 21). Aucun des deux cas n'a été vu se présenter dans ces lancements (le journal
+  l'écrirait) : la cause est probable, pas démontrée.
+- **Les réglages bas du jeu** (`9967d6a`, option `qualite-s`) : 440 ms par image en régime
+  établi contre 506 à 515, 14,9 Go de mémoire demandée contre environ 18,5, mémoire de la
+  carte 3,3 Go contre 3,6, mémoire partagée 5,7 Go contre 6,4. Un lancement de chaque
+  sorte ; l'image n'est pas encore vérifiée.
 - **Où part le temps de la carte en 1280 × 720** (12 h 01, temps par commande) : 189 ms par
   image en tout, dont 136 ms dans 4 549 dessins indirects de programmes mesh, 32 ms dans
   3 860 calculs, 13 ms dans 388 dessins mesh directs. Les personnages (12 ms en 200
@@ -53,6 +69,39 @@ Ce que ces lancements établissent :
 - **Dessins sans pipeline, par image** (12 h 01) : 631 calculs d'ombrage de lancer de rayons
   et 347 étapes du constructeur de structures, laissés de côté exprès ; 34 dessins de
   cheveux en mèches et 4 de peau refusés faute de barycentriques ; 4 d'un filtre de halo.
+
+## L'image, vérifiée sur les images que le runtime enregistre lui-même (25/11, 14 h 25 à 14 h 44)
+
+Même version, même scène (la cellule et sa fenêtre sur la cour), version diagnostic, une image
+enregistrée toutes les 20. Les images sont dans `..\victory-captures` (`essai-x`, `essai-s`,
+`essai-x2`), hors du dépôt.
+
+| Réglage | Ce que l'image montre | Temps d'image en régime établi |
+|---|---|---|
+| `rapide` d'avant (réglages normaux du jeu) | taches roses, bleues et vertes sur les murs et les personnages, voile blanc sur les plans de la cour ; murs présents | 537 ms (170 + 267 + 92) |
+| avec les réglages bas du jeu (`qualite-s`) | éclairage propre, sans tache ; **les murs de la cellule manquent** (on voit le ciel à leur place) | 376 ms (130 + 172 + 63) |
+| réglages normaux, éclairage indirect laissé de côté (`sans:eclairage-indirect`) | plus de taches, murs présents, intérieurs plus sombres, traînées autour de la fenêtre | 398 ms (132 + 177 + 68) |
+
+Cause des taches : l'éclairage indirect du jeu s'appuie sur son lancer de rayons, que le
+runtime n'exécute pas (631 calculs d'ombrage et 347 étapes du constructeur de structures
+laissés de côté par image). Calculé sans lui, il donne ces couleurs. Le profil `rapide` le
+laisse de côté depuis `528d504`.
+
+## Le profil `rapide` d'aujourd'hui (25/11, 14 h 50 et 14 h 57, version normale)
+
+1280 × 720, textures:2, éclairage indirect laissé de côté. Sur les images de même contenu
+(4 000 à 5 500 dessins, après la première minute de monde) :
+
+| Réglage | Images mesurées | Temps d'image médian | Processeur + carte + recopie |
+|---|---|---|---|
+| `rapide` | 601 | **335 ms** (3,0 images par seconde) | 113 + 168 + 53 |
+| `rapide` avec l'envoi en avance (`VICTORY_RELAY=1`) | 115 | 303 ms (3,3 images par seconde) | 110 + 184 + 61, dont 52 ms en même temps |
+
+Les deux lancements ont tenu 300 s sans panne ni blocage, 87 000 à 88 000 textures chargées
+en 120 s. Le relais gagne environ 10 % : il reste une option.
+
+Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
+premier `rapide`, 335 ms maintenant.
 
 ## Commits
 
@@ -62,4 +111,9 @@ Ce que ces lancements établissent :
 | 25/11 | `dfca70d` | 1, streaming | `VICTORY_STREAM_POOL=0` | sans profil : aucune texture envoyée tant que la carte dépasse 90 % de son budget | **non mesuré** ; hors jeu : la réserve des textures vaut au moins 512 Mio, et 16 textures par image sont faites même pleine (tests) | textures plus grossières quand la réserve se remplit ; pas de retour au détail fin ensuite |
 | 25/11 | `7a95d07` | 0, mesure | ne pas donner `VICTORY_FRAME_CSV` | pas de mesure image par image | une ligne par image, centiles sur 300 images dans la barre de titre | une demande de mémoire à la carte par image quand le fichier est écrit |
 | 25/11 | `ee2d30b` | 3, diagnostic | — | « pipeline refusé : paramètre incorrect » | la capacité manquante est nommée (barycentriques) | aucun |
+| 25/11 | `ee55801` | 2, diagnostic | `VICTORY_D3D12_DRED` vide avant le lancement | une carte perdue ne disait rien dans la version normale | adresse fautive dans le journal de toute version ; même temps d'image (456 ms avec, 455 à 510 sans) | aucun vu |
+| 25/11 | `f69b10f` | 1, perte de carte | — | carte perdue 2 fois sur 3 (63 et 99 s de monde) | 4 lancements de 300 s sans panne | la cause n'est pas démontrée |
+| 25/11 | `dd14e44` | 1, streaming | `VICTORY_STREAM_PRESSURE=0` | carte à 3,9 Go de budget : 36 442 textures en 300 s, réserve pleine | 66 333 textures en 300 s | textures jusqu'à 3 niveaux plus grossières que demandé, jamais sous 128 pixels |
+| 25/11 | `9967d6a` | 4, réglages bas du jeu | ne pas donner `qualite-s` | 506 à 515 ms par image, 18,5 Go demandés | 440 ms, 14,9 Go | image non vérifiée ; une seule mesure |
+| 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
 | 25/11 | `fd37912` | 2, figement | `sortie:960x540` le redonne | `maximum` : resté sur l'écran des licences | **non mesuré** ; `maximum` demande 1280 × 720, la taille vue en jeu | `maximum` laisse 8 groupes d'effets de côté : image possiblement fausse |
