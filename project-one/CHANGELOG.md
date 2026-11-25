@@ -4,6 +4,27 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (11 h 20) — mesure par image, textures qui ne restent plus bloquées, `maximum` réparé
+
+Suivi commit par commit : [PERF_JOURNAL.md](PERF_JOURNAL.md). Décisions prises sans
+question : [DECISIONS.md](DECISIONS.md). Ce qui reste bloqué : [BLOCKERS.md](BLOCKERS.md).
+Aucun de ces changements n'a encore tourné avec PROJECT GAME.
+
+- **Ce que vos trois lancements de 10 h ont mesuré.** `rapide` : la carte passe de 777 à
+  221 ms par image, 67 915 textures chargées en 2 minutes au lieu de 6 596 en 7 min 35, la
+  carte reste dans son budget ; environ 2,2 images par seconde à la fin. `maximum` : resté
+  sur l'écran des licences, à cause de la taille 960 × 540.
+- **Textures (`dfca70d`).** Elles ont maintenant leur propre réserve sur la carte : plus de
+  blocage quand le reste dépasse le budget. Les copies deviennent plus grossières à mesure
+  que la réserve se remplit, et quelques-unes sont faites à chaque image même pleine.
+- **Mesure (`7a95d07`).** Un fichier `.images.csv` par lancement, une ligne par image ; la
+  barre de titre donne la médiane et le 99e centile des 300 dernières images, la mémoire de
+  la carte et les textures en attente. Les capacités de la carte sont écrites au démarrage.
+- **Pipelines refusés (`ee2d30b`).** Le journal dit quelle capacité manque : les
+  barycentriques, que la RX 5600 XT n'a pas (lu sur la carte).
+- **Profils (`fd37912`).** `maximum` demande 1280 × 720. `rapide` ne laisse plus aucun effet
+  de côté : 1280 × 720 et textures allégées seulement.
+
 ## 25/11/2026 (10 h) — premier lancement réussi de la branche fusionnée, profils `rapide` et `maximum`
 
 Mesures et profils : [docs/technical/10-premier-lancement-reussi-et-profils.md](docs/technical/10-premier-lancement-reussi-et-profils.md).
