@@ -658,7 +658,7 @@ fn create() -> windows::core::Result<Host> {
             .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter3>(device.GetAdapterLuid()))
             .ok();
         tracing::info!("host D3D12 device ready");
-        Ok(Host {
+        let host = Host {
             device,
             queue,
             fence,
@@ -673,8 +673,48 @@ fn create() -> windows::core::Result<Host> {
             next_rtv: AtomicU32::new(0),
             presenter: Mutex::new(None),
             adapter,
-        })
+        };
+        profile(&host);
+        Ok(host)
     }
+}
+
+/// Logs the machine (logical processors, the PC's memory, the budgets the
+/// system gives us of the card's memory and of the PC's memory shared
+/// with it) and the limits chosen from it, once, as the device is made;
+/// sets the texture floor of `resource::room` from the card's budget.
+fn profile(host: &Host) {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let gb = |v: u64| v as f64 / (1u64 << 30) as f64;
+    let cpus = std::thread::available_parallelism().map_or(0, |n| n.get());
+    // SAFETY: plain data the call fills in, sized.
+    let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    m.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: a sized structure.
+    let ram = if unsafe { GlobalMemoryStatusEx(&mut m) } != 0 { m.ullTotalPhys } else { 0 };
+    let card = host.video_memory();
+    let floor = crate::resource::texture_floor(card.map(|c| c[0]));
+    let _ = crate::resource::TEXTURE_FLOOR.set(floor);
+    let [own, own_used, shared, shared_used] = card.unwrap_or_default();
+    tracing::info!(
+        "machine: {cpus} logical processors, {:.1} GB of memory; budgets: the card's memory {:.1} GB ({:.1} in use), \
+         the PC's memory shared with it {:.1} GB ({:.1} in use). Limits: {} pipeline workers, {} wide-copy workers; \
+         textures the title fills: {:.1} GB whatever the budget, then while the card's use is under {:.1} GB; lists' \
+         upload memory: {:.2} GB whatever the budget, then while the shared use is under {:.1} GB, else after a wait \
+         of at most {} s for lists to give some back",
+        gb(ram),
+        gb(own),
+        gb(own_used),
+        gb(shared),
+        gb(shared_used),
+        crate::pipeline::worker_count(),
+        crate::shadow::wide_worker_count(),
+        gb(floor),
+        gb(own / 10 * 9),
+        gb(UPLOAD_FLOOR),
+        gb(shared / 10 * 9),
+        UPLOAD_WAIT.as_secs(),
+    );
 }
 
 /// How finely a card can be interrupted, by DXGI's numbering of its
@@ -1429,32 +1469,176 @@ impl<T> Spare<T> {
         self.kept.push((thing, size));
         None
     }
+
+    /// Everything kept, taken.
+    fn clear(&mut self) -> Vec<(T, u64)> {
+        self.bytes = 0;
+        std::mem::take(&mut self.kept)
+    }
 }
 
 /// Scratch chunks no list holds.
 static SPARE: Mutex<Spare<Chunk>> = Mutex::new(Spare::new());
 
+/// Frees the scratch chunks no list holds (the system refused upload
+/// memory), outside the lock.
+fn trim_spare() {
+    let kept = SPARE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    for (_, size) in &kept {
+        ALIVE[1].fetch_sub(1, Ordering::Relaxed);
+        ALIVE[2].fetch_sub(*size, Ordering::Relaxed);
+        ALIVE[3].fetch_sub(1, Ordering::Relaxed);
+        ALIVE[4].fetch_sub(*size, Ordering::Relaxed);
+    }
+}
+
 /// A scratch chunk of `size` bytes: one kept ([`SPARE`]) or a new one.
 fn take_chunk(host: &Host, size: u64) -> Option<Chunk> {
-    if scratch_pool()
-        && let Some(chunk) = SPARE.lock().unwrap_or_else(|e| e.into_inner()).take(size)
-    {
+    let spare = || {
+        let chunk = scratch_pool()
+            .then(|| SPARE.lock().unwrap_or_else(|e| e.into_inner()).take(size))
+            .flatten()?;
         ALIVE[3].fetch_sub(1, Ordering::Relaxed);
         ALIVE[4].fetch_sub(size, Ordering::Relaxed);
         ALIVE[5].fetch_add(1, Ordering::Relaxed);
-        return Some(chunk);
-    }
-    let (buffer, data) = host.upload_buffer(size)?;
-    name(&buffer, || "list scratch".into());
-    // SAFETY: a live buffer.
-    let gpu = unsafe { buffer.GetGPUVirtualAddress() };
-    ALIVE[1].fetch_add(1, Ordering::Relaxed);
-    ALIVE[2].fetch_add(size, Ordering::Relaxed);
-    Some(Chunk {
-        _buffer: buffer,
-        data: data as usize,
-        gpu,
+        Some(chunk)
+    };
+    list_upload(host, size, spare, |(buffer, data)| {
+        name(&buffer, || "list scratch".into());
+        // SAFETY: a live buffer.
+        let gpu = unsafe { buffer.GetGPUVirtualAddress() };
+        ALIVE[1].fetch_add(1, Ordering::Relaxed);
+        ALIVE[2].fetch_add(size, Ordering::Relaxed);
+        Chunk {
+            _buffer: buffer,
+            data: data as usize,
+            gpu,
+        }
     })
+}
+
+/// Upload memory lists may always hold, whatever the budget says
+/// ([`upload_room`]).
+const UPLOAD_FLOOR: u64 = 256 << 20;
+/// The longest a list waits for upload memory ([`list_upload`]).
+const UPLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether lists holding `held` bytes of upload memory may make `size`
+/// more: always within [`UPLOAD_FLOOR`]; beyond it while the PC's memory
+/// shared with the card (`shared`: the budget the system gives us and our
+/// use) stays under nine tenths of its budget, as `resource::room` keeps
+/// the card's own. Without a budget (or a budget of 0), always.
+///
+/// Upload memory is the PC's memory shared with the card, as are the host
+/// copies of title memory and whatever the card's own memory does not
+/// hold. The system sizes it by the PC's memory (half of it): a PC of
+/// 16 GB has some 8 GB for all of that, and once it was full every new
+/// upload buffer was refused (`0x8007000E`, 620 scratch chunks of 4 MiB in
+/// six seconds) and the device was lost.
+fn upload_room(held: u64, size: u64, shared: Option<[u64; 2]>) -> bool {
+    held + size <= UPLOAD_FLOOR
+        || shared
+            .filter(|&[budget, _]| budget > 0)
+            .is_none_or(|[budget, used]| used + size <= budget / 10 * 9)
+}
+
+/// Bytes of upload memory lists hold now: scratch chunks not kept spare,
+/// and their other upload buffers.
+fn upload_held() -> u64 {
+    let chunks = ALIVE[2].load(Ordering::Relaxed).saturating_sub(ALIVE[4].load(Ordering::Relaxed));
+    chunks + ALIVE[7].load(Ordering::Relaxed)
+}
+
+/// The word that a list gave upload memory back.
+static GIVEN: (Mutex<()>, std::sync::Condvar) = (Mutex::new(()), std::sync::Condvar::new());
+/// A wait for upload memory ran out: no list waits again until one is
+/// made with room to spare (a wait that cannot end is paid once).
+static STARVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Waits for upload memory and their microseconds, since the last frame
+/// line.
+static UPLOAD_WAITS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// A list gave back upload memory (it was reset or dropped).
+fn given_back() {
+    GIVEN.1.notify_all();
+}
+
+/// How long a wait for upload memory that began at `since` may still
+/// wait at `now`: not at all once [`UPLOAD_WAIT`] has passed, or while
+/// `starved` ([`STARVED`]).
+fn wait_left(starved: bool, since: std::time::Instant, now: std::time::Instant) -> Option<std::time::Duration> {
+    let left = UPLOAD_WAIT.saturating_sub(now.saturating_duration_since(since));
+    (!starved && !left.is_zero()).then_some(left)
+}
+
+/// Waits a little (until a list gives upload memory back, or 10 ms: the
+/// system's use also falls by what others free) in a wait that began at
+/// `began` (`None` the first time: now). False, and no wait, once
+/// [`wait_left`] says so; a wait that ran out sets [`STARVED`].
+fn wait_given(began: &mut Option<std::time::Instant>) -> bool {
+    let since = *began.get_or_insert_with(std::time::Instant::now);
+    let Some(left) = wait_left(STARVED.load(Ordering::Relaxed), since, std::time::Instant::now()) else {
+        if !STARVED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "lists waited {} s for upload memory and none came free: made without waiting from now on, until there is room again",
+                UPLOAD_WAIT.as_secs()
+            );
+        }
+        return false;
+    };
+    let started = std::time::Instant::now();
+    let given = GIVEN.0.lock().unwrap_or_else(|e| e.into_inner());
+    drop(GIVEN.1.wait_timeout(given, left.min(std::time::Duration::from_millis(10))));
+    UPLOAD_WAITS[0].fetch_add(1, Ordering::Relaxed);
+    UPLOAD_WAITS[1].fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+    true
+}
+
+/// `size` bytes of upload memory for a list: `kept` first (a chunk a list
+/// gave back), else a new buffer, `made` from it. While there is no room
+/// ([`upload_room`]), or the system refuses the buffer, the list waits for
+/// others to give some back (they do when reset, once their submissions
+/// ran; spare chunks are freed when the system refuses), asking `kept`
+/// again after each wait, at most [`UPLOAD_WAIT`] in all; then the buffer
+/// is made, or refused, as before.
+fn list_upload<T>(
+    host: &Host,
+    size: u64,
+    mut kept: impl FnMut() -> Option<T>,
+    made: impl FnOnce((ID3D12Resource, *mut u8)) -> T,
+) -> Option<T> {
+    let mut began = None;
+    loop {
+        if let Some(thing) = kept() {
+            return Some(thing);
+        }
+        let shared = host.video_memory().map(|[.., budget, used]| [budget, used]);
+        if upload_room(upload_held(), size, shared) {
+            match host.make_upload(size) {
+                Ok(buffer) => {
+                    STARVED.store(false, Ordering::Relaxed);
+                    return Some(made(buffer));
+                }
+                Err(_) => trim_spare(),
+            }
+        }
+        if !wait_given(&mut began) {
+            return host.upload_buffer(size).map(made);
+        }
+    }
+}
+
+/// Since the last frame line: how often lists waited for upload memory.
+fn upload_wait_line() {
+    let [waits, us] = [0, 1].map(|i| UPLOAD_WAITS[i].swap(0, Ordering::Relaxed));
+    if waits > 0 {
+        tracing::info!(
+            "lists waited for upload memory {waits} times, {:.0} ms in all (the PC's memory shared with the card was near \
+             its budget, or the system refused a buffer); {:.0} MB of it held by lists",
+            us as f64 / 1e3,
+            upload_held() as f64 / (1 << 20) as f64
+        );
+    }
 }
 
 /// A list is done with `chunks` (it was reset after its submissions ran,
@@ -1488,6 +1672,7 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
     }
     // Freed outside the lock.
     drop(freed);
+    given_back();
 }
 
 /// What the host keeps for copies in the card's own memory
@@ -1699,6 +1884,11 @@ impl Drop for Deferred {
     fn drop(&mut self) {
         ALIVE[6].fetch_sub(self.uploads.len() as u64, Ordering::Relaxed);
         ALIVE[7].fetch_sub(self.upload_bytes, Ordering::Relaxed);
+        if !self.uploads.is_empty() {
+            // Freed after this: a waiting list finds them gone when it
+            // asks again ([`wait_given`] also looks every 10 ms).
+            given_back();
+        }
     }
 }
 
@@ -5015,7 +5205,7 @@ impl HostList {
     ///
     /// shortcut: one buffer per copy; pool them once uploads are frequent.
     pub(crate) fn upload(&self, host: &Host, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
-        let (buffer, data) = host.upload_buffer(size)?;
+        let (buffer, data) = list_upload(host, size, || None, |made| made)?;
         name(&buffer, || format!("list upload {size:#x}"));
         self.deferred().hold_upload(buffer.clone(), size);
         Some((buffer, data))
@@ -5028,7 +5218,7 @@ impl HostList {
         let mut s = self.scratch.lock().unwrap_or_else(|e| e.into_inner());
         let len = len.max(1).next_multiple_of(256);
         if len > SCRATCH_CHUNK {
-            let (buffer, data) = host.upload_buffer(len)?;
+            let (buffer, data) = list_upload(host, len, || None, |made| made)?;
             name(&buffer, || format!("list scratch {len:#x}"));
             // SAFETY: a live buffer.
             let gpu = unsafe { buffer.GetGPUVirtualAddress() };
@@ -5620,7 +5810,25 @@ impl Host {
         }
     }
 
+    /// A buffer of `size` bytes in the upload heap, mapped for writing. When
+    /// the system refuses it, the spare scratch chunks are freed and it is
+    /// asked once more.
     pub(crate) fn upload_buffer(&self, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+        let made = self.make_upload(size).or_else(|_| {
+            trim_spare();
+            self.make_upload(size)
+        });
+        match made {
+            Ok(made) => Some(made),
+            Err(e) => {
+                tracing::warn!(error = %e, size, "no upload buffer");
+                None
+            }
+        }
+    }
+
+    /// [`Host::upload_buffer`] once, saying nothing when refused.
+    fn make_upload(&self, size: u64) -> windows::core::Result<(ID3D12Resource, *mut u8)> {
         MADE[0].fetch_add(1, Ordering::Relaxed);
         MADE[1].fetch_add(size, Ordering::Relaxed);
         let heap = D3D12_HEAP_PROPERTIES {
@@ -5658,13 +5866,8 @@ impl Host {
                     b.Map(0, None, Some(&mut data))
                 })
         };
-        match made {
-            Ok(()) => Some((buffer?, data.cast())),
-            Err(e) => {
-                tracing::warn!(error = %e, size, "no upload buffer");
-                None
-            }
-        }
+        made?;
+        Ok((buffer.ok_or_else(windows::core::Error::empty)?, data.cast()))
     }
 }
 
@@ -5763,6 +5966,7 @@ impl Meter {
             "indirect mesh dispatches: the largest group count asked for {mesh_largest} (run: at most 65535), {mesh_groups:.0} groups asked per frame"
         );
         late_line(frames);
+        upload_wait_line();
         card_clock_line(frames, ms);
         crate::shadow::back_line(frames);
         {
@@ -6530,6 +6734,80 @@ mod spare {
         assert_eq!(spare.take(1), Some(2));
         assert_eq!(spare.bytes, 0);
         assert!(spare.kept.is_empty());
+    }
+
+    /// Clearing hands back everything kept and leaves nothing counted.
+    #[test]
+    fn clearing_takes_everything_kept() {
+        let mut spare: Spare<u32> = Spare::new();
+        assert_eq!(spare.give(1, 4, 10), None);
+        assert_eq!(spare.give(2, 1, 10), None);
+        assert_eq!(spare.clear(), vec![(1, 4), (2, 1)]);
+        assert_eq!(spare.bytes, 0);
+        assert_eq!(spare.take(4), None);
+        assert_eq!(spare.give(3, 10, 10), None, "the whole limit is free again");
+    }
+}
+
+#[cfg(test)]
+mod upload_memory {
+    use super::*;
+
+    const GB: u64 = 1 << 30;
+    const MB: u64 = 1 << 20;
+
+    /// Lists always get the floor; past it, upload memory is made while the
+    /// PC's memory shared with the card stays under nine tenths of its
+    /// budget; without a budget (or one of 0) there is no limit.
+    #[test]
+    fn upload_memory_is_made_within_nine_tenths_of_the_shared_budget() {
+        // A PC of 16 GB: some 8 GB shared with the card, 7.2 GB the line.
+        let budget = 8 * GB;
+        let line = budget / 10 * 9;
+        let size = 4 * MB;
+        assert!(upload_room(0, size, Some([budget, budget])), "within the floor, even when full");
+        assert!(upload_room(UPLOAD_FLOOR - size, size, Some([budget, 2 * budget])));
+        assert!(!upload_room(UPLOAD_FLOOR - size + 1, size, Some([budget, line])));
+        assert!(upload_room(GB, size, Some([budget, line - size])));
+        assert!(!upload_room(GB, size, Some([budget, line - size + 1])));
+        assert!(!upload_room(GB, size, Some([budget, budget])));
+        // A PC of 32 GB with the same use: room.
+        assert!(upload_room(GB, size, Some([16 * GB, line])));
+        assert!(upload_room(64 * GB, size, None), "no budget: as before, no limit");
+        assert!(upload_room(64 * GB, size, Some([0, 64 * GB])), "a budget of 0 is no budget");
+    }
+
+    /// A wait for upload memory may last `UPLOAD_WAIT` in all, and none
+    /// while a wait has run out (`STARVED`: it would run out again).
+    #[test]
+    fn a_wait_lasts_at_most_the_wait_and_none_while_starved() {
+        let now = std::time::Instant::now();
+        let half = std::time::Duration::from_millis(500);
+        assert_eq!(wait_left(false, now, now), Some(UPLOAD_WAIT));
+        assert_eq!(wait_left(false, now - half, now), Some(UPLOAD_WAIT - half));
+        assert_eq!(wait_left(false, now - UPLOAD_WAIT, now), None, "it has run out");
+        assert_eq!(wait_left(false, now - 2 * UPLOAD_WAIT, now), None);
+        assert_eq!(wait_left(true, now, now), None, "a wait ran out before");
+    }
+
+    /// Upload memory for a list comes from `kept` first, else from a new
+    /// buffer of the size asked for, which ends a run of no waiting.
+    #[test]
+    fn upload_memory_for_a_list_is_kept_or_made() {
+        let Some(host) = host() else {
+            return; // no host GPU here
+        };
+        let kept = list_upload(host, 4 * MB, || Some(7u32), |_| 0u32);
+        assert_eq!(kept, Some(7), "a kept thing, nothing made");
+        let made = MADE[0].load(Ordering::Relaxed);
+        let (buffer, data) = list_upload(host, 64 << 10, || None, |made| made).expect("made");
+        assert!(MADE[0].load(Ordering::Relaxed) > made);
+        assert!(!data.is_null());
+        // SAFETY: a live buffer.
+        assert_eq!(unsafe { buffer.GetDesc() }.Width, 64 << 10);
+        // The mapping is writable.
+        // SAFETY: the buffer's own mapping, 64 KiB.
+        unsafe { data.write_bytes(0x5a, 64 << 10) };
     }
 }
 

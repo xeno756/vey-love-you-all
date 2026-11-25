@@ -1363,15 +1363,14 @@ pub(crate) fn host_made<'a>(
 
 /// Whether more host copies of textures the title fills may be made for
 /// shaders that pick textures by index (`draw.rs` `heap_textures`): always
-/// up to `FLOOR` bytes of them, beyond that while the card's memory in use
-/// by this process is under nine tenths of the budget the system gives it
-/// (`VICTORY_TEXTURE_BUDGET_MB` sets a limit on those copies' bytes
-/// instead). Past the budget the system moves the card's memory into the
-/// PC's, which ended runs 20 and 24.
+/// up to [`TEXTURE_FLOOR`] bytes of them, beyond that while the card's
+/// memory in use by this process is under nine tenths of the budget the
+/// system gives it (`VICTORY_TEXTURE_BUDGET_MB` sets a limit on those
+/// copies' bytes instead). Past the budget the system moves the card's
+/// memory into the PC's, which ended runs 20 and 24.
 #[cfg(windows)]
 pub(crate) fn room() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
-    const FLOOR: u64 = 2 << 30;
     const WITHOUT_BUDGET: u64 = 4 << 30;
     static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     let limit = *LIMIT.get_or_init(|| {
@@ -1382,13 +1381,32 @@ pub(crate) fn room() -> bool {
     if let Some(limit) = limit {
         return filled < limit;
     }
-    if filled < FLOOR {
+    if filled < TEXTURE_FLOOR.get().copied().unwrap_or(FLOOR_MOST) {
         return true;
     }
     match crate::host::host().and_then(|h| h.video_memory()) {
         Some([budget, used, ..]) => used < budget / 10 * 9,
         None => filled < WITHOUT_BUDGET,
     }
+}
+
+/// [`room`]'s floor at most: what it was for every card.
+const FLOOR_MOST: u64 = 2 << 30;
+
+/// [`room`]'s floor, set from the card's budget when the host device is
+/// made ([`texture_floor`]).
+#[cfg(windows)]
+pub(crate) static TEXTURE_FLOOR: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// The bytes of host copies of textures the title fills that [`room`]
+/// lets be made whatever the card's budget says, for a card whose budget
+/// is `budget`: 2 GiB, or a quarter of the budget where that is less. On a
+/// card of 12 GB 2 GiB is a sixth of it, on one of 6 GB a third, and what
+/// goes past the budget the system moves into the PC's memory shared with
+/// the card, which upload memory and the host copies of title memory come
+/// from too.
+pub(crate) fn texture_floor(budget: Option<u64>) -> u64 {
+    budget.filter(|&b| b > 0).map_or(FLOOR_MOST, |b| (b / 4).min(FLOOR_MOST))
 }
 
 /// Lets go of the host copies of textures the title fills that nothing
@@ -2302,6 +2320,20 @@ mod tests {
             S_OK
         );
         heap
+    }
+
+    /// Textures are made whatever the card's budget up to 2 GiB, or a
+    /// quarter of the budget where that is less; without a budget (or one
+    /// of 0), 2 GiB as before.
+    #[test]
+    fn the_texture_floor_is_a_quarter_of_the_card_at_most_2_gib() {
+        const GB: u64 = 1 << 30;
+        assert_eq!(texture_floor(None), 2 * GB);
+        assert_eq!(texture_floor(Some(0)), 2 * GB);
+        assert_eq!(texture_floor(Some(11 * GB)), 2 * GB, "a card of 12 GB: as before");
+        assert_eq!(texture_floor(Some(8 * GB)), 2 * GB);
+        assert_eq!(texture_floor(Some(5 * GB + GB / 2)), (5 * GB + GB / 2) / 4, "a card of 6 GB");
+        assert_eq!(texture_floor(Some(GB)), GB / 4);
     }
 
     #[test]
