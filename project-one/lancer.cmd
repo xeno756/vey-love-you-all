@@ -106,11 +106,11 @@ if defined DRY exit /b 0
 if not exist "%LOGS%" mkdir "%LOGS%"
 if defined CAPTURE if not exist "%VICTORY_CAPTURE%" mkdir "%VICTORY_CAPTURE%"
 
-if defined PREPARE (
-    "%EXE%" prepare --compute-pipelines 2>"%LOG%"
-    echo Preparation terminee, code %ERRORLEVEL%. Journal : %LOG%
-    exit /b %ERRORLEVEL%
-)
+if not defined PREPARE goto title
+"%EXE%" prepare --compute-pipelines 2>"%LOG%"
+echo Preparation terminee, code %ERRORLEVEL%. Journal : %LOG%
+exit /b %ERRORLEVEL%
+:title
 "%EXE%" run "%TITLE%" --execute --console %CONSOLE% 1>"%OUT%" 2>"%LOG%"
 echo Termine, code %ERRORLEVEL%. Journal : %LOG%
 rem Le dernier journal, la ou les anciens lancements l'ecrivaient.
