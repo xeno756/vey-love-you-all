@@ -538,6 +538,11 @@ pub fn precompile_graphics(
                         continue;
                     };
                     let graphics = super::host::GraphicsState::from_precompiled(&state);
+                    // (PROJECT ONE) `VICTORY_PRECOMPILE_EACH=1`: a line before
+                    // each record, to name the one a crash of the driver stops at.
+                    if std::env::var_os("VICTORY_PRECOMPILE_EACH").is_some() {
+                        tracing::info!(record = i, ?stages, "precompiling record");
+                    }
                     let (key, made) = super::make::warm_graphics(stages, graphics);
                     if !keys.lock().unwrap_or_else(|e| e.into_inner()).insert(key) {
                         count(&|r| r.duplicates += 1);

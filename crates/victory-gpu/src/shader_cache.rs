@@ -217,7 +217,9 @@ fn with_host_settings(base: [u8; 32]) -> [u8; 32] {
 }
 
 /// The environment switches that change what the translator makes, part of the key.
-const SWITCHES: [&str; 8] = [
+const SWITCHES: [&str; 9] = [
+    // (PROJECT ONE: how pixel programs read their quad's lanes)
+    "VICTORY_QUAD_READS",
     "VICTORY_WAVE_WIDE",
     "VICTORY_WAVE_DEEP_SKIPS",
     "VICTORY_WAVE_OWN_BITS",

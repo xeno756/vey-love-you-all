@@ -1463,6 +1463,9 @@ mod tests {
         let _one = super::valu_tests::ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // (PROJECT ONE) Quad reads are opt-in here (`VICTORY_QUAD_READS`):
+        // this is the form `lane` makes.
+        super::lower::TEST_QUAD_READS.set(Some(super::lower::QuadReads::Lane));
         // v2, v3: position x, y (input address: POS_X and POS_Y after the
         // two perspective barycentrics).
         let swizzle = |dst: u32, src: u32, pattern: u32| {

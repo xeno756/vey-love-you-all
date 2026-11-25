@@ -1157,6 +1157,48 @@ thread_local! {
     pub(super) static TEST_F16_NEAREST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
+/// How a pixel program reads its quad's other lanes ([`Lower::helpers_read`]).
+///
+/// On the RX 5600 XT (driver 32.0.21045.29003) both quad forms crash AMD's
+/// shader compiler (`amdxc64.dll`, access violation) making the pipeline of
+/// record 12 363 of the title's pipeline cache (pixel `4a2b54a75b9abb7c`,
+/// vertex `05e958b19269d596`); with wave reads it is made (25/11). A crash
+/// there ends the run, so wave reads stay the default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum QuadReads {
+    /// quadOp across x, y or the diagonal, and quadReadLaneAt (the form of
+    /// VIctory-7900XTX 1c8dd31). Crashes the driver even with a stand-in
+    /// vertex shader.
+    Op,
+    /// quadReadLaneAt of each of the four lanes, by constant, and a pick:
+    /// the same helper lanes read, three more reads where lanes differ.
+    /// Made with a stand-in vertex shader, crashes in the title's pipeline.
+    Lane,
+    /// Wave reads, as before helper lanes were read (they give 0 on AMD).
+    Wave,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`quad_reads`], for its thread only.
+    pub(super) static TEST_QUAD_READS: std::cell::Cell<Option<QuadReads>> = const { std::cell::Cell::new(None) };
+}
+
+/// `VICTORY_QUAD_READS=0|lane|op` (PROJECT ONE): [`QuadReads`], wave reads
+/// by default.
+pub(crate) fn quad_reads() -> QuadReads {
+    #[cfg(test)]
+    if let Some(mode) = TEST_QUAD_READS.get() {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<QuadReads> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("VICTORY_QUAD_READS").ok().as_deref().map(str::trim) {
+        Some("op") => QuadReads::Op,
+        Some("lane") => QuadReads::Lane,
+        _ => QuadReads::Wave,
+    })
+}
+
 /// `VICTORY_WAVE_OWN_BITS=0`: a wave OR where not every lane runs is refused as before
 /// ([`super::own_bits`]).
 fn own_bits_on() -> bool {
@@ -4672,7 +4714,7 @@ impl<'a> Lower<'a> {
     /// wave reads leave those out (AMD gives 0 from them), quad reads are
     /// what reaches them.
     fn helpers_read(&self, quad: bool) -> bool {
-        quad && self.s.pixel
+        quad && self.s.pixel && quad_reads() != QuadReads::Wave
     }
 
     /// `x` of the lane of this lane's quad that `lanes` names for each of
@@ -4695,6 +4737,21 @@ impl<'a> Lower<'a> {
                 122,
                 &[x, n],
             );
+        }
+        // (PROJECT ONE) `VICTORY_QUAD_READS=lane`: the four lanes read by
+        // constant, each lane keeping the one it names, without quadOp.
+        if quad_reads() == QuadReads::Lane {
+            let lane = self.lane_index();
+            let three = self.s.m.i32(3);
+            let at = self.s.m.bin(c, Bin::And, lane, three);
+            let mut src = self.s.m.i32(lanes[0].into());
+            for (i, &l) in lanes.iter().enumerate().skip(1) {
+                let k = self.s.m.i32(i as u32);
+                let is = self.s.m.cmp(c, pred::EQ, at, k);
+                let l = self.s.m.i32(l.into());
+                src = self.s.m.select(c, is, l, src);
+            }
+            return self.quad_pick(x, src);
         }
         // Else each lane's own, its neighbour across in x (1) or y (2), or
         // the diagonal one (3).
