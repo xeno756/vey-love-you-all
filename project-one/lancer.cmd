@@ -7,6 +7,9 @@ rem   lancer.cmd series-x capture    version diagnostic : enregistre des images
 rem                                  de l'ecran et des tampons internes du jeu
 rem   lancer.cmd series-x profil     version diagnostic : mesure le temps de la
 rem                                  carte commande par commande (plus lent)
+rem   lancer.cmd series-x traces     version diagnostic : si la carte est perdue,
+rem                                  le journal donne ses dernieres commandes
+rem                                  (sans la lenteur de profil)
 rem   lancer.cmd series-x preparer   ne lance pas le jeu : traduit ses shaders
 rem                                  et compile d'avance ses pipelines de calcul
 rem                                  et ceux de ses programmes mesh
@@ -78,6 +81,7 @@ set "CONSOLE=%~1"
 if "%CONSOLE%"=="" set "CONSOLE=series-x"
 set "CAPTURE="
 set "PROFILE="
+set "TRACES="
 set "PREPARE="
 set "DRY="
 set "GRAPHICS="
@@ -94,6 +98,7 @@ if /i "%~2"=="rapide" call :rapide
 if /i "%~2"=="maximum" call :maximum
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
+if /i "%~2"=="traces" set "TRACES=1"
 if /i "%~2"=="preparer" set "PREPARE=1"
 if /i "%~2"=="preparer-graphiques" set "PREPARE=1"
 if /i "%~2"=="preparer-graphiques" set "GRAPHICS=--graphics-pipelines"
@@ -120,6 +125,7 @@ goto args
 set "DIAG="
 if defined CAPTURE set "DIAG=1"
 if defined PROFILE set "DIAG=1"
+if defined TRACES set "DIAG=1"
 set "EXE=%ROOT%\target\release\victory.exe"
 set "BUILD=cargo build --release -p victory"
 set "MODE=normal"
@@ -216,6 +222,10 @@ if defined CAPTURE (
     set "VICTORY_DUMP_TARGETS=1"
 )
 if defined CAPTURE echo   images  : %VICTORY_CAPTURE%
+if defined TRACES (
+    set "VICTORY_D3D12_DRED=1"
+    echo   traces  : garde les dernieres commandes donnees a la carte
+)
 if defined PROFILE (
     set "VICTORY_GPU_TIMING=1"
     set "VICTORY_D3D12_DRED=1"
@@ -230,7 +240,11 @@ if not defined PREPARE goto title
 echo Preparation terminee, code %ERRORLEVEL%. Journal : %LOG%
 exit /b %ERRORLEVEL%
 :title
-rem Une ligne par image, a cote du journal (document 11).
+rem Si la carte est perdue, le journal donne l'adresse fautive et ce qui s'y
+rem trouvait : la panne du 25/11 ne vient qu'une fois sur deux et jamais dans la
+rem version diagnostic. (VICTORY_D3D12_DRED vide avant le lancement : sans.)
+if not defined VICTORY_D3D12_DRED set "VICTORY_D3D12_DRED=1"
+rem Une ligne par image, a cote du journal.
 set "VICTORY_FRAME_CSV=%LOGS%\%NAME%.images.csv"
 "%EXE%" run "%TITLE%" --execute --console %CONSOLE% 1>"%OUT%" 2>"%LOG%"
 echo Termine, code %ERRORLEVEL%. Journal : %LOG%

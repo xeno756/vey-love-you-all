@@ -1460,13 +1460,13 @@ fn record_twin_copy(
     }
 }
 
-/// Whether device-removed data is on (`VICTORY_D3D12_DRED`, diagnostics
-/// builds).
+/// Whether device-removed data is on (`VICTORY_D3D12_DRED`). In any build:
+/// a card lost in the plain build alone (runs of 25/11, 11:48 and 11:57:
+/// twice there, never in three diagnostics runs) must be told by it too.
+/// The commands' notes stay the diagnostics builds'.
 pub(crate) fn dred_on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_DRED").is_some()
-    })
+    *ON.get_or_init(|| std::env::var_os("VICTORY_D3D12_DRED").is_some())
 }
 
 /// Indirect mesh dispatches since the last frame line: the largest group
