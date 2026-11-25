@@ -35,6 +35,7 @@ leurs caches l'une l'autre.
 |---|---|
 | `7a8a970` | la fusion : 113 fichiers de ScarlettPort, 20 conflits résolus, nos fonctions gardées |
 | `60bd4da` | une seule commande de préparation (`prepare`), qui peut aussi compiler les pipelines graphiques du cache du jeu |
+| `1fdb0bf` | mélange à deux sources gardé sur la première cible seulement : 1 868 pipelines de plus acceptés par la carte |
 
 État : compile, **752 tests réussis, 0 échec**, lint propre avec et sans la fonction
 `diagnostics`, politique du dépôt respectée. **Pas encore lancée avec le jeu.**
@@ -61,6 +62,17 @@ leurs caches l'une l'autre.
 - Un test de l'étage géométrie, ignoré : il échoue aussi dans l'arbre de ScarlettPort sur cette
   machine (les validateurs DXIL d'ici refusent le programme du test).
 - Tout `runtime/xcl` (GPL-2.0 seule).
+
+### Ce qui reste à faire sur cette branche
+
+1. Un lancement par l'utilisateur (la branche n'a jamais tourné avec le jeu).
+2. Les 403 pipelines refusés faute de barycentriques sur la RX 5600 XT : faire porter les poids
+   des trois coins par une sortie interpolée du shader de sommets généré pour les programmes
+   mesh, et lire cette sortie dans le pixel shader à la place de `SV_Barycentrics`.
+3. Mesurer `pipelines-du-jeu` (pipelines graphiques précompilés servis au jeu) : compilations
+   restantes pendant le chargement du monde.
+4. Essayer un par un les interrupteurs de vitesse de ScarlettPort (liste dans leur
+   `docs/RUNTIMES.md`), aucun n'est mesuré.
 
 ### Pour l'essayer
 
