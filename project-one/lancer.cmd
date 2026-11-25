@@ -52,13 +52,16 @@ rem noms de shaders de calcul, un par ligne. Seuls des calculs sont laisses de
 rem cote, jamais un dessin : aucun modele ne disparait par ces listes.
 rem
 rem Profils (les options ci-dessus deja reglees pour ce PC) :
-rem   lancer.cmd series-x rapide            720p, textures:2 et les quatre groupes
-rem                                         de minimal : 4 fois moins de pixels a
-rem                                         calculer, textures 16 fois plus legeres
-rem   lancer.cmd series-x maximum           540p, textures:3 et tous les groupes
-rem                                         sauf volumetrie (sans elle l'image peut
-rem                                         etre noire) : ombres et eclairage
-rem                                         peuvent etre faux
+rem   lancer.cmd series-x rapide            720p et textures:2 : 4 fois moins de
+rem                                         pixels a calculer, textures 16 fois plus
+rem                                         legeres. Aucun effet n'est laisse de
+rem                                         cote : l'image doit rester juste
+rem   lancer.cmd series-x maximum           720p, textures:3 et tous les groupes
+rem                                         d'effets sauf volumetrie (sans elle
+rem                                         l'image peut etre noire) : reflets,
+rem                                         ombres et eclairage peuvent etre faux
+rem   (540p : le jeu est reste sur l'ecran des licences au lancement du 25/11 a
+rem   10 h 13 ; aucun profil ne l'utilise plus)
 rem   lancer.cmd series-x rapide vitesse    en plus, moins de copies et de calculs
 rem                                         de controle du cote du processeur
 rem                                         (reglages de ScarlettPort, non mesures)
@@ -206,6 +209,7 @@ if defined ECHELLE echo   echelle : rendu 3D a %ECHELLE% de l'image du jeu
 if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
 if defined SANS echo   sans    : %SANS%
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
+if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
     set "VICTORY_CAPTURE_WORLD=1"
@@ -226,6 +230,8 @@ if not defined PREPARE goto title
 echo Preparation terminee, code %ERRORLEVEL%. Journal : %LOG%
 exit /b %ERRORLEVEL%
 :title
+rem Une ligne par image, a cote du journal (document 11).
+set "VICTORY_FRAME_CSV=%LOGS%\%NAME%.images.csv"
 "%EXE%" run "%TITLE%" --execute --console %CONSOLE% 1>"%OUT%" 2>"%LOG%"
 echo Termine, code %ERRORLEVEL%. Journal : %LOG%
 rem Le dernier journal, la ou les anciens lancements l'ecrivaient.
@@ -252,13 +258,15 @@ rem 2 Go, 30 000 textures en attente de place).
 :rapide
 set "PROFIL=rapide"
 call :size 1280x720
-call :minimal
+if not defined TEXTURES set "TEXTURES=2"
 goto :eof
 
 rem Le profil maximum : tout ce qui peut etre reduit sans retirer un dessin.
+rem (1280x720 est la plus petite taille vue en jeu : en 960x540 le jeu n'a pas
+rem depasse l'ecran des licences.)
 :maximum
 set "PROFIL=maximum"
-call :size 960x540
+call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
 call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
 goto :eof
