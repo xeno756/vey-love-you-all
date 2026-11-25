@@ -140,6 +140,10 @@ pub(crate) struct Shader {
     pub prims: Vec<SigElement>,
     /// A mesh shader (`threads` is its thread-group size).
     pub mesh: Option<Mesh>,
+    /// The mesh program is lowered as a compute shader writing records
+    /// (`mesh_compute`): `mesh` drives the lowering, the shader finishes as
+    /// compute, without signatures.
+    pub mesh_compute: bool,
     /// A geometry shader (the rectangle stage, `rect.rs`); `pixel` is false.
     pub geometry: Option<Geometry>,
     /// Dwords of user data the shader reads (0: no user-data buffer).
@@ -204,6 +208,7 @@ impl Shader {
             outputs: Vec::new(),
             prims: Vec::new(),
             mesh: None,
+            mesh_compute: false,
             geometry: None,
             user_data: 0,
             samplers: 0,
@@ -445,6 +450,14 @@ impl Shader {
 
     /// The finished container.
     pub fn finish(mut self) -> Vec<u8> {
+        // A mesh program lowered as compute writes its outputs to records:
+        // from here on it is a compute shader of the same group size.
+        if self.mesh_compute {
+            self.mesh = None;
+            self.inputs.clear();
+            self.outputs.clear();
+            self.prims.clear();
+        }
         let ud_size = (self.user_data * 4).next_multiple_of(16);
         self.fix_user_data_size(ud_size);
         // The clean-up, before anything is declared about the code: a

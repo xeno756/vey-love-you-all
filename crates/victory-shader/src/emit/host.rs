@@ -618,6 +618,10 @@ pub enum Root {
         srv: bool,
         data: Vec<u32>,
     },
+    /// A root UAV over a zeroed buffer of this many dwords, whose contents
+    /// [`Host::dispatch`] returns after the heap's UAVs ([`Host::dispatch`]
+    /// only).
+    Uav(u32),
 }
 
 /// Bindings for [`Host::draw`]: root arguments and the heap contents.
@@ -837,6 +841,8 @@ impl Host {
             };
             list.SetDescriptorHeaps(&[Some(views.clone()), Some(sampler_heap.clone())]);
             list.SetGraphicsRootSignature(root);
+            // Root views' buffers, alive until the fence.
+            let mut root_views = Vec::new();
             for (param, arg) in &d.roots {
                 match arg {
                     Root::Constants(data) => list.SetGraphicsRoot32BitConstants(
@@ -855,7 +861,27 @@ impl Host {
                         at.ptr += (index * size) as u64;
                         list.SetGraphicsRootDescriptorTable(*param, at);
                     }
-                    Root::View { .. } => return Err("root views in a draw".into()),
+                    Root::View { srv, data } => {
+                        let size = (data.len() * 4).next_multiple_of(256);
+                        let b = make(
+                            D3D12_HEAP_TYPE_UPLOAD,
+                            &buf_desc(size as u64),
+                            D3D12_RESOURCE_STATE_GENERIC_READ,
+                            None,
+                        )?;
+                        let mut p = std::ptr::null_mut();
+                        b.Map(0, None, Some(&mut p)).map_err(err)?;
+                        std::ptr::copy_nonoverlapping(data.as_ptr(), p.cast::<u32>(), data.len());
+                        b.Unmap(0, None);
+                        let va = b.GetGPUVirtualAddress();
+                        if *srv {
+                            list.SetGraphicsRootShaderResourceView(*param, va);
+                        } else {
+                            list.SetGraphicsRootConstantBufferView(*param, va);
+                        }
+                        root_views.push(b);
+                    }
+                    Root::Uav(_) => return Err("root UAVs in a draw".into()),
                 }
             }
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
@@ -1389,6 +1415,21 @@ impl Host {
                             list.SetComputeRootConstantBufferView(*param, va);
                         }
                         keep.push(b);
+                    }
+                    &Root::Uav(n) => {
+                        let bytes = u64::from(n.max(1)) * 4;
+                        let b = make(
+                            D3D12_HEAP_TYPE_DEFAULT,
+                            &buffer(bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
+                            D3D12_RESOURCE_STATE_COMMON,
+                        )?;
+                        list.SetComputeRootUnorderedAccessView(*param, b.GetGPUVirtualAddress());
+                        let rb = make(
+                            D3D12_HEAP_TYPE_READBACK,
+                            &buffer(bytes, D3D12_RESOURCE_FLAG_NONE),
+                            D3D12_RESOURCE_STATE_COPY_DEST,
+                        )?;
+                        uavs.push((b, None, n, rb));
                     }
                 }
             }
