@@ -1,6 +1,6 @@
 # Changelog de PROJECT ONE
 
-Branche `project-one/integration` du fork `victory-gta6`. Étiquettes :
+Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 

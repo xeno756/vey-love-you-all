@@ -1,8 +1,8 @@
-# Agent 1 — Audit : fork victory-gta6 face à XCL
+# Agent 1 — Audit : fork de VIctory (fxceless) face à XCL
 
 Audit en lecture seule, le 24/11/2026. Fork au commit `7b0f736`, XCL au commit `9e3831e`
 (`xcl-dev/xcl`, main). Les numéros de ligne sont ceux de ces commits. **F** désigne
-`victory-gta6/crates/`, **X** désigne `xcl/crates/xcl/src/`.
+`crates/` du fork, **X** désigne `xcl/crates/xcl/src/`.
 
 ## Matrice de décision
 

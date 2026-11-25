@@ -6,7 +6,7 @@
 |---|---|---|
 | Fusionner XCL et VIctory module par module | **écartée** | XCL est GPL-2.0-only, VIctory GPL-3.0-or-later : du code des deux ne peut pas former une œuvre unique distribuable. Leurs modules ne partagent aucune interface : mémoire (XCL : fenêtres « UMA » en mémoire vidéo ; VIctory : mémoire du jeu en RAM + copies sur la carte), D3D12.X, traduction des shaders (XCL : HLSL compilé par DXC ; VIctory : DXIL écrit directement). Un « loader de l'un + GPU de l'autre » obligerait à tout réécrire. |
 | Partir de XCL | écartée | Sur cette machine : manque de mémoire vidéo à 80 s ou réinitialisation à 259 s en Series X ; jamais de chargement du monde en Series S ; aucune géométrie à mesh shaders dessinée, sur aucune carte. |
-| **Partir du fork `victory-gta6` et y réécrire les bonnes idées de XCL** | **retenue** | C'est le seul des trois projets (VIctory, XCL, Leonida) où la cinématique et le prologue s'affichent (sur RTX 4070). Il est GPL-3.0-or-later, et l'audit le juge meilleur que XCL dans chaque module pour cette machine (`docs/technical/01-audit-fork-xcl.md`). |
+| **Partir du fork de VIctory par fxceless et y réécrire les bonnes idées de XCL** | **retenue** | C'est le seul des trois projets (VIctory, XCL, Leonida) où la cinématique et le prologue s'affichent (sur RTX 4070). Il est GPL-3.0-or-later, et l'audit le juge meilleur que XCL dans chaque module pour cette machine (`docs/technical/01-audit-fork-xcl.md`). |
 
 Leonida (GPL-3.0-or-later, Vulkan) a été examiné : le jeu n'y démarre pas, et son dépôt
 GitHub n'est plus accessible. Son idée de mesh shaders en calcul sert de référence de

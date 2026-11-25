@@ -4,7 +4,7 @@
 
 | Source | Licence | Dans PROJECT ONE |
 |---|---|---|
-| Fork `victory-gta6` / VIctory | GPL-3.0-or-later | base du projet |
+| Fork de VIctory (fxceless) / VIctory | GPL-3.0-or-later | base du projet |
 | XCL (`xcl-dev/xcl`) | GPL-2.0-only | **aucun code**. Le fork contenait `victory-loader/src/console_insn.rs` et `console_insn_decode.rs`, « Ported from XCL … GPL-2.0-only » (décodeur annoncé « unchanged ») : retirés dans le commit « Loader: drop the console-instruction emulation ported from XCL ». |
 | Leonida | GPL-3.0-or-later | aucun code ; référence de conception seulement |
 | addrlib (AMD) | MIT | déjà dans le fork (`victory-formats/src/texture.rs`, notice conservée) |

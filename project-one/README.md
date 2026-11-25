@@ -4,7 +4,7 @@ Runtime personnel pour Windows 11, destiné à exécuter PROJECT GAME (une versi
 dont l'utilisateur possède les fichiers) sur **cette** machine : Ryzen 7 5700, 16 Go de RAM,
 Radeon RX 5600 XT 6 Go.
 
-PROJECT ONE est la branche `project-one/integration` du fork `victory-gta6` de VIctory
+PROJECT ONE est la branche `project-one/integration` du fork de VIctory par fxceless
 (GPL-3.0-or-later). Ce n'est pas une fusion de XCL et de VIctory : les deux licences sont
 incompatibles (voir [COMPATIBILITY_REPORT.md](COMPATIBILITY_REPORT.md)) et leurs architectures
 n'ont pas d'interfaces communes (voir [ARCHITECTURE.md](ARCHITECTURE.md)). XCL sert de
