@@ -51,6 +51,21 @@ rem Un groupe est un fichier ..\victory-profils\<groupe>.txt : des morceaux de
 rem noms de shaders de calcul, un par ligne. Seuls des calculs sont laisses de
 rem cote, jamais un dessin : aucun modele ne disparait par ces listes.
 rem
+rem Profils (les options ci-dessus deja reglees pour ce PC) :
+rem   lancer.cmd series-x rapide            720p, textures:2 et les quatre groupes
+rem                                         de minimal : 4 fois moins de pixels a
+rem                                         calculer, textures 16 fois plus legeres
+rem   lancer.cmd series-x maximum           540p, textures:3 et tous les groupes
+rem                                         sauf volumetrie (sans elle l'image peut
+rem                                         etre noire) : ombres et eclairage
+rem                                         peuvent etre faux
+rem   lancer.cmd series-x rapide vitesse    en plus, moins de copies et de calculs
+rem                                         de controle du cote du processeur
+rem                                         (reglages de ScarlettPort, non mesures)
+rem   lancer.cmd series-x rapide vitesse:2  en plus, ce que les shaders ecrivent
+rem                                         n'est recopie que la ou le jeu le relit
+rem                                         (plus risque : a essayer en dernier)
+rem
 rem Le dossier du jeu vient de victory.toml, a la racine du depot (non suivi
 rem par git), ou du fichier que VICTORY_CONFIG designe. Chaque lancement garde
 rem son journal dans ..\victory-logs.
@@ -68,8 +83,12 @@ set "SANS="
 set "SORTIE="
 set "ECHELLE="
 set "WATCHDOG="
+set "VITESSE="
+set "PROFIL="
 :args
 if "%~2"=="" goto args_done
+if /i "%~2"=="rapide" call :rapide
+if /i "%~2"=="maximum" call :maximum
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
 if /i "%~2"=="preparer" set "PREPARE=1"
@@ -89,6 +108,7 @@ for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="sans" call :without "%%b"
     if /i "%%a"=="sortie" set "SORTIE=%%b"
     if /i "%%a"=="echelle" set "ECHELLE=%%b"
+    if /i "%%a"=="vitesse" call :vitesse %%b
 )
 shift /2
 goto args
@@ -163,6 +183,10 @@ if not defined SANS goto groups_done
 for %%g in (%SANS:+= %) do call :group %%g
 if defined BAD exit /b 1
 :groups_done
+rem Un profil donne son nom au journal : la liste de ses reglages ferait un
+rem chemin plus long que Windows n'en accepte.
+if defined PROFIL set "TAG=-scarlettport-%PROFIL%"
+if defined VITESSE set "TAG=%TAG%-vitesse%VITESSE%"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -181,6 +205,7 @@ if defined SORTIE echo   sortie  : image du jeu en %SORTIE%
 if defined ECHELLE echo   echelle : rendu 3D a %ECHELLE% de l'image du jeu
 if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
 if defined SANS echo   sans    : %SANS%
+if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
     set "VICTORY_CAPTURE_WORLD=1"
@@ -219,6 +244,34 @@ rem Le profil minimal : les textures sans 2 niveaux, et les groupes a faible ris
 :minimal
 if not defined TEXTURES set "TEXTURES=2"
 call :without "particules+vent+flou-et-halos+reflets"
+goto :eof
+
+rem Le profil rapide : ce que le lancement du 25/11 a montre de plus couteux sur
+rem ce PC (la carte 77 %% du temps d'image en 2560x1440, sa memoire depassee de
+rem 2 Go, 30 000 textures en attente de place).
+:rapide
+set "PROFIL=rapide"
+call :size 1280x720
+call :minimal
+goto :eof
+
+rem Le profil maximum : tout ce qui peut etre reduit sans retirer un dessin.
+:maximum
+set "PROFIL=maximum"
+call :size 960x540
+if not defined TEXTURES set "TEXTURES=3"
+call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
+goto :eof
+
+rem Les reglages de vitesse de ScarlettPort du cote du processeur : 1, les
+rem controles de contenu plus legers ; 2, en plus, la recopie de ce que les
+rem shaders ecrivent limitee a ce que le jeu relit.
+:vitesse
+set "VITESSE=%~1"
+if not defined VITESSE set "VITESSE=1"
+set "VICTORY_FAST_HASH=1"
+set "VICTORY_KNOWN_WRITES=1"
+if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_ONLY_READBACK=1"
 goto :eof
 
 rem Ajoute des groupes d'effets (separes par +) a ceux a laisser de cote.
