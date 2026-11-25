@@ -13,6 +13,10 @@ rem                                  et ceux de ses programmes mesh
 rem   lancer.cmd series-x preparer-graphiques
 rem                                  comme preparer, plus les pipelines graphiques
 rem                                  que le cache de pipelines du jeu liste (long)
+rem   lancer.cmd series-x pipelines-du-jeu
+rem                                  sert au jeu les pipelines graphiques de son
+rem                                  propre cache, compiles par preparer-graphiques
+rem                                  (experimental)
 rem   lancer.cmd series-x test       montre ce qui serait lance, sans rien lancer
 rem   (capture, profil et test peuvent se combiner ; preparer suit la version
 rem   choisie : la version diagnostic a son propre cache de shaders)
@@ -72,6 +76,7 @@ if /i "%~2"=="preparer" set "PREPARE=1"
 if /i "%~2"=="preparer-graphiques" set "PREPARE=1"
 if /i "%~2"=="preparer-graphiques" set "GRAPHICS=--graphics-pipelines"
 if /i "%~2"=="test" set "DRY=1"
+if /i "%~2"=="pipelines-du-jeu" set "VICTORY_PRECOMPILED_GRAPHICS=1"
 if /i "%~2"=="minimal" call :minimal
 if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
 if /i "%~2"=="sans-synchro" set "VICTORY_PRESENT_SYNC=0"

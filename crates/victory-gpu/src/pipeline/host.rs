@@ -318,33 +318,57 @@ impl GraphicsState {
         )
     }
 
-    /// The blend state for the host: blending off on the render targets
-    /// whose format cannot blend (integer formats). The console ignores
-    /// blending there; D3D12 refuses the whole pipeline (debug layer 676,
-    /// "this format does not support blending"), and every draw of it is
-    /// dropped. With one blend description for all targets, it is copied
-    /// to each first so that only those targets change.
+    /// The blend state for the host, where the console takes what D3D12
+    /// refuses (it then refuses the whole pipeline, and every draw of it is
+    /// dropped):
+    /// - blending on a render target whose format cannot blend (integer
+    ///   formats; debug layer 676, "this format does not support
+    ///   blending"): off on those targets, as the console ignores it there;
+    /// - blending with the second source (dual-source) anywhere but on the
+    ///   first target alone (debug layer 112, 113, 115): the title's state
+    ///   blocks give every target the first one's description, also the
+    ///   targets a pipeline does not have. Kept on the first target, off on
+    ///   the others. 1,827 of the title's mesh pipelines and some 440
+    ///   others were refused for it on the first card it was counted on.
+    ///
+    /// With one blend description for all targets, it is copied to each
+    /// first so that only those targets change.
     pub(crate) fn host_blend(&self) -> D3D12_BLEND_DESC {
         let mut blend = self.blend;
         let n = self.targets.NumRenderTargets.min(8) as usize;
         let independent = blend.IndependentBlendEnable.as_bool();
-        let fix: Vec<usize> = (0..n)
+        let of = |i: usize| if independent { i } else { 0 };
+        let integer: Vec<usize> = (0..n)
             .filter(|&i| integer_format(self.targets.RTFormats[i]))
+            .filter(|&i| blend.RenderTarget[of(i)].BlendEnable.as_bool())
+            .collect();
+        let first_dual = blend.RenderTarget[0].BlendEnable.as_bool() && dual_source(&blend.RenderTarget[0]);
+        // Which targets past the first D3D12 would refuse: with their own
+        // descriptions all eight are checked, with one for all only those
+        // the pipeline has.
+        let past_first = if independent { 8 } else { n };
+        let dual: Vec<usize> = (1..past_first)
             .filter(|&i| {
-                blend.RenderTarget[if independent { i } else { 0 }]
-                    .BlendEnable
-                    .as_bool()
+                let t = &blend.RenderTarget[of(i)];
+                dual_source(t) || first_dual && t.BlendEnable.as_bool()
             })
             .collect();
-        if fix.is_empty() {
+        if integer.is_empty() && dual.is_empty() {
             return blend;
         }
         if !independent {
             blend.RenderTarget = [blend.RenderTarget[0]; 8];
             blend.IndependentBlendEnable = true.into();
+            // (Its other entries were not looked at; now they are.)
+            if first_dual {
+                (1..8).for_each(|i| plain(&mut blend.RenderTarget[i]));
+            }
         }
-        for i in fix {
+        for i in integer {
             blend.RenderTarget[i].BlendEnable = false.into();
+        }
+        for i in dual {
+            plain(&mut blend.RenderTarget[i]);
         }
         blend
     }
@@ -934,6 +958,25 @@ impl HostPipeline {
     }
 }
 
+/// Whether a target's blend description names the second source
+/// (dual-source blending), enabled or not.
+fn dual_source(t: &D3D12_RENDER_TARGET_BLEND_DESC) -> bool {
+    [t.SrcBlend, t.DestBlend, t.SrcBlendAlpha, t.DestBlendAlpha].into_iter().any(|b| {
+        matches!(
+            b,
+            D3D12_BLEND_SRC1_COLOR | D3D12_BLEND_INV_SRC1_COLOR | D3D12_BLEND_SRC1_ALPHA | D3D12_BLEND_INV_SRC1_ALPHA
+        )
+    })
+}
+
+/// Makes a target's blend description one that blends nothing and names
+/// only the first source; its write mask stays.
+fn plain(t: &mut D3D12_RENDER_TARGET_BLEND_DESC) {
+    t.BlendEnable = false.into();
+    (t.SrcBlend, t.DestBlend) = (D3D12_BLEND_ONE, D3D12_BLEND_ZERO);
+    (t.SrcBlendAlpha, t.DestBlendAlpha) = (D3D12_BLEND_ONE, D3D12_BLEND_ZERO);
+}
+
 /// Whether a render target format is an integer one (`_UINT`, `_SINT`):
 /// D3D12 blends none of them.
 fn integer_format(f: DXGI_FORMAT) -> bool {
@@ -1243,7 +1286,7 @@ fn bounds_pipeline(
             add(s, kind, code);
         }
     }
-    add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.blend);
+    add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.host_blend());
     add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, g.sample_mask);
     add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, g.rasterizer);
     let d = &g.depth;
@@ -1394,6 +1437,45 @@ mod tests {
         let b = g.host_blend();
         assert!(!b.IndependentBlendEnable.as_bool());
         assert!(b.RenderTarget[0].BlendEnable.as_bool());
+    }
+
+    /// Blending with the second source stays on the first target and goes
+    /// from the others, which D3D12 refuses it on: also from the entries of
+    /// targets the pipeline does not have, where the title's state repeats
+    /// the first one's.
+    #[test]
+    fn dual_source_blending_stays_on_the_first_target_alone() {
+        let dual = |independent: bool, targets: usize| {
+            let mut g = blending(&[DXGI_FORMAT_R8G8B8A8_UNORM; 8][..targets], independent);
+            for t in &mut g.blend.RenderTarget {
+                t.DestBlend = D3D12_BLEND_INV_SRC1_COLOR;
+                t.DestBlendAlpha = D3D12_BLEND_INV_SRC1_ALPHA;
+            }
+            g
+        };
+        // One target, one description for all: what D3D12 takes as it is.
+        let b = dual(false, 1).host_blend();
+        assert!(!b.IndependentBlendEnable.as_bool());
+        assert_eq!(b.RenderTarget[0].DestBlend, D3D12_BLEND_INV_SRC1_COLOR);
+        // One target, each entry its own (the title's decoded state): the
+        // first keeps its blending, the seven others name the first source.
+        let b = dual(true, 1).host_blend();
+        assert!(b.RenderTarget[0].BlendEnable.as_bool());
+        assert_eq!(b.RenderTarget[0].DestBlend, D3D12_BLEND_INV_SRC1_COLOR);
+        for t in &b.RenderTarget[1..] {
+            assert!(!t.BlendEnable.as_bool());
+            assert_eq!((t.SrcBlend, t.DestBlend), (D3D12_BLEND_ONE, D3D12_BLEND_ZERO));
+            assert_eq!((t.SrcBlendAlpha, t.DestBlendAlpha), (D3D12_BLEND_ONE, D3D12_BLEND_ZERO));
+        }
+        // Three targets with one description: the same, each its own now.
+        let b = dual(false, 3).host_blend();
+        assert!(b.IndependentBlendEnable.as_bool());
+        assert!(b.RenderTarget[0].BlendEnable.as_bool());
+        assert!(b.RenderTarget[1..].iter().all(|t| !t.BlendEnable.as_bool() && !dual_source(t)));
+        // Blending without the second source on several targets is left alone.
+        let g = blending(&[DXGI_FORMAT_R8G8B8A8_UNORM; 3], true);
+        let b = g.host_blend();
+        assert!(b.RenderTarget[..3].iter().all(|t| t.BlendEnable.as_bool()));
     }
 
     #[test]
