@@ -18,6 +18,13 @@ lancement et profils `rapide` et `maximum` qui en découlent :
 [docs/technical/10-premier-lancement-reussi-et-profils.md](docs/technical/10-premier-lancement-reussi-et-profils.md).
 Prochain essai conseillé : `project-one/meilleure.cmd series-x rapide`.
 
+Depuis le 25/11 à 11 h 20, le travail suit des lots numérotés (mesure, streaming,
+figement, barycentriques, niveau de détail…) : [PERF_JOURNAL.md](PERF_JOURNAL.md) pour
+chaque commit et sa mesure, [DECISIONS.md](DECISIONS.md) pour les choix faits sans
+question, [BLOCKERS.md](BLOCKERS.md) pour ce qui attend. Les lots 0 à 2 sont écrits et
+testés hors jeu (763 tests) ; les lots suivants attendent un lancement qui montre le
+monde chargé.
+
 | Version | Commande | Ce qui est vu en jeu |
 |---|---|---|
 | Branche stable | `project-one/lancer.cmd series-x` | entre dans le monde et y tourne, modèles 3D visibles, 0,3 à 2,5 images par seconde pendant les 25 secondes de monde du lancement de 8 h 20 ; introduction saccadée à ce lancement, corrigée depuis sans nouvel essai |
