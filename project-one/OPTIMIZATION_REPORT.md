@@ -64,11 +64,14 @@ C'est la base pour mesurer au prochain lancement.
 | Copies de textures | sur la carte seulement à la première utilisation (`VICTORY_LAZY_TEXTURES`) | jusqu'ici, celles des objets à mesh shaders ne prenaient pas de place, car ces objets n'étaient jamais dessinés. Avec le remplacement, ils le seront : il faut s'attendre à plus de mémoire vidéo utilisée |
 | Traduction des shaders | DXIL écrit directement, sans DXC | le problème de mémoire de DXC (XCL) n'existe pas ici |
 
-## Pistes suivantes, chiffrées par les agents
+## Pistes suivantes
 
 | Piste | Gain attendu ici | Effort |
 |---|---|---|
-| Remplacement des mesh shaders | le monde apparaît | dessins directs écrits ; restent les dessins indirects et le regroupement |
+| Mode Series S du jeu | mémoire du jeu de 13,5 à 7,8 Go, moins de pixels : estimation de 2 à 6 images par seconde dans le monde, à mesurer | cause probable du blocage corrigée ; essai en jeu à faire |
+| Dessins mesh indirects | les bâtiments et le sol apparaissent | écrits pour un enregistrement par appel ; essai en jeu à faire |
+| Préparation avant le lancement | plus de traduction en jeu, pipelines de calcul déjà compilés : fin des 500 ms d'attente par image des premières minutes pour ces pipelines | fait et mesuré hors jeu (9 min 41 s) ; gain en jeu à mesurer |
+| Profil de la carte par commande | dit quelles passes coûtent le plus | mode `profil` du lanceur prêt |
 | Découpage des lots de calcul de plus de ~1 s en plusieurs listes | moins de réinitialisations (le calcul n'est préempté qu'entre deux listes sur cette carte) | moyen ; l'état des ressources entre listes est à traiter |
 | Limite de boucles adaptée (2^20 aujourd'hui en version normale) | moins de passes qui dépassent 2 s | 1 à 2 jours |
 | Render targets qui partagent les pages de mémoire vidéo, avec plafond | moins de mémoire vidéo | 1 à 2 semaines |

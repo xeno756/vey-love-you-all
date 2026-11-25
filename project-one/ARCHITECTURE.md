@@ -48,9 +48,13 @@ chacune reste remplaçable et testable seule (`cargo test -p <crate>`).
 
 Dans l'ordre d'impact (détails dans `docs/technical/`) :
 
-1. **Fin du remplacement des mesh shaders.** Les dessins directs sont écrits (étapes 1, 2
-   et 4). Il reste les dessins indirects, la comparaison sur WARP, le regroupement des dessins
-   et l'essai en jeu.
+1. **Essayer le mode Series S en jeu.** C'est le mode du jeu qui correspond à cette machine
+   (7,8 Go pour le jeu, définition interne plus basse). Sa cause probable de blocage est
+   corrigée, sans vérification en jeu. Voir `docs/technical/06-performances.md`.
+1 bis. **Vérifier en jeu les dessins mesh indirects**, écrits pour un enregistrement par appel.
+   Restent : les appels à plusieurs enregistrements et la comparaison sur WARP.
+1 ter. **Profil de la carte par commande** (`lancer.cmd series-s profil`), pour savoir quelles
+   passes prennent les 0,4 à 2,6 s par image mesurées en mode Series X.
 2. **Limite de boucles et découpage du travail de calcul**, pour rester sous les 2 s de
    Windows sur une carte plus lente que la RTX 4070 de l'auteur.
 3. **Partage des pages de mémoire vidéo entre render targets**, avec plafond (idée de XCL).

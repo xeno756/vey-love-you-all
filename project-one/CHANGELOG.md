@@ -4,6 +4,31 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 24/11/2026 (soir) — performances
+
+Diagnostic complet et mesures : [docs/technical/06-performances.md](docs/technical/06-performances.md).
+
+- **Mode Series S débloqué (à vérifier en jeu).** Le runtime disait au jeu qu'il utilisait toute
+  la mémoire du processus (6 082 Mo sur 7 776 Mo trois secondes après le démarrage). Le jeu, qui
+  ne pose cette question qu'en mode Series S, ne chargeait rien après son premier écran. La
+  réponse compte maintenant la mémoire du jeu seul. `VICTORY_TITLE_USED=process` remet l'ancienne.
+- **Dessins mesh indirects.** Les 2 000 à 2 260 dessins mesh indirects par image (la géométrie
+  solide du monde) étaient sautés. Ils sont exécutés quand l'appel porte un seul enregistrement,
+  ce qui est le cas du jeu. Les appels à plusieurs enregistrements restent sautés.
+- **Un seul tampon d'enregistrements mesh**, de 32 Mio, pour toutes les listes
+  (`VICTORY_MESH_RECORDS_MB`). Avant, chaque liste pouvait garder le sien, jusqu'à 8 Mio.
+- **Ordre de compilation des pipelines.** Les pipelines demandés par l'image en cours passent
+  avant ceux demandés plus tôt et plus utilisés.
+- **Commande `prepare`.** `victory prepare --compute-pipelines` traduit tous les shaders du jeu
+  dans le cache et compile ses pipelines de calcul avant le lancement. Mesuré : 25 466 shaders
+  et 2 723 pipelines en 9 min 41 s.
+- **Cache de shaders rangé par version.** Le cache garde la version en cours et la précédente,
+  et retire les autres. Avant, chaque recompilation ajoutait 1,3 Go pour toujours.
+- **Lanceur.** Modes `profil` (temps de la carte par commande) et `preparer`, un journal par
+  lancement dans le dossier `victory-logs`, à côté du dépôt.
+- **Banc d'essai** du schéma de dessin mesh (`crates/victory-gpu/src/bench.rs`) : le schéma
+  actuel coûte 2 à 5 ms par image, il n'est pas réécrit.
+
 ## 24/11/2026
 
 - **Shaders : les programmes mesh en calcul** (`crates/victory-shader/src/emit/mesh_compute.rs`).

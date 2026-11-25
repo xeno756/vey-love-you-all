@@ -21,7 +21,8 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | 1. Fork tel que cloné, sans `VICTORY_DXIL` | `7b0f736` | 111 s, 0 avertissement | 481 | 3 | 7 |
 | 2. Fork à jour, sans nos changements | `a803c87` | 88 s | 504 | 0 | 8 |
 | 3. PROJECT ONE | `a803c87` + 3 commits | 38 s (incrémentale), 0 avertissement | 511 | 0 | 8 |
-| 4. **PROJECT ONE avec le remplacement des mesh shaders** | `a803c87` + 5 commits de code | incrémentale, 0 avertissement | **520** | **0** | 8 |
+| 4. PROJECT ONE avec le remplacement des mesh shaders | `a803c87` + 5 commits de code | incrémentale, 0 avertissement | 520 | 0 | 8 |
+| 5. **PROJECT ONE après la session performances** | `a803c87` + 8 commits de code | incrémentale, 0 avertissement | **526** | **0** | 9 (dont le banc d'essai, lancé à la main) |
 
 - **Clippy** (`-D warnings`) sur les crates modifiées (`victory-gpu`, aussi avec la fonction
   `diagnostics`, `victory-shader`, `victory-loader`) : aucune erreur.
@@ -35,7 +36,7 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | `emit::rect::tests::rectangles_are_drawn_whole` | validateur DXIL 1.6 du SDK Windows trop ancien | `VICTORY_DXIL` vers DXC 1.9 |
 | `emit::rect::tests::the_rectangle_stage_is_a_geometry_shader` | même cause | même chose |
 
-## Par module (mesure 2 → mesure 4)
+## Par module (mesure 2 → mesure 5)
 
 | Binaire de test | Fork à jour | PROJECT ONE | Écart |
 |---|---|---|---|
@@ -43,8 +44,8 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | victory_core | 11 | 11 | — |
 | victory_formats | 24 (+4 ignorés) | 24 (+4 ignorés) | — |
 | victory_game | 3 | 3 | — |
-| **victory_gpu** | 112 (+1 ignoré) | **123** (+1 ignoré) | **+11 tests ajoutés** |
-| victory_hle | 96 | 96 | — |
+| **victory_gpu** | 112 (+1 ignoré) | **127** (+2 ignorés) | **+15 tests ajoutés**, +1 banc d'essai |
+| **victory_hle** | 96 | **98** | **+2 tests ajoutés** |
 | no_dll_planting | 1 | 1 | — |
 | **victory_loader** | 24 | **22** | −2 : tests du code repris de XCL, retirés avec lui |
 | load_probe | 2 | 2 | — |
@@ -54,7 +55,7 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | **victory_shader** | 214 (+3 ignorés) | **221** (+3 ignorés) | **+7 tests ajoutés** |
 | xtask | 4 | 4 | — |
 
-## Les 11 tests ajoutés (victory-gpu)
+## Les 15 tests ajoutés (victory-gpu)
 
 | Test | Vérifie | Sur la carte ? |
 |---|---|---|
@@ -67,8 +68,29 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | `an_r9g9b9e5_target_gets_a_format_the_host_renders_to` | texture, vues, format de pipeline, effacement relu | oui |
 | `r9g9b9e5_views_of_a_target_take_its_stand_in` | vues UAV et de lecture | oui |
 | `the_removal_report_says_how_long_the_card_had_it` | rapport de perte de la carte | non |
-| `a_list_reuses_and_grows_its_mesh_records_up_to_the_cap` | tampon d'enregistrements mesh de la liste : réutilisé, agrandi jusqu'au plafond, gardé entre deux remises à zéro | oui |
-| `the_mesh_record_cap_defaults_to_8_mib` | plafond par défaut du tampon | non |
+| `the_mesh_buffers_are_one_for_every_list` | un seul tampon d'enregistrements mesh et un seul tampon d'arguments, quel que soit le demandeur | oui |
+| `the_mesh_record_buffer_is_32_mib_by_default` | taille par défaut du tampon | non |
+| `mesh_arguments_are_a_dispatch_and_a_draw_of_the_groups_that_fit` | dessins mesh indirects : la passe de conversion écrit les arguments du calcul et du dessin, bornés à la place disponible, vides pour un enregistrement vide | oui |
+| `the_pipeline_asked_for_last_is_made_first` | ordre de compilation des pipelines : celui demandé par l'image la plus récente d'abord | non |
+| `a_preparation_leaves_what_is_no_shader_alone` | la préparation ignore ce qui n'est pas un shader | oui (rien à préparer) |
+| `old_builds_translations_are_removed` | cache de shaders : un dossier par version, les versions périmées et l'ancien rangement sont retirés | non |
+
+## Les 2 tests ajoutés (victory-hle)
+
+| Test | Vérifie | Sur la carte ? |
+|---|---|---|
+| `title_use_counts_what_the_title_committed` | la mémoire dite au jeu suit ce qu'il engage, libère et rend dans ses propres réservations | non |
+| `working_set_statistics_report_the_titles_own_memory` | la réponse est la mémoire du jeu, pas celle de tout le processus | non |
+
+## Bancs d'essai et mesures hors jeu
+
+| Mesure | Commande | Résultat sur cette machine |
+|---|---|---|
+| Schéma de dessin mesh, un par un contre regroupé | `cargo test -p victory-gpu --release bench -- --ignored --nocapture` | 256 dessins : 1,8 à 2,7 ms un par un, 0,95 à 1,3 ms regroupés ; 2 304 dessins : 5,4 ms contre 1,1 ms |
+| Traduction de tous les shaders du jeu, sans cache | `victory translate <archive des shaders> --jobs 12` | 26 084 programmes en 2 min 40 s |
+| Préparation complète, cache vide | `victory prepare --compute-pipelines` | 25 466 shaders traduits et 2 723 pipelines de calcul en 9 min 41 s |
+
+Détails et lecture : [docs/technical/06-performances.md](docs/technical/06-performances.md).
 
 ## Les 7 tests ajoutés (victory-shader, remplacement des mesh shaders)
 
@@ -87,6 +109,9 @@ Les trois tests du format R9G9B9E5 échouent si on retire la correction : vérif
 ## Ce que ces tests ne prouvent pas
 
 - **Le rendu en jeu** : un test unitaire réussi ne prouve pas que PROJECT GAME s'affiche.
+- **Les images par seconde en jeu** : aucune mesure n'a été faite après les changements de la
+  session performances. Le seul chiffre en jeu (environ 1 image par seconde en mode Series X)
+  date d'avant.
 - **La mémoire réelle en jeu** : elle ne se mesure qu'en lançant le jeu.
 - **Les tests de charge** : aucun test de charge GPU ou mémoire reproductible n'existe encore.
 - **Le remplacement des mesh shaders de bout en bout** : aucun test ne passe un vrai programme

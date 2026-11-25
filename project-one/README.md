@@ -12,11 +12,17 @@ référence : ses bonnes idées sont réécrites ici, jamais copiées.
 
 ## État réel
 
-**Non jouable sur cette machine à ce jour.** La carte n'a pas de mesh shaders, et toute la
-géométrie du monde de PROJECT GAME en dépend. Le remplacement est maintenant écrit pour les
-dessins directs, mais il n'a pas encore été essayé en jeu. Les dessins indirects restent
-sautés. Détails : [docs/technical/04-shaders-ecran-noir.md](docs/technical/04-shaders-ecran-noir.md),
-section 3 bis. Le reste est dans [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+**Non jouable sur cette machine à ce jour.** Le jeu démarre, charge le monde et affiche le
+générique d'ouverture, à environ 1 image par seconde en mode Series X (mesuré le 24/11/2026).
+Le remplacement des mesh shaders fonctionne en jeu pour les dessins directs. Les dessins
+indirects (la géométrie solide du monde) et le déblocage du mode Series S sont écrits mais pas
+encore essayés en jeu.
+
+- Pourquoi 1 image par seconde, et ce qui a été changé :
+  [docs/technical/06-performances.md](docs/technical/06-performances.md).
+- Le remplacement des mesh shaders :
+  [docs/technical/04-shaders-ecran-noir.md](docs/technical/04-shaders-ecran-noir.md), section 3 bis.
+- Le reste : [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 Ce qui a changé par rapport au fork : [CHANGELOG.md](CHANGELOG.md).
 
@@ -72,12 +78,22 @@ Rien de PROJECT GAME n'est stocké ici (voir `docs/asset-policy.md` à la racine
 | Commande | Effet |
 |---|---|
 | `lancer.cmd` | Series X |
-| `lancer.cmd series-s` | Series S (reste sur un écran noir sur cette machine) |
+| `lancer.cmd series-s` | Series S : moins de mémoire et une définition interne plus basse, le mode le plus proche de cette machine |
+| `lancer.cmd series-x preparer` | **ne lance pas le jeu** : traduit ses shaders dans le cache et compile ses pipelines de calcul. À refaire après chaque recompilation du runtime |
 | `lancer.cmd series-x capture` | version diagnostic (`target\diag\victory.exe`) : enregistre des images de l'écran et des tampons internes du jeu (normales, profondeur, couleurs) dans `..\victory-captures`, hors du dépôt |
+| `lancer.cmd series-x profil` | version diagnostic : mesure le temps de la carte commande par commande (plus lent) |
 | `lancer.cmd series-x test` | montre ce qui serait lancé, sans rien lancer |
 
-Le dossier du jeu vient de `victory.toml`, à la racine du dépôt (non suivi par git). Le journal
-va dans `%TEMP%\victory-err.log`.
+`series-x` et `series-s` se remplacent l'un l'autre dans chaque commande. `capture`, `profil` et
+`test` se combinent. `preparer` suit la version choisie : la version diagnostic a son propre
+cache de shaders.
+
+Le dossier du jeu vient de `victory.toml`, à la racine du dépôt (non suivi par git). Chaque
+lancement garde son journal dans `..\victory-logs`, hors du dépôt ; le dernier est aussi copié
+dans `%TEMP%\victory-err.log`.
+
+Les modes `capture` et `profil` ralentissent le jeu : pour juger de la fluidité, utiliser la
+version normale.
 
 La version diagnostic se compile avec
 `cargo build --profile diag -p victory --features diagnostics`. Les tampons internes ne sont

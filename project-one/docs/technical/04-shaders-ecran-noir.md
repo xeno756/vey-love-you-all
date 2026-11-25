@@ -73,9 +73,9 @@ L'état au 24/11/2026 est décrit en section 3 bis.
 | 1. Variante calcul de l'émetteur | **faite**, testée sur la RX 5600 XT (le calcul n'a pas besoin de mesh shaders) | `victory-shader/src/emit/mesh_compute.rs`, `lower.rs` |
 | 2. Générateur de vertex shader | **fait**, validé et testé sur la carte (un enregistrement dessiné, triangle éliminé sauté) | `mesh_compute.rs` |
 | 3. Comparaison pixel à pixel avec le vrai chemin mesh sur WARP | **pas faite** (demande `VICTORY_CONSOLE_DXC`) | — |
-| 4. Branchement | **fait**, automatique sur une carte sans mesh shaders ; `VICTORY_MESH_COMPUTE=1` le force, `=0` le coupe | `victory-gpu/src/pipeline/host.rs`, `draw.rs`, `host.rs` |
-| 5. Dessins indirects | **pas faits** : ces dessins restent sautés, avec un message une fois | `draw.rs` (`execute_indirect`) |
-| 6. Regroupement des dessins | pas fait | — |
+| 4. Branchement | **fait et vu en jeu** (444 programmes traduits, 693 pipelines, 150 à 250 dessins directs par image), automatique sur une carte sans mesh shaders ; `VICTORY_MESH_COMPUTE=1` le force, `=0` le coupe | `victory-gpu/src/pipeline/host.rs`, `draw.rs`, `host.rs` |
+| 5. Dessins indirects | **faits pour un enregistrement par appel** (le cas du jeu d'après le code du fork ; 2 000 à 2 260 dessins par image), pas encore essayés en jeu ; les appels à plusieurs enregistrements ou avec compteur restent sautés | `draw.rs` (`indirect_mesh_as_compute`), `indirect.rs` (`mesh_args`) |
+| 6. Regroupement des dessins | mesuré, écarté : il ferait gagner quelques millisecondes par image | `victory-gpu/src/bench.rs` |
 
 Fonctionnement du branchement :
 
@@ -89,14 +89,20 @@ Fonctionnement du branchement :
   dessin : tables, constantes, vues racines, mémoire par adresse. Il les pose avec les appels
   de calcul. Le numéro du premier groupe de la tranche est une valeur calculée par l'hôte
   (`USER_MESH_GROUP_BASE`), donc le jeu voit ses propres numéros de groupe.
-- **Tranches.** Le tampon appartient à la liste. Il grandit jusqu'à 8 Mio
-  (`VICTORY_MESH_RECORDS_MB`) et sert à toutes ses tranches. Les programmes du jeu font environ
-  14 Ko par groupe, donc environ 580 groupes par tranche. Les tranches suivantes ne changent
-  que le pipeline et le numéro du premier groupe.
+- **Tranches.** Le tampon d'enregistrements est unique pour toutes les listes : 32 Mio
+  (`VICTORY_MESH_RECORDS_MB`), créé au premier dessin mesh. La carte exécute les listes l'une
+  après l'autre, et chaque dessin écrit ses enregistrements puis les relit avant le suivant.
+  Les programmes du jeu font environ 14 Ko par groupe, donc environ 2 200 groupes par tranche.
+  Les tranches suivantes ne changent que le pipeline et le numéro du premier groupe.
+- **Dessins indirects.** Le nombre de groupes n'est connu que de la carte. Une petite passe de
+  calcul le lit, le borne au nombre de groupes que le tampon contient, et écrit les arguments
+  d'un calcul et d'un dessin, exécutés l'un après l'autre. Un dessin qui demande plus de groupes
+  que le tampon n'en contient est tronqué.
 - **Barrières.** Le tampon passe d'UAV à lecture avant le dessin, puis revient en UAV. Ces
   barrières font les deux vidages du pipeline par tranche prévus par la conception.
-- **Écart avec la conception.** Le tampon fait 8 Mio par défaut au lieu de 32, à cause des 6 Go
-  de mémoire vidéo de la carte. La contrepartie : plus de tranches, donc plus de barrières.
+- **Coût mesuré** (banc d'essai sur la RX 5600 XT) : 2 à 10 µs par dessin mesh pour le
+  schéma calcul, barrière, dessin, barrière, soit 2 à 5 ms par image. Le regroupement des
+  dessins (étape 6) ferait gagner quelques millisecondes : il n'est pas écrit.
 
 Ce qui n'est **pas vérifié** :
 
@@ -106,7 +112,7 @@ Ce qui n'est **pas vérifié** :
 - le coût réel par image.
 
 Les tests couvrent le calcul (enregistrements écrits sur la carte), le vertex shader (dessin
-sur la carte) et le tampon de la liste (réutilisé, agrandi, gardé entre deux remises à zéro).
+sur la carte), le tampon unique et la passe de conversion des dessins indirects (sur la carte).
 Ils ne couvrent ni les liaisons ni les tranches dans `draw.rs`.
 
 ## 4. Verdict
