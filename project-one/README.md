@@ -63,3 +63,11 @@ Résultats mesurés : [TEST_RESULTS.md](TEST_RESULTS.md).
 | [docs/technical/](docs/technical/) | rapports détaillés et décisions |
 
 Rien de PROJECT GAME n'est stocké ici (voir `docs/asset-policy.md` à la racine du dépôt).
+
+## Lancer
+
+`project-one\lancer.cmd` lance PROJECT GAME avec le runtime compilé dans ce dépôt
+(`target\release\victory.exe`), en Series X par défaut. `lancer.cmd series-s` choisit la
+Series S. `lancer.cmd series-x test` montre ce qui serait lancé, sans rien lancer. Le dossier
+du jeu vient de `victory.toml`, à la racine du dépôt (non suivi par git). Le journal va dans
+`%TEMP%\victory-err.log`.
