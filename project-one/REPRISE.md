@@ -9,16 +9,19 @@ Mis à jour le 25/11/2026.
 |---|---|
 | `project-one/integration` | **branche stable**, celle que le lanceur utilise. Tout ce qui y est commité compile et passe les tests |
 | `project-one/before-scarlettport` | étiquette : l'état avant la mission du 25/11 (retour arrière possible) |
-| `project-one/scarlettport` | la pile VIctory de ScarlettPort fusionnée avec PROJECT ONE, dans le dossier `..\victory-scarlettport`. Essayée en jeu le 25/11 : introduction fluide, puis carte perdue à la première image du monde (erreur de fusion, corrigée à 9 h 30, **pas encore réessayée**) |
+| `project-one/scarlettport` | la pile VIctory de ScarlettPort fusionnée avec PROJECT ONE, dans le dossier `..\victory-scarlettport`. Essayée en jeu le 25/11 : introduction fluide, puis carte perdue à la première image du monde (erreur de fusion, corrigée à 9 h 30) ; depuis, le monde s'affiche (lancement de 9 h 41) |
 
 ## La meilleure version aujourd'hui
 
-Deux candidates, tant que la correction de 9 h 30 n'a pas tourné en jeu :
+La branche fusionnée, depuis que le lancement de 9 h 41 a montré le monde. Mesures de ce
+lancement et profils `rapide` et `maximum` qui en découlent :
+[docs/technical/10-premier-lancement-reussi-et-profils.md](docs/technical/10-premier-lancement-reussi-et-profils.md).
+Prochain essai conseillé : `project-one/meilleure.cmd series-x rapide`.
 
 | Version | Commande | Ce qui est vu en jeu |
 |---|---|---|
 | Branche stable | `project-one/lancer.cmd series-x` | entre dans le monde et y tourne, modèles 3D visibles, 0,3 à 2,5 images par seconde pendant les 25 secondes de monde du lancement de 8 h 20 ; introduction saccadée à ce lancement, corrigée depuis sans nouvel essai |
-| Branche fusionnée | `project-one/meilleure.cmd series-x` | introduction fluide ; carte perdue à la première image du monde aux lancements de 8 h 26, 8 h 59 et 9 h 00 ; cause trouvée et corrigée (`30cba67`), pas encore réessayée |
+| Branche fusionnée | `project-one/meilleure.cmd series-x` | introduction fluide ; carte perdue à la première image du monde aux lancements de 8 h 26, 8 h 59 et 9 h 00 ; cause corrigée (`30cba67`) ; lancement de 9 h 41 : le monde s'affiche, 0,2 à 3,1 images par seconde, arrêt par manque de mémoire après 7 min 35 s |
 
 Causes et preuves : [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
 
@@ -58,8 +61,8 @@ leurs caches l'une l'autre.
 | `30cba67` | **l'erreur de fusion qui perdait la carte au monde** : le tampon mesh ne partage plus l'emplacement 252 avec la table que 94 % des shaders lisent ; la clé du cache de shaders est la même en préparation et en jeu |
 
 État à `30cba67` : compile, **756 tests réussis, 0 échec**, lint propre avec et sans la fonction
-`diagnostics`, politique du dépôt respectée. La correction de 9 h 30 n'a pas encore tourné
-avec le jeu.
+`diagnostics`, politique du dépôt respectée. La correction de 9 h 30 a tourné avec le jeu
+au lancement de 9 h 41 : le monde s'affiche.
 
 ### Le piège de cette fusion, à ne pas refaire
 
@@ -96,8 +99,9 @@ L'emplacement du tampon mesh est maintenant vérifié à la compilation.
 
 ### Ce qui reste à faire sur cette branche
 
-1. Un lancement par l'utilisateur avec la correction `30cba67`. Si la carte est encore perdue :
-   `meilleure.cmd series-x profil` (version diagnostic) écrit la dernière commande exécutée.
+1. Un lancement par l'utilisateur avec le profil `rapide`, pour mesurer ce qu'il change
+   (document 10). Pour savoir quels pipelines manquent aux dessins laissés de côté :
+   `meilleure.cmd series-x rapide profil` (version diagnostic).
 2. Les 403 pipelines refusés faute de barycentriques sur la RX 5600 XT : faire porter les poids
    des trois coins par une sortie interpolée du shader de sommets généré pour les programmes
    mesh, et lire cette sortie dans le pixel shader à la place de `SV_Barycentrics`.

@@ -4,6 +4,21 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (10 h) — premier lancement réussi de la branche fusionnée, profils `rapide` et `maximum`
+
+Mesures et profils : [docs/technical/10-premier-lancement-reussi-et-profils.md](docs/technical/10-premier-lancement-reussi-et-profils.md).
+
+- **La correction de 9 h 30 est confirmée en jeu** : le monde s'affiche (lancement de 9 h 41,
+  7 min 35 s dans le monde, 0,2 à 3,1 images par seconde).
+- **Ce lancement s'est terminé par manque de mémoire**, et n'a chargé qu'une texture sur
+  sept : la carte dépasse son budget de 2 Go dès la première image du monde en 2560 × 1440.
+- **Profils ajoutés au lanceur de la branche fusionnée**, pas encore essayés en jeu :
+  `rapide` (1280 × 720, textures 16 fois plus légères, 4 groupes d'effets en moins),
+  `maximum` (960 × 540, textures 64 fois plus légères, 8 groupes sur 9), et `vitesse` pour
+  les réglages de ScarlettPort du côté du processeur.
+- **Pipelines de dessin du jeu compilés d'avance** avec la version corrigée : 24 801 sur
+  25 471, en 58 s.
+
 ## 25/11/2026 (9 h 30) — la branche fusionnée perdait la carte au monde : une erreur de fusion
 
 Cause et mesures : section 4 de [docs/technical/09-plantages-du-25-11.md](docs/technical/09-plantages-du-25-11.md).
