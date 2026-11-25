@@ -677,6 +677,34 @@ fn create() -> windows::core::Result<Host> {
     }
 }
 
+/// How finely a card can be interrupted, by DXGI's numbering of its
+/// graphics and compute preemption granularity.
+fn preemption(graphics: i32, compute: i32) -> String {
+    const GRAPHICS: [&str; 5] = ["command buffer", "primitive", "triangle", "pixel", "instruction"];
+    const COMPUTE: [&str; 5] = ["command buffer", "dispatch", "thread group", "thread", "instruction"];
+    let name = |names: &[&'static str; 5], n: i32| usize::try_from(n).ok().and_then(|n| names.get(n).copied()).unwrap_or("unknown");
+    format!(
+        "preempts graphics at {} and compute at {} boundaries",
+        name(&GRAPHICS, graphics),
+        name(&COMPUTE, compute)
+    )
+}
+
+/// For a removal report: how long the card had the failed submission, from
+/// its sending to the end of the wait for it (for submissions sent ahead:
+/// from the start of that wait, so at least that long). Windows resets a card that
+/// does not yield within 2 s of being asked to (TdrDelay's default), so a
+/// reset for time is only ever found after at least that long; `adapter`
+/// ([`Host::adapter_note`]) says where the card can yield.
+fn ran_for(ran: std::time::Duration, adapter: &str) -> String {
+    let verdict = if ran >= std::time::Duration::from_secs(2) {
+        "as long as Windows lets a card go without yielding: a reset for time is likely"
+    } else {
+        "shorter than Windows lets a card go without yielding: not a reset for time"
+    };
+    format!("; the card had it for {} ms, {verdict}; {adapter}", ran.as_millis())
+}
+
 /// DXGI may return hardware for `EnumWarpAdapter` (notably under Proton).
 /// Reject it before creating a device in diagnostics' software-only mode.
 fn warp_adapter() -> windows::core::Result<IDXGIAdapter> {
@@ -3831,8 +3859,9 @@ impl Host {
                         .flat_map(|f| f.order.iter().map(|&i| f.lists[i].host()))
                         .collect();
                     fail(format_args!(
-                        "host GPU device removed after {flights} submissions sent ahead (VICTORY_LATE_WAIT=1) of {} lists{}{}",
+                        "host GPU device removed after {flights} submissions sent ahead (VICTORY_LATE_WAIT=1) of {} lists{}{}{}",
                         runs.len(),
+                        ran_for(gpu, &self.adapter_note()),
                         self.removal_data(&runs),
                         last_notes(&runs)
                     ));
@@ -4146,8 +4175,9 @@ impl Host {
         // SAFETY: a plain query.
         if unsafe { self.device.GetDeviceRemovedReason() }.is_err() {
             fail(format_args!(
-                "host GPU device removed after a submission of {} lists{}{}",
+                "host GPU device removed after a submission of {} lists{}{}{}",
                 runs.len(),
+                ran_for(gpu, &self.adapter_note()),
                 self.removal_data(runs),
                 last_notes(runs)
             ));
@@ -6149,6 +6179,21 @@ impl Host {
         Some([own.Budget, own.CurrentUsage, shared.Budget, shared.CurrentUsage])
     }
 
+    /// The adapter's name and where it can be interrupted ([`preemption`]),
+    /// for the log and the removal report.
+    pub(crate) fn adapter_note(&self) -> String {
+        // SAFETY: a plain query that fills a structure it returns.
+        let Some(d) = self.adapter.as_ref().and_then(|a| unsafe { a.GetDesc2() }.ok()) else {
+            return "the system does not describe the adapter".into();
+        };
+        let end = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
+        format!(
+            "{}, {}",
+            String::from_utf16_lossy(&d.Description[..end]),
+            preemption(d.GraphicsPreemptionGranularity.0, d.ComputePreemptionGranularity.0)
+        )
+    }
+
     /// A buffer in system memory that the CPU maps (write-back, so reading
     /// it is fast too) and shaders read and write: for host copies of title
     /// memory that shaders write, which upload memory cannot be. Starts in
@@ -6431,6 +6476,33 @@ mod trail {
         assert!(text.contains("pipeline library: no call running"));
         assert!(text.contains(&format!("thing {} done", super::TRAIL_MOST + 4)));
         assert!(!text.contains("thing 4 done"), "the oldest entries are dropped");
+    }
+
+    /// The removal report says how long the card had the submission,
+    /// whether that is as long as Windows lets a card go without yielding
+    /// (a reset for time), and where the card can yield; the host's own
+    /// card goes to the test's output.
+    #[test]
+    fn the_removal_report_says_how_long_the_card_had_it() {
+        use std::time::Duration;
+        let long = super::ran_for(Duration::from_millis(2600), "a card");
+        assert!(long.contains("2600 ms") && long.contains("a reset for time is likely"), "{long}");
+        assert!(long.ends_with("; a card"), "{long}");
+        let short = super::ran_for(Duration::from_millis(40), "a card");
+        assert!(short.contains("40 ms") && short.contains("not a reset for time"), "{short}");
+        assert_eq!(
+            super::preemption(1, 1),
+            "preempts graphics at primitive and compute at dispatch boundaries"
+        );
+        assert_eq!(
+            super::preemption(0, 7),
+            "preempts graphics at command buffer and compute at unknown boundaries"
+        );
+        if let Some(host) = super::host() {
+            let note = host.adapter_note();
+            eprintln!("host adapter: {note}");
+            assert!(note.contains("preempts") || note.contains("does not describe"), "{note}");
+        }
     }
 }
 

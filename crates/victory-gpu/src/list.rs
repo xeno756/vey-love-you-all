@@ -827,7 +827,7 @@ extern "system" fn copy_buffer_region(
 
 /// Whether one of two resources is a target in a stand-in format and the
 /// other is not ([`crate::resource::target_format`]): their texels differ
-/// in size, so the host cannot copy between them (logged once).
+/// in size or encoding, so the host cannot copy between them (logged once).
 #[cfg(windows)]
 fn unlike(dst: This, src: This) -> bool {
     let unlike = crate::resource::stands_in(dst) != crate::resource::stands_in(src);
@@ -1065,6 +1065,10 @@ fn read_back(
     }
     if (x, y, z) != (0, 0, 0) {
         return Err("a destination corner other than the footprint's");
+    }
+    // The footprint names the title's format, the host texture its stand-in.
+    if crate::resource::stands_in(src.resource) {
+        return Err("a target in a stand-in format");
     }
     let host = crate::host::host().ok_or("no host")?;
     let (footprint, [size, row, rows, pitch]) = dst.footprint.host_rows().ok_or("an unknown format")?;

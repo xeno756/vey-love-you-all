@@ -244,22 +244,29 @@ pub(crate) fn pc_format(format: u32) -> u32 {
 /// (NVIDIA) refused the whole texture, so every pass that wrote it drew
 /// nothing. There 8-bit RGBA stands in: the same channels in the same
 /// order, every 4-bit level exact and every 5-bit level within 1/510.
+/// The shared-exponent R9G9B9E5 (67) is neither a render target nor an
+/// unordered access format on PC, and the title's Series S mode makes a
+/// 1920x1080 target of it with both uses (console flags 0x300005), which
+/// the RX 5600 XT refused (E_INVALIDARG): R11G11B10_FLOAT stands in, the
+/// same 4 bytes a texel, unsigned up to 64512 for 65408, with 6, 6 and 5 bits
+/// of mantissa per channel for 9 (R16G16B16A16_FLOAT keeps more, at 8).
+/// Textures the title only samples stay R9G9B9E5.
 /// The title's pipelines and views of such targets name the stand-in too
 /// ([`view_format`], the host view checks).
 /// shortcut: copies between such a target and a texture the title fills
-/// itself in the 16-bit format are skipped ([`stands_in`]); convert them
-/// if a pass turns out to need one.
+/// itself in its own format, and read backs of such a target, are skipped
+/// ([`stands_in`]); convert them if a pass turns out to need one.
 pub(crate) fn target_format(format: u32) -> u32 {
-    const STAND_INS: [(u32, u32); 2] = [(86, 28), (115, 28)];
+    const STAND_INS: [(u32, u32); 3] = [(86, 28), (115, 28), (67, 26)];
     let Some(i) = STAND_INS.iter().position(|&(f, _)| f == format) else {
         return format;
     };
     #[cfg(windows)]
     {
         use windows::Win32::Graphics::Direct3D12::*;
-        static REFUSED: std::sync::OnceLock<[bool; 2]> = std::sync::OnceLock::new();
+        static REFUSED: std::sync::OnceLock<[bool; 3]> = std::sync::OnceLock::new();
         let refused = REFUSED.get_or_init(|| {
-            STAND_INS.map(|(f, _)| {
+            STAND_INS.map(|(f, stand_in)| {
                 let Some(host) = crate::host::host() else {
                     return false;
                 };
@@ -279,7 +286,7 @@ pub(crate) fn target_format(format: u32) -> u32 {
                     | D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW.0;
                 let refused = asked.is_err() || support.Support1.0 & both != both;
                 if refused {
-                    tracing::info!(format = f, "the host does not render to this format: 8-bit RGBA stands in");
+                    tracing::info!(format = f, stand_in, "the host does not render to this format: the stand-in does");
                 }
                 refused
             })
@@ -3346,6 +3353,293 @@ float4 lit() : SV_Target { return 1.0; }
             let covered = read[i / 4 * 256 + i % 4] != 0;
             let drawn = matches!(class, 65 | 129);
             assert_eq!(covered, drawn, "texel {i}, class {class}");
+        }
+    }
+
+    /// The 1920x1080 R9G9B9E5 texture with render target and unordered
+    /// access that the title makes in Series S mode, asked of the host
+    /// device as it is, committed and reserved: what the driver says goes
+    /// to the test's output, with the bytes the host gives the texture
+    /// sampled and the stand-ins as targets. A host that refuses it gets
+    /// R11G11B10_FLOAT ([`target_format`]), which it takes.
+    #[cfg(windows)]
+    #[test]
+    fn the_host_is_asked_for_the_series_s_r9g9b9e5_target() {
+        use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+        let Some(host) = crate::host::host() else {
+            eprintln!("no host GPU; skipped");
+            return;
+        };
+        let desc = |format: u32, flags: D3D12_RESOURCE_FLAGS| D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: 1920,
+            Height: 1080,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT(format as i32),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Flags: flags,
+            ..Default::default()
+        };
+        let both = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            ..Default::default()
+        };
+        let committed = |d: &D3D12_RESOURCE_DESC| {
+            let mut made: Option<ID3D12Resource> = None;
+            // SAFETY: plain creation; the out pointer is ours.
+            unsafe {
+                host.device.CreateCommittedResource(
+                    &heap,
+                    D3D12_HEAP_FLAG_NONE,
+                    d,
+                    D3D12_RESOURCE_STATE_COMMON,
+                    None,
+                    &mut made,
+                )
+            }
+        };
+        // Reserved textures take the undefined 64 KiB swizzle.
+        let reserved = |d: &D3D12_RESOURCE_DESC| {
+            let d = D3D12_RESOURCE_DESC {
+                Layout: D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE,
+                ..*d
+            };
+            let mut made: Option<ID3D12Resource> = None;
+            // SAFETY: as above.
+            unsafe { host.device.CreateReservedResource(&d, D3D12_RESOURCE_STATE_COMMON, None, &mut made) }
+        };
+        let mut support = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
+            Format: DXGI_FORMAT(67),
+            ..Default::default()
+        };
+        // SAFETY: a plain query into our own structure.
+        let queried = unsafe {
+            host.device.CheckFeatureSupport(
+                D3D12_FEATURE_FORMAT_SUPPORT,
+                (&raw mut support).cast(),
+                size_of_val(&support) as u32,
+            )
+        };
+        let asked = committed(&desc(67, both));
+        eprintln!(
+            "{}: 1920x1080 R9G9B9E5 with render target and unordered access: committed {asked:?}, reserved {:?}; format support {:?} {:#x} {:#x}",
+            host.adapter_note(),
+            reserved(&desc(67, both)),
+            queried,
+            support.Support1.0,
+            support.Support2.0
+        );
+        let stand_in = target_format(67);
+        if asked.is_err() {
+            assert_eq!(stand_in, 26, "a host that refuses the target gets R11G11B10_FLOAT");
+        }
+        committed(&desc(stand_in, both)).expect("the target in the format the host is given");
+        // SAFETY: plain queries of valid descriptions.
+        let bytes = |d: D3D12_RESOURCE_DESC| unsafe { host.device.GetResourceAllocationInfo(0, &[d]) }.SizeInBytes;
+        let per = |d| {
+            let b = bytes(d);
+            format!("{b} bytes ({:.3} a pixel)", b as f64 / (1920.0 * 1080.0))
+        };
+        eprintln!(
+            "R9G9B9E5 sampled {}, R11G11B10_FLOAT target {}, R16G16B16A16_FLOAT target {}",
+            per(desc(67, D3D12_RESOURCE_FLAG_NONE)),
+            per(desc(26, both)),
+            per(desc(10, both))
+        );
+    }
+
+    /// The same target made by the title (console flags 0x300005, with a
+    /// clear value): its host copy is in the format [`target_format`] gives
+    /// (R11G11B10_FLOAT where the host refuses R9G9B9E5) with both uses,
+    /// made with the clear value in that format; a render target view and
+    /// a pipeline's target formats that name R9G9B9E5 name it too, and a
+    /// texture the title only samples stays R9G9B9E5. The card then clears
+    /// the target through that view and one texel is read back.
+    #[cfg(windows)]
+    #[test]
+    fn an_r9g9b9e5_target_gets_a_format_the_host_renders_to() {
+        use std::sync::atomic::Ordering::Relaxed;
+        use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+        let Some(host) = crate::host::host() else {
+            eprintln!("no host GPU; skipped");
+            return;
+        };
+        let null = std::ptr::null();
+        const RENDER_TARGET: u32 = 0x4;
+        let desc = ResourceDesc {
+            flags: 0x30_0005,
+            ..texture(1920, 1080, 67, 1)
+        };
+        // The format, then the colour.
+        let colour = [0.25f32, 0.5, 1.0, 0.0];
+        let mut clear = [67u32; 5];
+        for (word, c) in clear[1..].iter_mut().zip(colour) {
+            *word = c.to_bits();
+        }
+        let mut target = null;
+        assert_eq!(
+            create_committed(
+                null,
+                &PROPERTIES,
+                0,
+                &desc,
+                RENDER_TARGET,
+                clear.as_ptr().cast(),
+                &RESOURCE_IIDS[0],
+                &mut target
+            ),
+            S_OK
+        );
+        let stand_in = target_format(67);
+        let made = host_resource(target).expect("a host copy of the target");
+        // SAFETY: a live resource.
+        let d = unsafe { made.GetDesc() };
+        assert_eq!((d.Format.0 as u32, d.Flags.0), (stand_in, 5));
+        assert_eq!(stands_in(target), stand_in != 67);
+        assert_eq!(view_format(target), None, "a typed host copy");
+
+        let mut sampled = null;
+        let only_sampled = texture(1920, 1080, 67, 1);
+        assert_eq!(
+            create_committed(
+                null,
+                &PROPERTIES,
+                0,
+                &only_sampled,
+                0,
+                null.cast(),
+                &RESOURCE_IIDS[0],
+                &mut sampled
+            ),
+            S_OK
+        );
+        // SAFETY: a live resource.
+        let s = unsafe { host_resource(sampled).expect("a sampled texture").GetDesc() };
+        assert_eq!((s.Format.0, s.Flags.0), (67, 0));
+        assert!(!stands_in(sampled));
+
+        // The title's render target view in R9G9B9E5 (2D, mip 0).
+        let mut slot = [0u64; 16];
+        let handle = slot.as_mut_ptr() as u64;
+        crate::descriptor::create_rtv(null, target, &[67, 4, 0, 0, 0, 0], handle);
+        let view = crate::descriptor::rtv_record(handle).unwrap().desc().unwrap();
+        assert_eq!(view.Format.0 as u32, stand_in);
+        // A pipeline stream's target formats (subobject 15: eight formats,
+        // then the count).
+        let mut formats = [0u32; 10];
+        (formats[0], formats[1], formats[9]) = (15, 67, 1);
+        let mut state = crate::pipeline::host::GraphicsState::default();
+        // SAFETY: a whole subobject of that type.
+        unsafe { state.read(15, formats.as_ptr().cast()) };
+        assert_eq!(state.targets.RTFormats[0].0 as u32, stand_in);
+
+        // Cleared on the card through the view; texel (0, 0) read back.
+        let readback = {
+            let heap = D3D12_HEAP_PROPERTIES {
+                Type: D3D12_HEAP_TYPE_READBACK,
+                ..Default::default()
+            };
+            let desc = D3D12_RESOURCE_DESC {
+                Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                Width: 256,
+                Height: 1,
+                DepthOrArraySize: 1,
+                MipLevels: 1,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                ..Default::default()
+            };
+            let mut made: Option<ID3D12Resource> = None;
+            // SAFETY: plain creation of a readback buffer.
+            unsafe {
+                host.device
+                    .CreateCommittedResource(
+                        &heap,
+                        D3D12_HEAP_FLAG_NONE,
+                        &desc,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                        None,
+                        &mut made,
+                    )
+                    .unwrap();
+            }
+            made.unwrap()
+        };
+        let to = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a borrowed pointer the location never releases.
+            pResource: unsafe { std::mem::transmute_copy(&readback) },
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                    Offset: 0,
+                    Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                        Format: d.Format,
+                        Width: 1,
+                        Height: 1,
+                        Depth: 1,
+                        RowPitch: 256,
+                    },
+                },
+            },
+        };
+        let from = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: as above.
+            pResource: unsafe { std::mem::transmute_copy(made) },
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: 0,
+            },
+        };
+        let texel = D3D12_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: 1,
+            bottom: 1,
+            back: 1,
+        };
+        let state = D3D12_RESOURCE_STATES(host_copy(target).unwrap().state.load(Relaxed) as i32);
+        let (drawn, source) = (D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        let moved = crate::host::transition;
+        let rtv = host.rtv(Some(made), Some(&view));
+        let list = host.new_list().unwrap();
+        // SAFETY: an open list, live resources and a fresh view.
+        unsafe {
+            let l = &list.list;
+            if state != drawn {
+                l.ResourceBarrier(&[moved(made, state, drawn)]);
+            }
+            l.ClearRenderTargetView(rtv, &colour, None);
+            l.ResourceBarrier(&[moved(made, drawn, source)]);
+            l.CopyTextureRegion(&to, 0, 0, 0, &from, Some(&texel));
+            l.ResourceBarrier(&[moved(made, source, state)]);
+        }
+        list.close();
+        host.execute(&[&list]);
+        // SAFETY: a plain query.
+        assert!(unsafe { host.device.GetDeviceRemovedReason() }.is_ok());
+        let mut mapped = std::ptr::null_mut();
+        // SAFETY: the copy finished (execute waits); 4 bytes are read.
+        let read = unsafe {
+            readback
+                .Map(0, Some(&D3D12_RANGE { Begin: 0, End: 4 }), Some(&mut mapped))
+                .unwrap();
+            mapped.cast::<u32>().read_unaligned()
+        };
+        if stand_in == 26 {
+            // 0.25, 0.5 and 1.0 as 11-, 11- and 10-bit floats (biased
+            // exponents 13, 14 and 15, no mantissa).
+            assert_eq!(read, 13 << 6 | (14 << 6) << 11 | (15 << 5) << 22, "{read:#x}");
         }
     }
 

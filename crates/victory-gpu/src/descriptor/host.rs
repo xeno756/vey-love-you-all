@@ -2357,6 +2357,76 @@ mod tests {
         assert!(unsafe { host.device.GetDeviceRemovedReason() }.is_ok());
     }
 
+    /// On a host that refuses R9G9B9E5 targets, the title's unordered
+    /// access and shader views in R9G9B9E5 of a target take the
+    /// R11G11B10_FLOAT its host copy has, and the host makes them; a
+    /// texture only sampled keeps R9G9B9E5 views.
+    #[test]
+    fn r9g9b9e5_views_of_a_target_take_its_stand_in() {
+        let Some(host) = host() else {
+            return; // no host GPU
+        };
+        let make = |format: i32, flags: D3D12_RESOURCE_FLAGS| {
+            let heap = D3D12_HEAP_PROPERTIES {
+                Type: D3D12_HEAP_TYPE_DEFAULT,
+                ..Default::default()
+            };
+            let desc = D3D12_RESOURCE_DESC {
+                Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                Width: 64,
+                Height: 64,
+                DepthOrArraySize: 1,
+                MipLevels: 1,
+                Format: DXGI_FORMAT(format),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Flags: flags,
+                ..Default::default()
+            };
+            let mut made: Option<ID3D12Resource> = None;
+            // SAFETY: plain creation; the out pointer is ours.
+            let _ = unsafe {
+                host.device.CreateCommittedResource(
+                    &heap,
+                    D3D12_HEAP_FLAG_NONE,
+                    &desc,
+                    D3D12_RESOURCE_STATE_COMMON,
+                    None,
+                    &mut made,
+                )
+            };
+            made
+        };
+        let both = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if make(67, both).is_some() {
+            return; // this host renders to R9G9B9E5 itself
+        }
+        let target = make(26, both).expect("an R11G11B10_FLOAT target");
+        for unordered in [true, false] {
+            let mut format = DXGI_FORMAT(67);
+            assert!(fits(&target, Some(&mut format), unordered), "unordered {unordered}");
+            assert_eq!(format, DXGI_FORMAT_R11G11B10_FLOAT, "unordered {unordered}");
+        }
+        let sampled = make(67, D3D12_RESOURCE_FLAG_NONE).expect("a sampled R9G9B9E5 texture");
+        let mut format = DXGI_FORMAT(67);
+        assert!(fits(&sampled, Some(&mut format), false));
+        assert_eq!(format, DXGI_FORMAT_R9G9B9E5_SHAREDEXP);
+        let Some(heap) = HostHeap::new(false, 4) else {
+            return;
+        };
+        let desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            Format: DXGI_FORMAT_R11G11B10_FLOAT,
+            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
+            ..Default::default()
+        };
+        // SAFETY: a live texture and a slot of our heap.
+        unsafe { host.device.CreateUnorderedAccessView(&target, None::<&ID3D12Resource>, Some(&desc), heap.cpu(0)) };
+        // SAFETY: a plain device query.
+        assert!(unsafe { host.device.GetDeviceRemovedReason() }.is_ok());
+    }
+
     /// Dynamic slots stay taken until given back, and runs do not wrap.
     #[test]
     fn a_structured_view_made_raw_passes_the_host_check() {
