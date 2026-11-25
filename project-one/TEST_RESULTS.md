@@ -22,11 +22,12 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 | 2. Fork à jour, sans nos changements | `a803c87` | 88 s | 504 | 0 | 8 |
 | 3. PROJECT ONE | `a803c87` + 3 commits | 38 s (incrémentale), 0 avertissement | 511 | 0 | 8 |
 | 4. PROJECT ONE avec le remplacement des mesh shaders | `a803c87` + 5 commits de code | incrémentale, 0 avertissement | 520 | 0 | 8 |
-| 5. **PROJECT ONE après la session performances** | `a803c87` + 8 commits de code | incrémentale, 0 avertissement | **526** | **0** | 9 (dont le banc d'essai, lancé à la main) |
+| 5. **PROJECT ONE après la session performances** | `a803c87` + 12 commits de code | incrémentale, 0 avertissement | **526** | **0** | 9 (dont le banc d'essai, lancé à la main) |
 
-- **Clippy** (`-D warnings`) sur les crates modifiées (`victory-gpu`, aussi avec la fonction
-  `diagnostics`, `victory-shader`, `victory-loader`) : aucune erreur.
-- **Version de production** : `cargo build --release -p victory` réussit.
+- **Clippy** (`-D warnings`) sur tout le dépôt (`cargo clippy --workspace --all-targets`), et
+  avec la fonction `diagnostics` pour `victory`, `victory-gpu` et `victory-hle` : aucune erreur.
+- **Version de production** (`cargo build --release -p victory`) et **version diagnostic**
+  (`cargo build --profile diag -p victory --features diagnostics`) : compilées.
 
 ### Les 3 échecs de la mesure 1
 
@@ -88,7 +89,8 @@ Toolchain Rust 1.98.1, fixée par `rust-toolchain.toml`, en mode debug pour les 
 |---|---|---|
 | Schéma de dessin mesh, un par un contre regroupé | `cargo test -p victory-gpu --release bench -- --ignored --nocapture` | 256 dessins : 1,8 à 2,7 ms un par un, 0,95 à 1,3 ms regroupés ; 2 304 dessins : 5,4 ms contre 1,1 ms |
 | Traduction de tous les shaders du jeu, sans cache | `victory translate <archive des shaders> --jobs 12` | 26 084 programmes en 2 min 40 s |
-| Préparation complète, cache vide | `victory prepare --compute-pipelines` | 25 466 shaders traduits et 2 723 pipelines de calcul en 9 min 41 s |
+| Préparation, cache vide | `victory prepare --compute-pipelines` | 25 466 shaders traduits et 2 723 pipelines de calcul en 9 min 41 s ; 3 min 21 s quand les pipelines sont déjà dans la bibliothèque |
+| Préparation des programmes mesh | `victory prepare --mesh-pipelines` | 8 762 programmes mesh traduits en calcul, 8 762 pipelines acceptés par la carte, 0 refusé, en 2 min 25 s |
 
 Détails et lecture : [docs/technical/06-performances.md](docs/technical/06-performances.md).
 

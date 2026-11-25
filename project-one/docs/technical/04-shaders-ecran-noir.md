@@ -70,7 +70,7 @@ L'état au 24/11/2026 est décrit en section 3 bis.
 
 | Étape | État | Où |
 |---|---|---|
-| 1. Variante calcul de l'émetteur | **faite**, testée sur la RX 5600 XT (le calcul n'a pas besoin de mesh shaders) | `victory-shader/src/emit/mesh_compute.rs`, `lower.rs` |
+| 1. Variante calcul de l'émetteur | **faite**, testée sur la RX 5600 XT (le calcul n'a pas besoin de mesh shaders) ; 8 762 des 8 765 programmes mesh du jeu se traduisent ainsi et la carte accepte leurs pipelines (commande `prepare --mesh-pipelines`) | `victory-shader/src/emit/mesh_compute.rs`, `lower.rs` |
 | 2. Générateur de vertex shader | **fait**, validé et testé sur la carte (un enregistrement dessiné, triangle éliminé sauté) | `mesh_compute.rs` |
 | 3. Comparaison pixel à pixel avec le vrai chemin mesh sur WARP | **pas faite** (demande `VICTORY_CONSOLE_DXC`) | — |
 | 4. Branchement | **fait et vu en jeu** (444 programmes traduits, 693 pipelines, 150 à 250 dessins directs par image), automatique sur une carte sans mesh shaders ; `VICTORY_MESH_COMPUTE=1` le force, `=0` le coupe | `victory-gpu/src/pipeline/host.rs`, `draw.rs`, `host.rs` |

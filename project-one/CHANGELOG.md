@@ -21,7 +21,8 @@ Diagnostic complet et mesures : [docs/technical/06-performances.md](docs/technic
   avant ceux demandés plus tôt et plus utilisés.
 - **Commande `prepare`.** `victory prepare --compute-pipelines` traduit tous les shaders du jeu
   dans le cache et compile ses pipelines de calcul avant le lancement. Mesuré : 25 466 shaders
-  et 2 723 pipelines en 9 min 41 s.
+  et 2 723 pipelines en 9 min 41 s. Avec `--mesh-pipelines`, elle compile aussi le pipeline de
+  calcul de chaque programme mesh : 8 762 programmes, 0 refusé, en 2 min 25 s.
 - **Cache de shaders rangé par version.** Le cache garde la version en cours et la précédente,
   et retire les autres. Avant, chaque recompilation ajoutait 1,3 Go pour toujours.
 - **Lanceur.** Modes `profil` (temps de la carte par commande) et `preparer`, un journal par

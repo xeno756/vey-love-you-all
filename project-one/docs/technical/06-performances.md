@@ -17,8 +17,10 @@ depuis cette session : les lancements sont faits par l'utilisateur.
 | Series X, version diagnostic avec capture, 22 h 11 | PROJECT ONE `915977f` | 7 min | **oui**, avec 1 150 images et 4 listes d'opérations |
 | XCL (sept journaux du 24/11) | autre runtime | — | oui, non comparables ligne à ligne |
 
-Les deux journaux gardés sont dans `..\victory-logs`. Depuis cette session, le lanceur garde un
-journal par lancement dans ce dossier.
+Les deux journaux gardés sont dans le dossier `victory-logs`, à côté du dépôt. Depuis cette
+session, le lanceur y garde un journal par lancement. Les scripts qui ont produit les tableaux
+de ce document sont dans son sous-dossier `outils` (hors du dépôt, dont la règle n'accepte pas
+les fichiers Python).
 
 Conséquence : la comparaison « avant / après » entre le fork et PROJECT ONE ne peut pas être
 faite sur des journaux. Elle repose sur ce que la session a observé en direct : avant le
@@ -197,7 +199,7 @@ réécriture.** Commande : `cargo test -p victory-gpu --release bench -- --ignor
 | Traduction de tous, sur 12 fils | 2 min 40 s |
 | Programmes vertex, pixel, mesh et calcul traduits | 25 598 sur 25 694 (99,6 %) |
 
-### Préparation avant le lancement (`victory prepare --compute-pipelines`)
+### Préparation avant le lancement (`victory prepare --compute-pipelines --mesh-pipelines`)
 
 Mesuré sur cette machine, cache de shaders vide, 14 fils :
 
@@ -206,8 +208,14 @@ Mesuré sur cette machine, cache de shaders vide, 14 fils :
 | Recherche des shaders dans les fichiers du jeu | 25 985 conteneurs distincts en 4,6 s |
 | Shaders des étapes qu'un lancement traduit | 25 563, dont 25 466 traduits et 97 non traduisibles |
 | Pipelines de calcul dans la bibliothèque | 2 723, dont 1 084 y étaient déjà (faits par les lancements précédents), 0 refusé |
-| Durée totale | 9 min 41 s |
+| Durée, cache vide et bibliothèque à compléter | 9 min 41 s |
+| Durée quand les pipelines sont déjà dans la bibliothèque | 3 min 21 s |
+| Pipelines de calcul des programmes mesh (`--mesh-pipelines`) | 8 762 programmes sur 8 765, 0 refusé, en 2 min 25 s de plus |
 | Taille des traductions d'une version | 1,3 Go |
+
+La dernière ligne du tableau est aussi une vérification du remplacement des mesh shaders sur
+tout le jeu : chaque programme mesh traduisible se traduit en calcul, et la carte accepte le
+pipeline de chacun. Ce n'est pas une vérification du rendu.
 
 Deux vérifications que la préparation sert bien au jeu :
 
