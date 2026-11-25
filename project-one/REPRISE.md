@@ -9,7 +9,7 @@ Mis à jour le 25/11/2026.
 |---|---|
 | `project-one/integration` | **branche stable**, celle que le lanceur utilise. Tout ce qui y est commité compile et passe les tests |
 | `project-one/before-scarlettport` | étiquette : l'état avant la mission du 25/11 (retour arrière possible) |
-| `project-one/scarlettport` | branche de la fusion de la pile VIctory de ScarlettPort. **Fusion non terminée**, rien n'y est commité au-delà de `integration` |
+| `project-one/scarlettport` | la pile VIctory de ScarlettPort fusionnée avec PROJECT ONE, dans le dossier `..\victory-scarlettport`. Compilée et testée hors jeu, **pas encore essayée en jeu** |
 
 ## Fait le 25/11 sur `project-one/integration`
 
@@ -23,60 +23,65 @@ Détail et mesures attendues : [docs/technical/08-resolution-scarlettport-intro.
 
 Aucun de ces changements n'a encore tourné avec PROJECT GAME.
 
-## La fusion ScarlettPort : où elle en est
+## La fusion ScarlettPort : faite, à essayer en jeu
 
-Source : `..\references\ScarlettPort` (clone du dépôt), patch
-`patches\victory-stack.patch` = leur pile VIctory par rapport à `4e17478`, qui est dans notre
-historique.
+La pile VIctory de ScarlettPort (`fx-harvest` à `38e8e7c`, GPL-3.0-or-later) est fusionnée dans
+PROJECT ONE sur la branche `project-one/scarlettport`. Elle vit dans son propre dossier de
+travail, `..\victory-scarlettport`, avec sa propre configuration (`victory.toml`) et son propre
+cache (`%LOCALAPPDATA%\victory\cache-scarlettport`) : elle et la branche stable ne se vident pas
+leurs caches l'une l'autre.
 
-### Pour la reprendre
+| Commit de la branche | Contenu |
+|---|---|
+| `7a8a970` | la fusion : 113 fichiers de ScarlettPort, 20 conflits résolus, nos fonctions gardées |
+| `60bd4da` | une seule commande de préparation (`prepare`), qui peut aussi compiler les pipelines graphiques du cache du jeu |
+
+État : compile, **752 tests réussis, 0 échec**, lint propre avec et sans la fonction
+`diagnostics`, politique du dépôt respectée. **Pas encore lancée avec le jeu.**
+
+### Comment les conflits ont été résolus
+
+| Fichier | Résolution |
+|---|---|
+| Manifestes | les deux bibliothèques de décompression (`zlib-rs` de notre base, `miniz_oxide` de leurs fichiers) |
+| `shader_cache.rs` | leur clé par sources du traducteur, dans nos dossiers par version |
+| `pipeline/make.rs` | leur file (pipelines laissés de côté, limite des fils « early ») avec notre ordre « demandé en dernier, fait en premier » |
+| `pipeline.rs` | notre `MeshVariant` et leur `linked` côte à côte |
+| `pipeline/host.rs` | notre fichier, avec leurs 22 changements reportés un par un (script `..\references\merge_pipeline_host.py`) : étage géométrie, test de bornes de profondeur, mélange désactivé sur les cibles entières, mesh liés au pixel shader |
+| `descriptor/host.rs` | leur création du tas de vues (carte du tas, borne AMD de victory-amd), notre remise à jour des vues de textures réduites adaptée à leur structure |
+| `texture.rs` | leurs envois partiels ; une texture réduite ne lit plus que la mémoire du jeu des niveaux gardés |
+| `draw.rs`, `host.rs`, `indirect.rs`, `resource.rs` | les deux côtés gardés ; leur budget d'envoi de textures par image |
+| Traducteur (`victory-shader`) | **le leur, tel quel**, avec nos seuls changements réappliqués dessus : les programmes mesh en calcul |
+
+### Ce qui a été laissé de côté, et pourquoi
+
+- Les fichiers d'essai faits d'enregistrements du cache de pipelines du jeu, et leurs tests :
+  rien qui vienne du jeu n'est gardé dans ce dépôt.
+- L'option Agility SDK pour Windows 10 : cette machine est sous Windows 11.
+- Un test de l'étage géométrie, ignoré : il échoue aussi dans l'arbre de ScarlettPort sur cette
+  machine (les validateurs DXIL d'ici refusent le programme du test).
+- Tout `runtime/xcl` (GPL-2.0 seule).
+
+### Pour l'essayer
 
 ```powershell
-git worktree add ..\victory-scarlettport project-one/scarlettport
-cd ..\victory-scarlettport
-git merge project-one/integration        # la branche part d'un état plus ancien
-git apply --3way ..\references\ScarlettPort\patches\victory-stack.patch
-git status --short                       # UU = conflits, A = fichiers nouveaux
+cd "..\victory-scarlettport"
+cargo build --release -p victory
+project-one\lancer.cmd series-x preparer
+project-one\lancer.cmd series-x
 ```
 
-Puis recopier par-dessus les fichiers déjà résolus, gardés dans
-`..\references\merge-resolved` avec leur chemin :
+Ses journaux portent `-scarlettport` dans leur nom. `preparer-graphiques` compile en plus les
+pipelines graphiques que le cache du jeu liste (long).
 
-| Fichier | Comment il a été résolu |
-|---|---|
-| `Cargo.toml` et ceux de `victory-game`, `-gpu`, `-hle`, `-shader` | les deux bibliothèques de décompression (`zlib-rs` de notre base, `miniz_oxide` de leurs fichiers) |
-| `apps/victory/src/run.rs` | les deux lignes gardées |
-| `crates/victory-game/src/sgd5.rs` | leur fonction `unpack` partagée, avec notre décompression |
-| `crates/victory-gpu/src/shader_cache.rs` | leur clé par sources du traducteur, dans nos dossiers par version (`cache()` au lieu de `CACHE.get()`) |
-| `crates/victory-gpu/src/pipeline/make.rs` | leur file (pipelines laissés de côté, limite des fils « early ») avec notre ordre « demandé en dernier, fait en premier » |
-| `crates/victory-gpu/src/pipeline/library.rs` | notre commentaire (même correction des deux côtés) |
-| `crates/victory-gpu/src/pipeline.rs` | notre `MeshVariant` et leur `linked` côte à côte ; `Translated` a un champ `writes` de plus |
+### Pour la faire entrer dans la branche stable
 
-Attention : ces fichiers ont été résolus par rapport à `94d46c1`. Les commits faits depuis sur
-`integration` touchent `hooks.rs`, `windows.rs`, `lib.rs` du chargeur (leur `hooks.rs` est repris
-tel quel, plus notre taille de sortie : garder **le nôtre**), `draw.rs`, `host.rs`, `frame.rs`,
-`resource.rs` et ajoutent `pacing.rs` et `video.rs`.
+Seulement après un lancement réussi par l'utilisateur :
 
-### Ce qui reste à résoudre
-
-| Fichier | Conflits | Nature |
-|---|---|---|
-| `crates/victory-gpu/src/pipeline/host.rs` | 6 | le plus délicat. Nous avons sorti la construction de la signature racine dans `root_for` (avec `Variant` pour les mesh en calcul) ; eux ont modifié ce même code en place : étage géométrie, test de bornes de profondeur, `host_blend`, mesh liés au pixel shader, `SLOT_WORDS`, `from_precompiled`. Partir de **notre** fichier et y reporter leurs 22 changements un par un |
-| `crates/victory-gpu/src/descriptor/host.rs` | 4 | leur table des mots de descripteurs et leur carte du tas, contre nos vues de textures réduites |
-| `crates/victory-gpu/src/texture.rs` | 4 | leurs réécritures des verrous et du détuilage par bandes, contre notre décalage de niveaux |
-| `crates/victory-gpu/src/draw.rs` | 3 | leurs fenêtres d'indirects et barrières, contre nos dispatches mesh |
-| `crates/victory-gpu/src/host.rs` | 3 | compteurs et attentes |
-| `crates/victory-gpu/src/resource.rs` | 2 | |
-| `crates/victory-gpu/src/indirect.rs` | 1 | leur découpage des gros dispatches contre notre conversion mesh |
-| `crates/victory-shader/src/emit/{lower,mod,shader,wave,valu_tests}.rs` | 18 | traducteur : leurs ondes de 64 par programme contre les changements de notre base |
-| `Cargo.lock` | 1 | à régénérer par `cargo build` |
-
-Une fois les conflits résolus : `cargo build --workspace --all-targets`, corriger, puis les
-tests (`VICTORY_DXIL` doit pointer sur le `dxil.dll` de DXC 1.9), `cargo clippy`, `cargo xtask
-policy`. Vérifier en particulier que les tests du remplacement des mesh shaders passent
-toujours : c'est ce que ScarlettPort n'a pas et dont la RX 5600 XT dépend.
-
-Ne fusionner dans `integration` qu'après un lancement réussi par l'utilisateur.
+```powershell
+git checkout project-one/integration
+git merge project-one/scarlettport
+```
 
 ## Règles à garder
 
