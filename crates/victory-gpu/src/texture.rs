@@ -51,6 +51,8 @@ pub(crate) struct Staging {
     /// and the bytes of title memory read for it and the smaller ones.
     first: u32,
     size: usize,
+    /// The host copy the footprints are of ([`copy_of`]).
+    of: CopyOf,
     /// The staging buffer's bytes (counted in `STAGED` while it lives).
     bytes: u64,
     memory: *const u8,
@@ -601,6 +603,24 @@ pub(crate) fn upload(list: &HostList, resource: This, texture: &ID3D12Resource) 
 /// placed texture the title may have no memory for the larger ones, and
 /// what lies there is another texture's.
 pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resource, first: u32) {
+    // (PROJECT ONE) `texture` is the caller's look at the title texture's
+    // host copy, with nothing held: another thread's sweep may have let that
+    // copy go since. Held from here on, and only if it is still the copy:
+    // one let go is not copied into (the next use uploads the new one).
+    let Some(copy) = crate::resource::host_copy(resource) else {
+        return;
+    };
+    {
+        use windows::core::Interface;
+        if copy.texture.as_raw() != texture.as_raw() {
+            let n = STALE_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n.is_power_of_two() {
+                tracing::warn!(n, "a texture's host copy was let go between a look at it and its upload: not copied into");
+            }
+            return;
+        }
+    }
+    let texture = &copy.texture;
     // In the host copy's own levels from here on: one made without the
     // title texture's first levels has the view's first as an earlier one.
     let first = first.saturating_sub(crate::resource::levels_left_out(resource, texture));
@@ -1343,15 +1363,54 @@ pub(crate) fn mapped_bytes(at: *const u8, len: usize) -> u64 {
     there
 }
 
+/// Which host copy a staging state is of: the copy's address, its width
+/// and height, its levels and its layers. (The address alone may be a later
+/// copy's, made where an earlier one was freed.)
+type CopyOf = (usize, u64, u32, u16, u16);
+
+/// [`CopyOf`] of host texture `texture`.
+fn copy_of(texture: &ID3D12Resource) -> CopyOf {
+    use windows::core::Interface;
+    // SAFETY: a live resource.
+    let d = unsafe { texture.GetDesc() };
+    (texture.as_raw() as usize, d.Width, d.Height, d.MipLevels, d.DepthOrArraySize)
+}
+
+/// Uploads asked with a host copy that was the title texture's no more
+/// ([`upload_from`]).
+pub(crate) static STALE_COPIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Staging states found for another host copy than the one asked for, and
+/// made anew ([`staging`]).
+pub(crate) static STALE_STAGING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The staging state of a title texture from mip `first` on, made on first
-/// use (and made anew for larger mips than the one there holds).
+/// use (and made anew for larger mips than the one there holds, or for
+/// another host copy than the one there is of).
 fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<Staging>> {
     let mut map = STAGING.lock().unwrap_or_else(|e| e.into_inner());
     let map = map.get_or_insert_with(HashMap::new);
+    let of = copy_of(texture);
     if let Some(s) = map.get(&(resource as usize))
         && s.first <= first
     {
-        return Some(s.clone());
+        if s.of == of {
+            return Some(s.clone());
+        }
+        // (PROJECT ONE) The state of another host copy of this title
+        // texture: one let go and made again since. Its footprints are the
+        // other copy's (copied into this one, they pass its end where this
+        // one leaves more levels out: the card was lost so, runs of 25/11),
+        // and it may say "uploaded" of a copy that holds nothing yet.
+        let n = STALE_STAGING.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if n.is_power_of_two() {
+            tracing::warn!(
+                n,
+                was = ?s.of,
+                now = ?of,
+                "a texture's staging state was another host copy's: made anew for this one"
+            );
+        }
     }
     let (memory, desc) = crate::resource::texture_memory(resource)?;
     let Some(layout) = crate::resource::texture_layout(&desc).map(|t| t.planes[0].layout.clone())
@@ -1424,6 +1483,7 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
         skip,
         first,
         size,
+        of,
         bytes: total,
         memory,
         last: Mutex::default(),
