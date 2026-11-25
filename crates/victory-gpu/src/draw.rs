@@ -301,6 +301,31 @@ pub(crate) fn drawn() -> u64 {
     DRAWN.load(Ordering::Relaxed)
 }
 
+/// Draws by the size of the viewport they were made in, since the last
+/// [`take_drawn_at`]: at which sizes the title really draws (its 3D
+/// picture, its interface, its shadow maps), whatever its window shows.
+static DRAWN_AT: std::sync::Mutex<Vec<((u32, u32), u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// The viewport sizes draws were made in since the last call, with their
+/// draws, most draws first.
+pub(crate) fn take_drawn_at() -> Vec<((u32, u32), u64)> {
+    let mut at = std::mem::take(&mut *DRAWN_AT.lock().unwrap_or_else(|e| e.into_inner()));
+    at.sort_by_key(|&(_, draws)| std::cmp::Reverse(draws));
+    at
+}
+
+/// Counts `draws` made in a viewport of `size`.
+fn note_drawn_at(size: (u32, u32), draws: u64) {
+    /// Sizes told apart between two frame accounts.
+    const MOST: usize = 64;
+    let mut at = DRAWN_AT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, n)) = at.iter_mut().find(|(s, _)| *s == size) {
+        *n += draws;
+    } else if at.len() < MOST {
+        at.push((size, draws));
+    }
+}
+
 /// The draws traced since the last present (diagnostics builds, with
 /// debug logging for this module): logged when the frame comes out black.
 #[cfg(feature = "diagnostics")]
@@ -1905,7 +1930,7 @@ impl State {
         {
             let ran = mesh_test() != 1 && mesh_kept(self.pipeline) && self.mesh_as_compute(list, p, x);
             if ran {
-                DRAWN.fetch_add(1, Ordering::Relaxed);
+                self.drew();
             } else {
                 DROPPED.fetch_add(1, Ordering::Relaxed);
                 #[cfg(feature = "diagnostics")]
@@ -1924,7 +1949,7 @@ impl State {
                     // SAFETY: an open list with everything set.
                     unsafe { l6.DispatchMesh(x, 1, 1) };
                     self.mesh_scissor(list, false);
-                    DRAWN.fetch_add(1, Ordering::Relaxed);
+                    self.drew();
                     true
                 }
                 Err(_) => false,
@@ -2459,7 +2484,7 @@ impl State {
                 list.list
                     .DrawInstanced(count, instances, from, first_instance)
             };
-            DRAWN.fetch_add(1, Ordering::Relaxed);
+            self.drew();
         }
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -2560,7 +2585,7 @@ impl State {
                 list.list
                     .DrawIndexedInstanced(indices, instances, first, base, first_instance)
             };
-            DRAWN.fetch_add(1, Ordering::Relaxed);
+            self.drew();
         }
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -2571,6 +2596,14 @@ impl State {
 }
 
 impl State {
+    /// Counts a draw run on the host, under the size of its viewport.
+    fn drew(&self) {
+        DRAWN.fetch_add(1, Ordering::Relaxed);
+        if let Some(v) = self.viewports.first() {
+            note_drawn_at((v.Width as u32, v.Height as u32), 1);
+        }
+    }
+
     /// Indirect execution of a one-argument signature of `kind` (PC
     /// numbering: 0 draw, 1 indexed draw, 2 dispatch, 10 mesh dispatch) with
     /// records `stride` bytes apart at title address `arguments`, and the
@@ -2777,7 +2810,7 @@ impl State {
         if let Some(a) = as_compute {
             let ran = self.indirect_mesh_as_compute(list, p, a, (&bounded, at), fresh, &signature);
             if ran {
-                DRAWN.fetch_add(1, Ordering::Relaxed);
+                self.drew();
             } else {
                 why("a mesh pipeline run as compute could not be bound");
             }
@@ -2820,7 +2853,7 @@ impl State {
         if kind == DISPATCH {
             DISPATCHED.fetch_add(1, Ordering::Relaxed);
         } else {
-            DRAWN.fetch_add(1, Ordering::Relaxed);
+            self.drew();
         }
         true
     }

@@ -14,6 +14,19 @@ rem   lancer.cmd series-x test       montre ce qui serait lance, sans rien lance
 rem   (capture, profil et test peuvent se combiner ; preparer suit la version
 rem   choisie : la version diagnostic a son propre cache de shaders)
 rem
+rem Definition (le jeu lui-meme calcule a la taille demandee) :
+rem   lancer.cmd series-x 1080p             image du jeu en 1920x1080, et son rendu
+rem                                         3D calcule a cette meme taille
+rem   lancer.cmd series-x 720p              idem en 1280x720 (540p : 960x540)
+rem   lancer.cmd series-x sortie:1920x1080  taille de l'image du jeu seule ; son
+rem                                         rendu 3D en fait les deux tiers
+rem   lancer.cmd series-x echelle:0.5       rendu 3D a cette part de l'image du jeu
+rem                                         (0.2 a 1) ; sans sortie:, l'image reste
+rem                                         en 3840x2160
+rem   lancer.cmd series-x chien-de-garde    laisse le jeu se fermer lui-meme quand
+rem                                         il n'avance plus pendant 30 secondes
+rem                                         (desarme par defaut)
+rem
 rem Graphismes reduits (chaque option se teste seule, puis se combine) :
 rem   lancer.cmd series-x textures:2        textures du jeu sans leurs 2 premiers
 rem                                         niveaux de detail (1 a 4)
@@ -39,6 +52,9 @@ set "PREPARE="
 set "DRY="
 set "TEXTURES="
 set "SANS="
+set "SORTIE="
+set "ECHELLE="
+set "WATCHDOG="
 :args
 if "%~2"=="" goto args_done
 if /i "%~2"=="capture" set "CAPTURE=1"
@@ -46,9 +62,15 @@ if /i "%~2"=="profil" set "PROFILE=1"
 if /i "%~2"=="preparer" set "PREPARE=1"
 if /i "%~2"=="test" set "DRY=1"
 if /i "%~2"=="minimal" call :minimal
+if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
+if /i "%~2"=="1080p" call :size 1920x1080
+if /i "%~2"=="720p" call :size 1280x720
+if /i "%~2"=="540p" call :size 960x540
 for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="textures" set "TEXTURES=%%b"
     if /i "%%a"=="sans" call :without "%%b"
+    if /i "%%a"=="sortie" set "SORTIE=%%b"
+    if /i "%%a"=="echelle" set "ECHELLE=%%b"
 )
 shift /2
 goto args
@@ -102,9 +124,19 @@ for %%d in ("%ROOT%\..\victory-profils") do set "PROFILS=%%~fd"
 set "TAG="
 set "BAD="
 set "VICTORY_SKIP_SHADERS="
+if defined SORTIE (
+    set "VICTORY_OUTPUT_SIZE=%SORTIE%"
+    set "VICTORY_DISPLAY_MODE=%SORTIE%"
+    set "TAG=-sortie%SORTIE%"
+)
+if defined ECHELLE (
+    set "VICTORY_RENDER_SCALE=%ECHELLE%"
+    set "TAG=%TAG%-echelle%ECHELLE%"
+)
+if not defined WATCHDOG set "VICTORY_NO_WATCHDOG=1"
 if defined TEXTURES (
     set "VICTORY_TEXTURE_SKIP_MIPS=%TEXTURES%"
-    set "TAG=-textures%TEXTURES%"
+    set "TAG=%TAG%-textures%TEXTURES%"
 )
 if not defined SANS goto groups_done
 for %%g in (%SANS:+= %) do call :group %%g
@@ -124,6 +156,8 @@ if defined PREPARE (
     echo   console : %CONSOLE%
 )
 echo   journal : %LOG%
+if defined SORTIE echo   sortie  : image du jeu en %SORTIE%
+if defined ECHELLE echo   echelle : rendu 3D a %ECHELLE% de l'image du jeu
 if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
 if defined SANS echo   sans    : %SANS%
 if defined CAPTURE (
@@ -153,6 +187,12 @@ copy /y "%LOG%" "%TEMP%\victory-err.log" >nul
 copy /y "%OUT%" "%TEMP%\victory-out.log" >nul
 endlocal
 exit /b 0
+
+rem Une definition reelle : l'image du jeu a cette taille, et son rendu 3D aussi.
+:size
+set "SORTIE=%~1"
+if not defined ECHELLE set "ECHELLE=1"
+goto :eof
 
 rem Le profil minimal : les textures sans 2 niveaux, et les groupes a faible risque.
 :minimal

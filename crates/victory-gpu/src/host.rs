@@ -529,13 +529,19 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
     }
     let [budget, used, _, shared] = host().and_then(|h| h.video_memory()).unwrap_or([0; 4]);
     let (sizes, largest, pixels) = crate::resource::target_sizes();
+    // Where the draws went: the size with the most draws is the title's 3D
+    // picture once it is in its world.
+    let drawn_at = crate::draw::take_drawn_at();
+    let by_size: Vec<String> = drawn_at.iter().take(5).map(|((w, h), n)| format!("{w}x{h} {n}")).collect();
+    let (most_w, most_h) = drawn_at.first().map_or((0, 0), |&(size, _)| size);
     tracing::info!(
         "frame account: limited by {}: the card {:.0}% of the frame, preparing {:.0}%, copying back {:.0}%, the rest {:.0}% \
          (the title's own work and waits); memory: the card {} MB in use of a budget of {} MB, {} MB of the PC's memory \
          shared with it; the process {} MB committed, {} MB of it in memory, the PC {} MB free; textures the title renders \
          to or shaders write: {} sizes asked for so far, the largest {}x{}, {} megapixels made in all; presented at {}x{}; \
          textures the title fills kept without their first levels: {} so far, {} MB spared, {} made whole again for a copy; \
-         compute dispatches left out as asked: {} so far, of {} pipelines",
+         compute dispatches left out as asked: {} so far, of {} pipelines; \
+         resolution: most draws in a viewport of {}x{}; draws by viewport size since the last line: [{}]",
         limited_by(ms, parts, making),
         share(card),
         share(preparing),
@@ -557,7 +563,10 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
         crate::resource::LOWERED[1].load(Ordering::Relaxed) >> 20,
         crate::resource::LOWERED[2].load(Ordering::Relaxed),
         crate::pipeline::LEFT_OUT_COUNT[0].load(Ordering::Relaxed),
-        crate::pipeline::LEFT_OUT_COUNT[1].load(Ordering::Relaxed)
+        crate::pipeline::LEFT_OUT_COUNT[1].load(Ordering::Relaxed),
+        most_w,
+        most_h,
+        by_size.join(", ")
     );
 }
 
