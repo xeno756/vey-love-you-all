@@ -17,6 +17,8 @@
 
 #[cfg(all(windows, test))]
 mod bench;
+#[cfg(windows)]
+mod pacing;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;
 pub mod console;

@@ -193,7 +193,8 @@ impl ImportResolver for WithTitleDlls<'_> {
             .find(|(name, _)| name.eq_ignore_ascii_case(dll))
             .and_then(|(_, image)| image.export_symbol(symbol))
             .map_or(Resolution::Missing, |address| Resolution::Found {
-                address,
+                // (The video library's calls are counted on their way.)
+                address: crate::video::watched(dll, symbol, address),
                 provenance: Provenance::Title,
             })
     }

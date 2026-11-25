@@ -534,6 +534,8 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
     let drawn_at = crate::draw::take_drawn_at();
     let by_size: Vec<String> = drawn_at.iter().take(5).map(|((w, h), n)| format!("{w}x{h} {n}")).collect();
     let (most_w, most_h) = drawn_at.first().map_or((0, 0), |&(size, _)| size);
+    let shown = crate::pacing::take();
+    let per = |sum: f64, n: u32| if n > 0 { sum / f64::from(n) } else { 0.0 };
     tracing::info!(
         "frame account: limited by {}: the card {:.0}% of the frame, preparing {:.0}%, copying back {:.0}%, the rest {:.0}% \
          (the title's own work and waits); memory: the card {} MB in use of a budget of {} MB, {} MB of the PC's memory \
@@ -541,7 +543,11 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
          to or shaders write: {} sizes asked for so far, the largest {}x{}, {} megapixels made in all; presented at {}x{}; \
          textures the title fills kept without their first levels: {} so far, {} MB spared, {} made whole again for a copy; \
          compute dispatches left out as asked: {} so far, of {} pipelines; \
-         resolution: most draws in a viewport of {}x{}; draws by viewport size since the last line: [{}]",
+         resolution: most draws in a viewport of {}x{}; draws by viewport size since the last line: [{}]; \
+         presents: {} since the last line, {:.1} ms apart on average (shortest {:.1}, longest {:.1}) for an interval \
+         of {:.1} ms set by the title, {} came early (a frame lost unless synchronised) and {} late (the frame before \
+         shown again); the present call took {:.2} ms on average, {:.1} at most; each frame shown for {} refreshes of \
+         a {:.2} Hz display",
         limited_by(ms, parts, making),
         share(card),
         share(preparing),
@@ -566,7 +572,18 @@ fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
         crate::pipeline::LEFT_OUT_COUNT[1].load(Ordering::Relaxed),
         most_w,
         most_h,
-        by_size.join(", ")
+        by_size.join(", "),
+        shown.count,
+        per(shown.between[0], shown.count.saturating_sub(1)),
+        shown.between[1],
+        shown.between[2],
+        shown.interval,
+        shown.early,
+        shown.late,
+        per(shown.call[0], shown.count),
+        shown.call[1],
+        shown.sync,
+        shown.hz
     );
 }
 
@@ -6356,7 +6373,12 @@ impl Host {
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);
             }
-            let _ = p.swap_chain.Present(0, DXGI_PRESENT(0));
+            // Shown for the refreshes the title's interval holds, so that
+            // frames follow each other evenly on the screen (`pacing.rs`).
+            let sync = crate::pacing::sync_interval(p.hwnd);
+            let began = std::time::Instant::now();
+            let _ = p.swap_chain.Present(sync, DXGI_PRESENT(0));
+            crate::pacing::presented(began);
             p.meter.frame(p.hwnd);
             #[cfg(feature = "diagnostics")]
             return Some(probe.is_some_and(|b| crate::capture::black(&b)));

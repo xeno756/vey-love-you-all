@@ -23,6 +23,8 @@ rem                                         rendu 3D en fait les deux tiers
 rem   lancer.cmd series-x echelle:0.5       rendu 3D a cette part de l'image du jeu
 rem                                         (0.2 a 1) ; sans sortie:, l'image reste
 rem                                         en 3840x2160
+rem   lancer.cmd series-x sans-synchro      presente les images sans les caler sur
+rem                                         l'ecran, comme avant (pour comparer)
 rem   lancer.cmd series-x chien-de-garde    laisse le jeu se fermer lui-meme quand
 rem                                         il n'avance plus pendant 30 secondes
 rem                                         (desarme par defaut)
@@ -63,6 +65,7 @@ if /i "%~2"=="preparer" set "PREPARE=1"
 if /i "%~2"=="test" set "DRY=1"
 if /i "%~2"=="minimal" call :minimal
 if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
+if /i "%~2"=="sans-synchro" set "VICTORY_PRESENT_SYNC=0"
 if /i "%~2"=="1080p" call :size 1920x1080
 if /i "%~2"=="720p" call :size 1280x720
 if /i "%~2"=="540p" call :size 960x540

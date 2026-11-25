@@ -79,6 +79,11 @@ pub(crate) extern "system" fn schedule(
     S_OK
 }
 
+/// The interval the title set between its frames, if it has set one.
+pub(crate) fn interval() -> Option<Duration> {
+    clock().as_ref().map(|c| c.interval)
+}
+
 /// Frames begun so far (frame waits that ended).
 pub(crate) fn current() -> u64 {
     FRAME.load(Ordering::Relaxed)
