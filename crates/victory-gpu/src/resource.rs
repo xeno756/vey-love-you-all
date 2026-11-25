@@ -1723,8 +1723,55 @@ fn host_texture(
         crate::host::name(t, || {
             format!("texture {}x{} f{} flags {:#x}", d.width, d.height, d.format, d.flags)
         });
+        if d.flags & (TARGET | DEPTH | UNORDERED) != 0 {
+            note_target_size(&d);
+        }
     }
     texture
+}
+
+/// The sizes of the textures the title renders to or lets shaders write
+/// (render targets, depth textures, unordered access), by width and
+/// height: how many were made and are alive is not kept, only that the
+/// size was asked for and the pixels made in all. They say at which
+/// resolution a title really renders, whatever its window shows.
+#[cfg(windows)]
+static TARGET_SIZES: std::sync::Mutex<std::collections::BTreeMap<(u64, u32), u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// Pixels of such textures made and not yet let go (all levels and slices
+/// counted as the first: a measure, not their memory).
+#[cfg(windows)]
+static TARGET_PIXELS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(windows)]
+fn note_target_size(d: &ResourceDesc) {
+    let pixels = d.width * u64::from(d.height) * u64::from(d.depth_or_array_size.max(1));
+    TARGET_PIXELS.fetch_add(pixels, std::sync::atomic::Ordering::Relaxed);
+    let mut sizes = TARGET_SIZES.lock().unwrap_or_else(|e| e.into_inner());
+    let made = sizes.entry((d.width, d.height)).or_insert(0);
+    *made += 1;
+    // Each size once, when the title first asks for it.
+    if *made == 1 {
+        tracing::info!(
+            width = d.width,
+            height = d.height,
+            slices = d.depth_or_array_size,
+            levels = d.mip_levels,
+            format = d.format,
+            flags = format_args!("{:#x}", d.flags),
+            "a size the title renders to or lets shaders write, first asked for"
+        );
+    }
+}
+
+/// For the frame account: how many such sizes were asked for so far, the
+/// largest by pixels, and the pixels made in all.
+#[cfg(windows)]
+pub(crate) fn target_sizes() -> (usize, (u64, u32), u64) {
+    let sizes = TARGET_SIZES.lock().unwrap_or_else(|e| e.into_inner());
+    let largest = sizes.keys().copied().max_by_key(|&(w, h)| w * u64::from(h)).unwrap_or((0, 0));
+    (sizes.len(), largest, TARGET_PIXELS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// A texture's console memory and description; `None` for buffers.

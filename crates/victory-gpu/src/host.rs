@@ -482,6 +482,78 @@ pub(crate) static ALIVE: [std::sync::atomic::AtomicU64; 8] = [const { std::sync:
 /// makes at its start).
 pub(crate) static LISTS: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
 
+/// The size frames were last presented at (the title's own: the swap
+/// chain takes it and the window stretches it).
+static PRESENTED: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
+
+/// What limits a frame, from where its time went: the card (the wait for
+/// it is half the frame or more), our own work on the thread that submits
+/// (preparing and copying back), or neither: the title's own work, its
+/// frame pacing, or pipelines being made.
+fn limited_by(ms: f64, [preparing, card, back]: [f64; 3], making: u64) -> &'static str {
+    if card >= ms * 0.5 {
+        "the card"
+    } else if preparing + back >= ms * 0.5 {
+        "our preparing and copying back"
+    } else if making > 0 {
+        "the title, or pipelines being made"
+    } else {
+        "the title itself or its frame pacing"
+    }
+}
+
+/// With the frame line, in every build: what limited the frames since the
+/// last line and where their time went in hundredths, what holds memory
+/// (the card's and the PC's), and the sizes the title renders and presents
+/// at. The frame line has the same times in milliseconds; the memory and
+/// the sizes were in diagnostics builds only.
+fn frame_account_line(ms: f64, parts: [f64; 3], making: u64) {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let share = |part: f64| if ms > 0.0 { (part / ms * 100.0).round() } else { 0.0 };
+    let [preparing, card, back] = parts;
+    let rest = (ms - preparing - card - back).max(0.0);
+    let mut process = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    let mut pc = MEMORYSTATUSEX {
+        dwLength: size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: our own process and sized structures.
+    unsafe {
+        K32GetProcessMemoryInfo(GetCurrentProcess(), &mut process, process.cb);
+        GlobalMemoryStatusEx(&mut pc);
+    }
+    let [budget, used, _, shared] = host().and_then(|h| h.video_memory()).unwrap_or([0; 4]);
+    let (sizes, largest, pixels) = crate::resource::target_sizes();
+    tracing::info!(
+        "frame account: limited by {}: the card {:.0}% of the frame, preparing {:.0}%, copying back {:.0}%, the rest {:.0}% \
+         (the title's own work and waits); memory: the card {} MB in use of a budget of {} MB, {} MB of the PC's memory \
+         shared with it; the process {} MB committed, {} MB of it in memory, the PC {} MB free; textures the title renders \
+         to or shaders write: {} sizes asked for so far, the largest {}x{}, {} megapixels made in all; presented at {}x{}",
+        limited_by(ms, parts, making),
+        share(card),
+        share(preparing),
+        share(back),
+        share(rest),
+        used >> 20,
+        budget >> 20,
+        shared >> 20,
+        process.PagefileUsage >> 20,
+        process.WorkingSetSize >> 20,
+        pc.ullAvailPhys >> 20,
+        sizes,
+        largest.0,
+        largest.1,
+        pixels / 1_000_000,
+        PRESENTED[0].load(Ordering::Relaxed),
+        PRESENTED[1].load(Ordering::Relaxed)
+    );
+}
+
 /// The process's private bytes (diagnostics: around the making of lists).
 #[cfg(feature = "diagnostics")]
 fn private_bytes() -> u64 {
@@ -6105,6 +6177,7 @@ impl Meter {
                 placed = crate::descriptor::host::PLACED_TEXTURE_SLOTS.load(Ordering::Relaxed),
                 objects = crate::descriptor::host::OBJECT_TEXTURE_SLOTS.load(Ordering::Relaxed)
             );
+            frame_account_line(ms, [cpu, gpu, back_ms], crate::pipeline::making());
             #[cfg(feature = "diagnostics")]
             {
                 crate::copystat::log(std::mem::take(&mut self.copy_stats_frames) as f64);
@@ -6165,6 +6238,11 @@ impl Host {
             return None;
         };
         let (width, height) = (desc.Width as u32, desc.Height);
+        if PRESENTED[0].swap(width, Ordering::Relaxed) != width
+            || PRESENTED[1].swap(height, Ordering::Relaxed) != height
+        {
+            tracing::info!(width, height, format = desc.Format.0, "the title presents at this size");
+        }
         let mut presenter = self.presenter.lock().unwrap_or_else(|e| e.into_inner());
         if presenter.is_none() {
             *presenter = match self.presenter(width, height, format) {
@@ -6978,6 +7056,24 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         assert_eq!(ram_idle_ms(Some(0)), 2_000);
         // Missing falls back to normal
         assert_eq!(ram_idle_ms(None), 10_000);
+    }
+}
+
+#[cfg(test)]
+mod frame_account_tests {
+    use super::limited_by;
+
+    /// A frame is put down to the card when the wait for it is half of it
+    /// or more, to our own work on the submitting thread when that is, and
+    /// to the title otherwise.
+    #[test]
+    fn a_frame_is_put_down_to_what_took_half_of_it() {
+        // The gameplay frame of 25/11: 1,362 ms, 151 preparing, 1,131 on the card, 72 copying back.
+        assert_eq!(limited_by(1362.3, [151.5, 1130.7, 71.7], 0), "the card");
+        assert_eq!(limited_by(2180.8, [1385.5, 522.7, 215.2], 0), "our preparing and copying back");
+        // A menu at 30 frames a second: the card and we are idle.
+        assert_eq!(limited_by(33.3, [0.3, 2.4, 0.0], 0), "the title itself or its frame pacing");
+        assert_eq!(limited_by(520.0, [0.5, 1.1, 0.0], 1249), "the title, or pipelines being made");
     }
 }
 
