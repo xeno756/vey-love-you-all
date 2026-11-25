@@ -622,7 +622,8 @@ impl HostPipeline {
             let pso = match made {
                 Ok(pso) => pso,
                 Err(e) => {
-                    tracing::warn!(error = %e, ?shaders, "host pipeline refused");
+                    let why = why_refused(host.caps(), &[&code_bytes(&code(0))]);
+                    tracing::warn!(error = %e, ?shaders, why, "host pipeline refused");
                     host.log_messages();
                     return None;
                 }
@@ -793,7 +794,8 @@ impl HostPipeline {
         let pso = match made {
             Ok(pso) => pso,
             Err(e) => {
-                tracing::warn!(error = %e, ?shaders, "host pipeline refused");
+                let why = why_refused(host.caps(), &[&code_bytes(&desc.VS), &code_bytes(&desc.PS), &code_bytes(&desc.GS)]);
+                tracing::warn!(error = %e, ?shaders, why, "host pipeline refused");
                 host.log_messages();
                 return None;
             }
@@ -884,7 +886,8 @@ impl HostPipeline {
         let pso = match made {
             Ok(pso) => pso,
             Err(e) => {
-                tracing::warn!(error = %e, ?shaders, "host pipeline drawing a mesh program's records refused");
+                let why = why_refused(host.caps(), &[vs, ps_code]);
+                tracing::warn!(error = %e, ?shaders, why, "host pipeline drawing a mesh program's records refused");
                 host.log_messages();
                 return None;
             }
@@ -1334,6 +1337,38 @@ fn bounds_pipeline(
 }
 
 /// The bytes of shader code (none for an absent stage).
+/// Why the host may have refused a pipeline of these programs (DXIL
+/// containers), where a capability it lacks tells; said with the refusal.
+fn why_refused(caps: crate::host::Caps, programs: &[&[u8]]) -> &'static str {
+    if !caps.barycentrics && programs.iter().any(|p| reads_barycentrics(p)) {
+        "a program reads barycentrics (SV_Barycentrics) and the card has none (D3D12_OPTIONS3.BarycentricsSupported is false)"
+    } else {
+        "no capability the card lacks explains it; the debug layer of a diagnostics build names the cause (VICTORY_D3D12_DEBUG=1)"
+    }
+}
+
+/// Whether the feature flags of a DXIL container (its `SFI0` part) say
+/// that its program reads barycentrics.
+fn reads_barycentrics(container: &[u8]) -> bool {
+    /// `D3D_SHADER_REQUIRES_BARYCENTRICS`.
+    const BARYCENTRICS: u64 = 0x2_0000;
+    let word = |at: usize| container.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    if container.get(..4) != Some(b"DXBC") {
+        return false;
+    }
+    // The header: 4 characters, a 16-byte hash, a version, the size, the
+    // part count and then each part's offset; a part is 4 characters, its
+    // size and its bytes.
+    let Some(parts) = word(28) else { return false };
+    (0..parts.min(64)).any(|i| {
+        let Some(at) = word(32 + 4 * i) else { return false };
+        container.get(at..at + 4) == Some(b"SFI0")
+            && container
+                .get(at + 8..at + 16)
+                .is_some_and(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])) & BARYCENTRICS != 0)
+    })
+}
+
 fn code_bytes(code: &D3D12_SHADER_BYTECODE) -> Vec<u8> {
     if code.pShaderBytecode.is_null() {
         return Vec::new();
@@ -1602,5 +1637,34 @@ mod tests {
             super::super::library::LOADED.load(Ordering::Relaxed) > loaded,
             "the mesh pipeline was compiled again instead of loaded from the library"
         );
+    }
+
+    /// A DXIL container of one `SFI0` part holding `flags`.
+    fn container_with_features(flags: u64) -> Vec<u8> {
+        let mut c = b"DXBC".to_vec();
+        c.extend([0u8; 16]); // hash
+        c.extend(1u32.to_le_bytes()); // version
+        c.extend(52u32.to_le_bytes()); // size
+        c.extend(1u32.to_le_bytes()); // parts
+        c.extend(36u32.to_le_bytes()); // the part's offset
+        c.extend(b"SFI0");
+        c.extend(8u32.to_le_bytes());
+        c.extend(flags.to_le_bytes());
+        c
+    }
+
+    #[test]
+    fn a_refusal_names_the_capability_the_card_lacks() {
+        let plain = container_with_features(0x4000); // wave operations
+        let reads = container_with_features(0x2_0000 | 0x4000);
+        assert!(!reads_barycentrics(&plain));
+        assert!(reads_barycentrics(&reads));
+        assert!(!reads_barycentrics(b"DXBC"), "a container cut short");
+        assert!(!reads_barycentrics(&[]));
+        let without = crate::host::Caps::default();
+        let with = crate::host::Caps { barycentrics: true, ..without };
+        assert!(why_refused(without, &[&plain, &reads]).contains("SV_Barycentrics"));
+        assert!(!why_refused(without, &[&plain]).contains("SV_Barycentrics"));
+        assert!(!why_refused(with, &[&reads]).contains("SV_Barycentrics"), "a card that has them refused for another reason");
     }
 }
