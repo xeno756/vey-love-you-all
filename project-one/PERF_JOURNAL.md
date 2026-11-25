@@ -100,6 +100,18 @@ laisse de côté depuis `528d504`.
 Les deux lancements ont tenu 300 s sans panne ni blocage, 87 000 à 88 000 textures chargées
 en 120 s. Le relais gagne environ 10 % : il reste une option.
 
+### Les réglages de vitesse du côté du processeur (25/11, 15 h 04 à 15 h 28)
+
+| Réglage ajouté à `rapide` | Temps d'image sur les mêmes plans | Image | Fin |
+|---|---|---|---|
+| `vitesse` (contrôles plus légers, copies évitées) | 381 ms contre 409 (version diagnostic) | présente, avec des traînées | fermé par le test |
+| `vitesse:2` tel qu'il était (recopie limitée à ce que le jeu relit) | 196 ms contre 335 (version normale) | **noire** : aucun tampon relu n'était reconnu, rien n'était recopié | fermé par le test |
+| `vitesse:2`, reconnaissance corrigée (`2d8ba5a`) | 247 ms contre 409 (version diagnostic) | **noire** encore : 81 tampons reconnus ne suffisent pas | fermé par le test |
+| `vitesse:2` avec les zones jusqu'à 1 Mio recopiées | environ 250 ms contre 400 (version diagnostic, 12 images comparables) | présente | **carte perdue après 72 s** : défaut de page dans des copies de mémoire du jeu déjà libérées |
+
+`vitesse:2` vaut donc environ 40 % de temps d'image en moins, mais n'est pas utilisable : il
+reste une copie de mémoire du jeu libérée alors que la carte s'en sert encore.
+
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
@@ -116,4 +128,5 @@ premier `rapide`, 335 ms maintenant.
 | 25/11 | `dd14e44` | 1, streaming | `VICTORY_STREAM_PRESSURE=0` | carte à 3,9 Go de budget : 36 442 textures en 300 s, réserve pleine | 66 333 textures en 300 s | textures jusqu'à 3 niveaux plus grossières que demandé, jamais sous 128 pixels |
 | 25/11 | `9967d6a` | 4, réglages bas du jeu | ne pas donner `qualite-s` | 506 à 515 ms par image, 18,5 Go demandés | 440 ms, 14,9 Go | image non vérifiée ; une seule mesure |
 | 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
+| 25/11 | `2d8ba5a` | 5, recopie | ne pas donner `vitesse:2` | image noire avec `VICTORY_COPY_BACK_ONLY_READBACK` | image présente avec `VICTORY_COPY_BACK_SMALL_KB=1024`, environ 250 ms contre 400 | carte perdue une fois après 72 s : expérimental |
 | 25/11 | `fd37912` | 2, figement | `sortie:960x540` le redonne | `maximum` : resté sur l'écran des licences | **non mesuré** ; `maximum` demande 1280 × 720, la taille vue en jeu | `maximum` laisse 8 groupes d'effets de côté : image possiblement fausse |
