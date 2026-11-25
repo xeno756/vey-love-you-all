@@ -88,17 +88,6 @@ enum Command {
         #[arg(long)]
         jobs: Option<usize>,
     },
-    /// Translate the shaders of a title's archives into the cache and make
-    /// their compute pipelines, so that a run finds them there.
-    Warm {
-        paths: Vec<PathBuf>,
-        /// Worker threads (default: every logical core).
-        #[arg(long)]
-        jobs: Option<usize>,
-        /// Only translate: no host pipelines.
-        #[arg(long)]
-        no_pipelines: bool,
-    },
     /// Make the host pipelines of the graphics records of the title's
     /// precompiled pipeline cache (in its shaders.rpf) into the pipeline
     /// library, at low priority, so that a run with
@@ -148,6 +137,15 @@ enum Command {
         /// them, several minutes.
         #[arg(long)]
         mesh_pipelines: bool,
+        /// Also make the graphics pipelines the title's own pipeline cache
+        /// lists (as `precompile-graphics` does): tens of thousands, the
+        /// longest part.
+        #[arg(long)]
+        graphics_pipelines: bool,
+        /// Only the first N records of the title's pipeline cache (with
+        /// --graphics-pipelines; for a trial).
+        #[arg(long)]
+        graphics_limit: Option<usize>,
         /// Worker threads (default: the logical processors less two).
         #[arg(long)]
         jobs: Option<usize>,
@@ -223,7 +221,6 @@ fn main() -> Result<()> {
             }
             translate::run(paths, validate, pipelines, list, jobs)
         }
-        Command::Warm { paths, jobs, no_pipelines } => translate::warm(paths, jobs, !no_pipelines),
         Command::PrecompileGraphics { archive, jobs, limit } => translate::precompile_graphics(archive, jobs, limit),
         Command::Run {
             exe,
@@ -237,9 +234,17 @@ fn main() -> Result<()> {
             paths,
             compute_pipelines,
             mesh_pipelines,
+            graphics_pipelines,
+            graphics_limit,
             jobs,
             names_only,
-        } => prepare::run(paths, compute_pipelines, mesh_pipelines, jobs, names_only),
+        } => {
+            prepare::run(paths, compute_pipelines, mesh_pipelines, jobs, names_only)?;
+            if graphics_pipelines && !names_only {
+                translate::precompile_graphics(None, jobs, graphics_limit)?;
+            }
+            Ok(())
+        }
         Command::Config => show_config(),
         Command::Saves { title, action } => saves::run(action, title),
     }

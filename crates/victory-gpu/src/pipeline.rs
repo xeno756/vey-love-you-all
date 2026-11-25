@@ -130,26 +130,6 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
 #[cfg(windows)]
 pub(crate) use host::depth_bounds_test;
 
-/// Puts the translation of a container of the title's into the cache on
-/// disk, and with `compute` its host pipeline into the driver's, before any
-/// run wants them. Whether it translated, and whether it has a pipeline
-/// (`None`: not asked for, or left out).
-#[cfg(windows)]
-pub fn warm(stage: &'static str, container: &[u8], compute: bool) -> (bool, Option<bool>) {
-    let full = blake3::hash(container);
-    // Not through the table, which lets nothing go.
-    let shader = Arc::new(Shader {
-        stage,
-        hash: full.to_hex()[..16].to_owned(),
-        container: container.to_vec(),
-        translated: OnceLock::new(),
-        mesh_variant: OnceLock::new(),
-    });
-    let translated = shader.translated().is_some();
-    let made = (translated && compute).then(|| make::warm(vec![shader])).flatten();
-    (translated, made)
-}
-
 /// A translated shader and the console resources its code reads.
 #[cfg(windows)]
 pub(crate) struct Translated {
@@ -1169,11 +1149,16 @@ pub fn prepare(
                     }
                     let shaders = [shader.clone()];
                     let made = if stage == "mesh" {
-                        host::HostPipeline::mesh_compute_half(&shaders, &shader)
+                        host::HostPipeline::mesh_compute_half(&shaders, &shader).is_some()
                     } else {
-                        host::HostPipeline::new(&shaders, None)
+                        // Not the ones a run leaves out for what they cost
+                        // the driver (`make::left_out`): no run asks for them.
+                        match make::warm(shaders.to_vec()) {
+                            Some(made) => made,
+                            None => continue,
+                        }
                     };
-                    count(if made.is_some() { 3 } else { 4 });
+                    count(if made { 3 } else { 4 });
                 }
             });
         }

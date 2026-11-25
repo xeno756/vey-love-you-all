@@ -10,6 +10,9 @@ rem                                  carte commande par commande (plus lent)
 rem   lancer.cmd series-x preparer   ne lance pas le jeu : traduit ses shaders
 rem                                  et compile d'avance ses pipelines de calcul
 rem                                  et ceux de ses programmes mesh
+rem   lancer.cmd series-x preparer-graphiques
+rem                                  comme preparer, plus les pipelines graphiques
+rem                                  que le cache de pipelines du jeu liste (long)
 rem   lancer.cmd series-x test       montre ce qui serait lance, sans rien lancer
 rem   (capture, profil et test peuvent se combiner ; preparer suit la version
 rem   choisie : la version diagnostic a son propre cache de shaders)
@@ -55,6 +58,7 @@ set "CAPTURE="
 set "PROFILE="
 set "PREPARE="
 set "DRY="
+set "GRAPHICS="
 set "TEXTURES="
 set "SANS="
 set "SORTIE="
@@ -65,6 +69,8 @@ if "%~2"=="" goto args_done
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
 if /i "%~2"=="preparer" set "PREPARE=1"
+if /i "%~2"=="preparer-graphiques" set "PREPARE=1"
+if /i "%~2"=="preparer-graphiques" set "GRAPHICS=--graphics-pipelines"
 if /i "%~2"=="test" set "DRY=1"
 if /i "%~2"=="minimal" call :minimal
 if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
@@ -128,7 +134,8 @@ set "STAMP=run"
 for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%t"
 rem Les graphismes reduits demandes : dans le nom du journal aussi.
 for %%d in ("%ROOT%\..\victory-profils") do set "PROFILS=%%~fd"
-set "TAG="
+rem (Branche de la fusion ScarlettPort : ses journaux portent son nom.)
+set "TAG=-scarlettport"
 set "BAD="
 set "VICTORY_SKIP_SHADERS="
 if defined SORTIE (
@@ -183,7 +190,7 @@ if not exist "%LOGS%" mkdir "%LOGS%"
 if defined CAPTURE if not exist "%VICTORY_CAPTURE%" mkdir "%VICTORY_CAPTURE%"
 
 if not defined PREPARE goto title
-"%EXE%" prepare --compute-pipelines --mesh-pipelines 2>"%LOG%"
+"%EXE%" prepare --compute-pipelines --mesh-pipelines %GRAPHICS% 2>"%LOG%"
 echo Preparation terminee, code %ERRORLEVEL%. Journal : %LOG%
 exit /b %ERRORLEVEL%
 :title
