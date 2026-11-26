@@ -4,6 +4,9 @@ Prises le 25/11/2026 pour avancer sans poser de question. Chacune se change en l
 
 | # | Question | Décision | Raison |
 |---|---|---|---|
+| 45 | Profils RT OFF / LOW / BALANCED ? | Pas de profil : le lancer de rayons est déjà éteint (constructeur off, passes écartées) et la carte ne fait que 10 % de l'image. | Un profil qui ne change aucune mesure serait trompeur (doc 13). |
+| 46 | Déverrouiller la cadence de 30 images/s du jeu par défaut ? | Non : réglage `cadence:` éteint par défaut. | Elle ne joue pas dans le monde (150-250 ms par image), et le rythme de la simulation à une autre cadence n'est pas connu. |
+| 47 | Textures plus fines pour les personnages dans `performance` ? | Oui (`personnages`, un niveau retiré au lieu de trois). | Demande de l'utilisateur ; ce sont peu de textures à côté du monde. Non mesuré. |
 | 43 | `attentes-textures` dans `performance` après un seul lancement ? | Oui (`bb988d4`), avec `VICTORY_STAGING_PRECISE=0` pour le retirer. | +22 % mesuré, aucune perte en 300 s, et l'utilisateur veut une seule version avec tout ; la panne de `precis` venait de son autre moitié (adresses sauvages), que celle-ci ne prend pas. Le journal compte les alertes de cette attente. |
 | 44 | Les deux correctifs des murs de l'amont : par défaut ou en option ? | Par défaut (`VICTORY_HEAP_SYNC=0`, `VICTORY_VIEW_GUARD=0` pour revenir). | Ce sont des corrections d'image, éprouvées chez l'amont sur ce jeu ; le second a un test qui échoue sans lui. |
 | 39 | Rendre les ombres : toutes, aucune, ou une partie ? | La cascade la plus proche du soleil dans `performance` ; aucune dans `ultra-bas` ; deux dans `equilibre`. | La lumière qui traverse les murs est l'incohérence la plus visible des captures ; la cascade proche fait 23 % des dessins d'ombres du soleil, les deux premières 67 %. |

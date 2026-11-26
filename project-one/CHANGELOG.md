@@ -4,6 +4,19 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (15 h) — limiteurs, lancer de rayons, plantage, personnages
+
+Détail : [docs/technical/13-limiteurs-rayons-personnages-26-11.md](docs/technical/13-limiteurs-rayons-personnages-26-11.md).
+
+- Lancement de 14 h 01 : 4,07 images par seconde avec les murs ; la carte ne travaille que 10 %
+  de l'image ; plantage du jeu après 9 minutes (une première).
+- Pas de plafond qui retienne le monde : le jeu demande 30 images/s, ce qui ne joue que sous
+  33 ms par image. Réglages `cadence:` et `vsync:` ajoutés, éteints.
+- Lancer de rayons : déjà éteint chez nous ; aucun gain possible de ce côté aujourd'hui.
+- Plantage : les écritures du noyau dans la mémoire du jeu se font gardes tenues ouvertes.
+- Personnages : leurs textures gardent un niveau de détail de moins retiré au lieu de trois
+  (`personnages`, dans `performance`). Non vérifié.
+
 ## 26/11/2026 (14 h 30) — les murs sont revenus ; la vitesse a baissé
 
 - Capture de l'utilisateur à 13 h 47 : **le dortoir a ses murs**.
