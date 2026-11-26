@@ -220,6 +220,16 @@ Tests ajoutés (5) :
 En jeu, par mes propres lancements du banc : voir [PERF_JOURNAL.md](PERF_JOURNAL.md),
 « Mes lancements ».
 
+### Murs : descripteurs copiés, vues multiples d'une page (26/11, 14 h, `a5b2dd3`)
+
+234 tests de `victory-gpu` réussis (3 ignorés), 116 de `victory-hle`, 45 du chargeur ; Clippy
+sans avertissement.
+
+| Test | Ce qu'il vérifie |
+|---|---|
+| `descriptor::host::tests::copied_records_are_made_again_only_when_their_bytes_change` | un enregistrement copié en octets est refait une fois, pas tant qu'il ne change pas ; un emplacement jamais écrit est laissé |
+| `watch::tests::a_write_through_another_view_of_a_page_is_reported_at_the_guarded_one` | une section montrée à deux adresses : une écriture par la seconde est signalée à la première, gardée. **Échoue avec `VICTORY_VIEW_GUARD=0`** (vérifié) |
+
 ### Données streamées, attentes des textures, cascades (26/11, 13 h, branche fusionnée)
 
 `cargo test --release -p victory-gpu -p victory-loader -- --test-threads=4` : 232 réussis,

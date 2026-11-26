@@ -135,3 +135,32 @@ phase, avec le piège déjà connu des numéros réservés (emplacements de raci
    attentes tombent de 13,8 à 2 ou 3 par image, c'est le gain le plus fort à portée.
 3. La fusion de l'amont fxceless, en phase à part, branche de côté, avec ses mesures.
 4. Le préréglage SafeMode (`prereglage:bas`) pour réduire le travail de la carte.
+
+## 9. Lancements de l'utilisateur de 13 h 05 et 13 h 14
+
+| Lancement | Images par seconde (après 120 s) | Médiane | 95 % | 99 % | Carte | Perte |
+|---|---|---|---|---|---|---|
+| 11 h 12 `performance` (sans ombres) | 5,64 | 175 ms | 217 ms | 239 ms | 109 ms | non |
+| 13 h 05 `performance` (cascade proche) | 5,25 | 188 ms | 239 ms | 275 ms | 118 ms | non |
+| 13 h 14 `performance attentes-textures` | **6,43** | **153 ms** | 204 ms | 277 ms | 66 ms | non |
+
+- La cascade proche coûte 13 ms de médiane ; `attentes-textures` en rend 35 : `performance`
+  le prend depuis 14 h (`bb988d4`, un seul lancement mesuré ; `VICTORY_STAGING_PRECISE=0` le
+  retire).
+- Capture de 13 h 14 : **le visage de l'héroïne est texturé** (il ne l'était pas le matin) ;
+  celui d'une PNJ assise reste taché de sombre (texture partielle ? 4 061 en attente). **Les
+  murs du dortoir manquent** : on voit le décor extérieur, la brume orange et le soleil sur
+  la tenue viennent de là. Le défaut des murs est connu depuis le 25/11 (BLOCKERS 21 : 3
+  captures sur 7, avant tout changement d'aujourd'hui). La retenue des lectures DirectStorage
+  n'y est pour rien dans ce lancement : la file ne s'est soumise seule qu'une fois, sans rien
+  retenir (à 13 h 05 en revanche, 2 079 lectures retenues d'un coup, durée inconnue : le
+  journal la dit maintenant).
+- Notre amont écrit que la première pièce s'affiche juste (murs, textures, personnes, lampes)
+  depuis deux correctifs, tous deux absents de notre arbre : le miroir des enregistrements de
+  descripteurs que le jeu copie en octets (40 000 par image chez lui, leurs emplacements
+  vides ou périmés) et la garde de toutes les vues d'une même page (murs 4 fois sur 4 au lieu
+  de 2 sur 5). Repris tous deux (`a5b2dd3`), avec un test qui échoue sans le second.
+- L'écran du sélecteur de profil (fond bleu nuit, 13 dessins) : même couleur que les écrans
+  du début enregistrés le 25/11 en `rapide` ; la vidéo du menu se décode à 30 images par
+  seconde dans les trois lancements. Pas de régression visible ; s'il manque un fond, ce
+  n'est pas nouveau. Non vérifié.

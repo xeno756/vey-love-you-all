@@ -3,6 +3,9 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 14 h** : 6,43 images par seconde mesurées (13 h 14) ; les murs manquaient : deux
+correctifs de l'amont repris (`a5b2dd3`), non vérifiés ; `performance` prend `attentes-textures`.
+
 **Au 26/11 à 13 h** : le monde s'affiche (lancement de l'utilisateur à 11 h 12, 5,6 images
 par seconde). Fait depuis, non vérifié en jeu : visages noirs (`84fe251`), ombres du soleil
 proches (`b3dd536`), essai `attentes-textures` (`3018756`). Tout est dans

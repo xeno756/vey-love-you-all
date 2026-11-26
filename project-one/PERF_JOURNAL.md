@@ -290,6 +290,10 @@ encore lu ; carte sans travail 80 ms par image. Aucune perte de carte en 300 s. 
 brouillard coûte donc environ 9 ms de médiane (175 contre 166 ms en série H). Détail :
 [docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md).
 
+**Mesuré (13 h 05 et 13 h 14, lancements de l'utilisateur)** : `performance` avec la cascade
+proche du soleil, 5,25 images par seconde, médiane 188 ms ; avec `attentes-textures` en plus,
+**6,43**, médiane 153 ms, 95 % sous 204 ms, carte 66 ms d'attente au lieu de 118, aucune perte.
+
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |
