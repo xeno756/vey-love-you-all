@@ -4,7 +4,7 @@ Un lot est FAIT, EN COURS, À FAIRE ou REFUSÉ (avec la raison). Mis à jour à 
 Les preuves sont dans [FINDINGS.md](FINDINGS.md), ce qui bloque dans [BLOCKERS.md](BLOCKERS.md),
 les choix dans [DECISIONS.md](DECISIONS.md).
 
-Dernière mise à jour : 26/11/2026 à 8 h 15, mission 10 à 15 images par seconde, cycle 1 mesuré, cycle 2 préparé.
+Dernière mise à jour : 26/11/2026 à 8 h 25, mission 10 à 15 images par seconde : cycles 1 et 2 mesurés, cycle 3 préparé.
 
 ## Mission 10 à 15 images par seconde
 
@@ -15,7 +15,8 @@ L'utilisateur fait tous les lancements : un cycle reste « non mesuré » jusqu'
 | Cycle | État | Ce qui est fait, ce qui manque |
 |---|---|---|
 | 1 cartes d'ombres écartées, profil `performance` | FAIT, MESURÉ | `6eaf67c`, `aad682c`, `a409572`. Deux lancements en banc propre : 4,68 et 4,45 images par seconde (201 et 217 ms) contre environ 3 (327–337 ms). Objectifs non atteints. Manque : une capture de contrôle (opérations par image). |
-| 2 attentes de la carte | PRÉPARÉ, NON MESURÉ | `19f3e56` : `precis`, `relais:2`, `fenetres` dans le lanceur (réglages de ScarlettPort, aucun changement du runtime). Le banc affiche les attentes par image. Manque : les lancements. |
+| 2 attentes de la carte | FAIT, MESURÉ (un lancement) | `19f3e56`. `performance precis relais:2` : 4,97 images par seconde, médiane 187 ms ; attentes 13 → 4 par image, mais 119 ms encore ; 0 alerte. Gain de 7 à 14 % : l'attente s'est déplacée vers la relecture. `fenetres` reste non mesuré. |
+| 3 relecture de ce que les shaders écrivent | PRÉPARÉ, NON MESURÉ | `vitesse:2` (existant) et `vitesse:3` (passes de contrôle jointes). 570 morceaux, 36 Mo relus par image aujourd'hui. Manque : les lancements. |
 | 2 bis brouillard volumétrique | PRÉPARÉ, NON MESURÉ | Groupe `volumetrie-collecte` écrit (hors dépôt) : 18,7 ms de carte pour 4 calculs dans la mesure du 25/11. À juger sur capture. |
 | 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |
 | 3 manque de RAM | À FAIRE | 18 700 à 19 200 défauts de page par image avec `performance` (53 000 avec `rapide`), RAM libre au plus bas 10 à 24 Mo. Lot R2 (fenêtres page par page). |
@@ -28,7 +29,8 @@ But : 330 ms → 100 ms par image (niveau 1), puis 66,7 ms (niveau 2).
 | Poste | Aujourd'hui | Levier | Gain estimé | Gain mesuré |
 |---|---|---|---|---|
 | Cartes d'ombres, relais, réglages bas (profil `performance`) | 327–337 ms avec `rapide` | cycle 1 | vers 220–250 ms | **201 et 217 ms mesurés** (−120 ms, 4,5 images par seconde) |
-| Attentes de la carte | 12,8–14 par image, 135–154 ms | `precis`, `relais:2` | vers 120–150 ms par image | non mesuré |
+| Attentes de la carte | 12,8–14 par image, 135–154 ms | `precis`, `relais:2` | vers 120–150 ms par image | **187 ms** (−14 à −30 ms) : 4 attentes, 119 ms |
+| Relecture des écritures des shaders | 36 Mo par image, 60–104 ms d'attente | `vitesse:2`, `vitesse:3` | vers 120–140 ms par image | non mesuré |
 | Brouillard volumétrique | 18,7 ms de carte (25/11) | `sans:volumetrie-collecte` | −15 ms | non mesuré |
 | Bornage un par un | une passe de calcul par dessin indirect | `fenetres` | −10 ms | non mesuré seul |
 | Dessins mesh restants | environ 2 300 par image, carte au travail 110 ms | regroupement | −30 à −50 ms | 0 |
