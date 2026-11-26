@@ -86,24 +86,24 @@ rem   lancer.cmd series-x performance       LA version a essayer : tout ce qui e
 rem                                         mesure plus rapide, la qualite d'image
 rem                                         passant apres. maximum sans son groupe
 rem                                         transparence, les cartes d'ombres non
-rem                                         dessinees, qualite-s, precis, relais:2,
-rem                                         256 listes en vol, fenetres, le
-rem                                         brouillard collecte en moins, les
-rem                                         textures creees 80 ms par image au plus.
-rem                                         6,3 images par seconde le 26/11 a 10 h,
-rem                                         la ou rapide en donne 3
-rem   lancer.cmd series-x performance-sur   le reglage qui a tenu tous ses
-rem                                         lancements : 5 images par seconde
+rem                                         dessinees, qualite-s, relais, 256 listes
+rem                                         en vol, fenetres, le brouillard collecte
+rem                                         en moins, les textures creees 80 ms par
+rem                                         image au plus. 6 images par seconde le
+rem                                         26/11, 300 s sans perte deux fois, la
+rem                                         ou rapide en donne 3
+rem   lancer.cmd series-x performance-sur   le profil du matin seul : 4,5 images
+rem                                         par seconde
 rem   lancer.cmd series-x sans-ombres       les cartes d'ombres ne sont plus dessinees
 rem                                         (sans-dessins:<groupe> pour un groupe de
 rem                                         ..\victory-profils\dessins-<groupe>.txt)
-rem Reglages d'attente et de bornage de ScarlettPort, a donner APRES le profil,
-rem jamais lances ici avant le 26/11 (a juger sur le banc et sur capture) :
-rem   ... performance precis                une texture encore lue par la carte ne
-rem                                         fait plus attendre tout ce qui est en vol
-rem   ... performance relais:2              second niveau du relais : une lecture
-rem                                         n'attend que les soumissions qui ecrivent
-rem                                         ce qu'elle lit
+rem Reglages d'attente et de bornage de ScarlettPort, a donner APRES le profil :
+rem   ... performance precis relais:2       DANGEREUX : une texture encore lue par
+rem                                         la carte ne fait plus attendre, et une
+rem                                         lecture n'attend que les soumissions qui
+rem                                         ecrivent ce qu'elle lit. 8 images par
+rem                                         seconde, mais 10 pertes de carte sur 15
+rem                                         lancements le 26/11
 rem   ... performance fenetres              les dessins indirects qui se suivent sont
 rem                                         bornes en une passe, pas un par un
 rem
@@ -400,21 +400,21 @@ rem compose les matieres transparentes, ce qui passe par elle n'arrive pas a
 rem l'image, et un personnage proche de la camera y passe (haut du corps absent
 rem sur une capture d'ecran du 26/11 ; cause probable, a confirmer en jeu).
 rem performance reunit ce qui a ete mesure plus rapide ET a tenu (une seule
-rem version a essayer) : en plus du profil du matin, les attentes precises et
-rem le relais au niveau 2, 256 listes en vol, les fenetres de memoire qui
-rem n'attendent plus les ecritures des tampons qu'elles recouvrent, le bornage
-rem par fenetres, la collecte du brouillard laissee de cote, et la creation
-rem des textures bornee a 80 ms par image. Mesure le 26/11 a 10 h 02 (Discord
-rem et OBS ouverts) : 6,3 images par seconde, mediane 151 ms, 240 s sans perte.
-rem PAS vitesse:2 ni vitesse:3 : 6 lancements sur 7 avec eux ont perdu la
-rem carte le 26/11 (ce que les shaders ecrivent n'est plus recopie vers la
-rem memoire du jeu, et des octets perimes finissent lus comme adresses).
-rem performance-sur : le profil du matin, attentes precises et relais au
-rem niveau 2 seulement (5 images par seconde, a toujours tenu).
+rem version a essayer) : en plus du profil du matin (relais au niveau 1), 256
+rem listes en vol, les fenetres de memoire qui n'attendent plus les ecritures
+rem des tampons qu'elles recouvrent, la comparaison des copies par la carte en
+rem groupes, le bornage par fenetres, la collecte du brouillard laissee de
+rem cote, et la creation des textures bornee a 80 ms par image. Mesure le
+rem 26/11 a 10 h 31 et 10 h 38 (Discord ouvert) : 6,1 et 6,0 images par
+rem seconde, 95 %% des images sous 190 et 194 ms, 300 s sans perte deux fois.
+rem PAS le relais au niveau 2 ni les attentes precises (precis) : 10 pertes de
+rem carte sur 15 lancements avec eux le 26/11, plus vite (8 images par
+rem seconde) mais pas jouable. PAS vitesse:2 ni vitesse:3 non plus : ce que les
+rem shaders ecrivent n'est plus recopie vers la memoire du jeu.
+rem performance-sur : le profil du matin seul (4,5 images par seconde).
 :performance
 call :performance_base
-call :relay 2
-call :precise
+call :relay
 call :windows
 call :without "volumetrie-collecte"
 if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=80"
@@ -425,8 +425,7 @@ goto :eof
 :performance_sure
 call :performance_base
 set "PROFIL=performance-sur"
-call :relay 2
-call :precise
+call :relay
 goto :eof
 
 :performance_base
