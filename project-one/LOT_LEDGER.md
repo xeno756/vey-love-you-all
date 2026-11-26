@@ -4,7 +4,7 @@ Un lot est FAIT, EN COURS, À FAIRE ou REFUSÉ (avec la raison). Mis à jour à 
 Les preuves sont dans [FINDINGS.md](FINDINGS.md), ce qui bloque dans [BLOCKERS.md](BLOCKERS.md),
 les choix dans [DECISIONS.md](DECISIONS.md).
 
-Dernière mise à jour : 26/11/2026 à 10 h 10 : `performance` stable à 6,3 images par seconde (sans `vitesse:3`, qui perdait la carte).
+Dernière mise à jour : 26/11/2026 à 10 h 45 : `performance` tient (deux fois 300 s) à 6 images par seconde ; relais au niveau 2 et attentes précises retirés (pertes de carte).
 
 ## Mission 10 à 15 images par seconde
 
@@ -22,7 +22,8 @@ lancements étaient ceux de l'utilisateur. La version à lui donner est une seul
 | 2 bis brouillard volumétrique | PRÉPARÉ, NON MESURÉ | Groupe `volumetrie-collecte` écrit (hors dépôt) : 18,7 ms de carte pour 4 calculs dans la mesure du 25/11. À juger sur capture. |
 | 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |
 | 3 manque de RAM | À FAIRE | 18 700 à 19 200 défauts de page par image avec `performance` (53 000 avec `rapide`), RAM libre au plus bas 10 à 24 Mo. Lot R2 (fenêtres page par page). |
-| 5 attentes et passes de la carte, sans `vitesse:3` | FAIT, MESURÉ | 256 listes en vol, fenêtres qui passent les écritures des tampons (`9e52aa5`), comparaison de la carte par groupe (`a191a66`) : 5,3 → 6,3 images par seconde, 3 lancements de 240 s tenus. |
+| 5 attentes et passes de la carte, sans `vitesse:3` | FAIT, MESURÉ | 256 listes en vol, fenêtres qui passent les écritures des tampons (`9e52aa5`), comparaison de la carte par groupe (`a191a66`). |
+| 6 stabilité | FAIT, MESURÉ | Le relais au niveau 2 avec les attentes précises perdait la carte (10 sur 15) : retirés (`6fd9440`). `performance` : 6,1 et 6,0 images par seconde, 300 s tenu deux fois. |
 | 4 dessins mesh regroupés | À FAIRE | BLOCKERS 14 : environ 2 300 dessins par image restent ; la carte travaille 110 ms par image. Après les mesures du cycle 2. |
 
 ### Registre de la mission
