@@ -4,6 +4,23 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (17 h 20) — le port #2 retiré de `performance`
+
+Partie de l'utilisateur de 16 h 41 (14 min), avec le port #2 :
+
+- **5,1 images par seconde** en régime établi (médiane 181-185 ms), contre 4,4 (224-234 ms) à
+  14 h 56. Synchronisation des tas : 43 à 129 ms par image au lieu de 98 à 110.
+- Mais son filet trouve **150 à 450 descripteurs par image** sur ses 16 pages qu'aucune marque
+  n'a signalés : le jeu en écrit par d'autres chemins que les 6 patchés, et son `memcpy`
+  système n'en marque aucun. Ces cases gardent une vue périmée plusieurs secondes.
+- **La carte est perdue à 14 min** (défaut de page de la carte pendant la passe des vues de
+  tampons) : la première perte avec le relais 1 depuis 10 h 38. Lien avec le port non prouvé.
+- Mémoire : 369 Mo libres sur 15,8 Go en fin de partie ; 6,6 Go de mémoire partagée avec la
+  carte ; Discord et Edge tiennent environ 3 Go.
+
+Retiré de `performance` (`255c2ba`), gardé sous le mot `marques`. Le code reste, éteint par
+défaut.
+
 ## 26/11/2026 (16 h 40) — le jeu signale lui-même ses descripteurs (port #2)
 
 - Partie de 14 h 56 : 4,47 images par seconde, médiane 220 ms. La synchronisation des tas de

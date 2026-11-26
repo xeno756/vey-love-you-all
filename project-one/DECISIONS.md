@@ -4,6 +4,7 @@ Prises le 25/11/2026 pour avancer sans poser de question. Chacune se change en l
 
 | # | Question | Décision | Raison |
 |---|---|---|---|
+| 52 | Garder le port #2 dans `performance` après la partie de 16 h 41 ? | Non (`255c2ba`) : mot `marques` à part. Remplace la décision 48. | +16 % d'images par seconde, mais des descripteurs périmés mesurés (150 à 450 par image sur 16 pages) et la carte perdue à 14 min : la stabilité et l'image passent avant (règle de la mission). |
 | 51 | Le profil console Series S du README (`--console series-s`) ? | Pas sans ton oui. | Ta règle du 25/11 : la version Series X seulement. C'est pourtant le plus gros gain du README (27 à 29 images/s, 18 Go au lieu de 27). |
 | 50 | `VICTORY_LATE_WAIT_LISTS=512` du README ? | Non : `performance` met déjà 256. | Partie de 14 h 56 : 0,0 ms d'attente pour « listes en l'air » ; la limite ne joue pas chez nous. |
 | 49 | Le port #1 (constantes lues sur place, `VICTORY_PORT_CONSTANTS`) dans la même version ? | Non : préparé ensuite, à part. | Il place le tas de 185 Mo du jeu dans la mémoire de la carte ; le fork note qu'une passe sur cette mémoire a fait perdre le pilote dans un autre arbre. Il enlèverait pourtant les 65,6 ms par image d'attente de la carte « mémoire du jeu lue par un remplissage » (BLOCKERS 42). |

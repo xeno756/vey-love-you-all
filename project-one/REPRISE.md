@@ -3,6 +3,12 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 17 h 20** : le port #2 a donné 5,1 images par seconde à 16 h 41, mais avec des
+descripteurs périmés et la carte perdue à 14 min : retiré de `performance` (`255c2ba`, mot
+`marques`). La mémoire du PC est pleine (BLOCKERS 44). Suite : une partie sans `marques`
+avec Discord et Edge fermés, la réponse de l'utilisateur sur le profil Series S, puis le
+port #1.
+
 **Au 26/11 à 16 h 40** : port #2 d'avatarmanz repris (`ea371e3`, branche fusionnée) : le
 jeu marque les cases de descripteurs qu'il écrit, la synchronisation des tas (110 ms par
 image à 14 h 56) ne relit plus que celles-là. Dans `performance`, jamais lancé. Suite : la
