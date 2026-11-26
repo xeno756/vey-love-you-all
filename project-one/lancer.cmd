@@ -77,6 +77,8 @@ rem                                         n'est recopie que la ou le jeu le re
 rem                                         et dans les petites zones : 40 %% plus
 rem                                         rapide le 25/11, mais la carte a ete
 rem                                         perdue une fois apres 72 s (experimental)
+rem   lancer.cmd series-x rapide vitesse:3  en plus, les passes de controle du runtime
+rem                                         sur la carte sont jointes (jamais lance)
 rem   lancer.cmd series-x rapide relais     les commandes partent vers la carte sans
 rem                                         attendre les precedentes : 54 ms de moins
 rem                                         par image le 26/11, image propre
@@ -427,15 +429,27 @@ goto :eof
 rem Les reglages de vitesse de ScarlettPort du cote du processeur : 1, les
 rem controles de contenu plus legers ; 2, en plus, la recopie de ce que les
 rem shaders ecrivent limitee a ce que le jeu relit.
+rem 3, en plus : les passes de controle que le runtime fait lui-meme sur la
+rem carte apres chaque envoi de memoire du jeu (180 a 190 par image le 26/11)
+rem sont jointes par suites de morceaux qui se touchent.
+rem Pourquoi le niveau 2 revient le 26/11 : avec precis et relais:2, le fil qui
+rem recopie attend la carte 60 a 104 ms par image pour relire 570 morceaux
+rem (36 Mo) que les shaders ont ecrits, et le fil qui soumet l'attend, lui. La
+rem perte de carte du 25/11 (une copie liberee encore lue) est de la famille
+rem que c4cd932 a fermee depuis ; rien ne l'a remontre.
 :vitesse
 set "VITESSE=%~1"
 if not defined VITESSE set "VITESSE=1"
 set "VICTORY_FAST_HASH=1"
 set "VICTORY_KNOWN_WRITES=1"
-if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_ONLY_READBACK=1"
+if "%VITESSE%"=="3" set "VICTORY_CARD_REHASH_RUNS=1"
+if "%VITESSE%"=="3" goto vitesse_2
+if not "%VITESSE%"=="2" goto :eof
+:vitesse_2
+set "VICTORY_COPY_BACK_ONLY_READBACK=1"
 rem (Sans les petites zones l'image du jeu est noire : il relit d'autres
 rem resultats que ceux de ses tampons de relecture.)
-if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_SMALL_KB=1024"
+set "VICTORY_COPY_BACK_SMALL_KB=1024"
 goto :eof
 
 rem Les commandes partent vers la carte sans attendre la fin des precedentes
