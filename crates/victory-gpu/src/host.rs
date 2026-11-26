@@ -2199,6 +2199,36 @@ pub(crate) fn sync_precise() -> bool {
     })
 }
 
+/// (PROJECT ONE) `VICTORY_STAGING_PRECISE=1` (off by default): the first part
+/// of [`sync_precise`] alone, the texture staging buffers; title memory read
+/// under flights is waited for as before (everything in the air).
+///
+/// Measured on 26/11 (run of 11:12, `performance`): of 13.8 settles a frame,
+/// 11.8 were a staging buffer an unlanded flight had named, 119.6 ms a frame
+/// of the submitting thread standing for the card, while the card stood
+/// idle 60.6 ms a frame behind it. A staging buffer is a write-after-read
+/// hazard only: the CPU must not detile into it while a submission on the
+/// card still copies from it. With this, that write waits on the card's
+/// fence for the last such submission (`crate::texture`'s readers), and only
+/// when the texture changed; nothing else stops the submission. The second
+/// part of [`sync_precise`] (title memory reads waited for only until the
+/// flights that declared it have landed, as `VICTORY_RELAY=2` does) is not
+/// taken: those two together lost the card 10 times in 15 runs on 26/11, by
+/// a fault at an address in no object, which a wrong staging buffer (texels)
+/// cannot give.
+pub(crate) fn staging_precise() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let alone = std::env::var_os("VICTORY_STAGING_PRECISE").is_some_and(|v| v == "1");
+        if alone && !sync_precise() {
+            tracing::info!(
+                "a texture's staging buffer waits for the submission copying from it, not for every flight (VICTORY_STAGING_PRECISE=1)"
+            );
+        }
+        alone || sync_precise()
+    })
+}
+
 /// `VICTORY_BARRIER_MERGE=1` (off by default): fewer waits for every
 /// earlier shader write in a list.
 ///
@@ -3639,11 +3669,23 @@ fn late_line(frames: f64) {
             r[4] / 1000.0,
         );
     }
-    if sync_precise() {
+    {
+        // (PROJECT ONE) VICTORY_SHADOW_CASCADES.
+        static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let all = crate::draw::CASCADE_DRAWS_LEFT_OUT.load(Ordering::Relaxed);
+        let new = all - SEEN.swap(all, Ordering::Relaxed);
+        if new > 0 {
+            tracing::info!(
+                "shadow draws into the sun's far cascades left out per frame (VICTORY_SHADOW_CASCADES): {:.0}",
+                new as f64 / frames
+            );
+        }
+    }
+    if staging_precise() {
         let s: Vec<f64> =
             crate::texture::SYNC_STATS.iter().map(|s| s.swap(0, Ordering::Relaxed) as f64 / frames).collect();
         tracing::info!(
-            "precise waits per frame (VICTORY_SYNC_PRECISE=1): {:.1} submissions went on past staging buffers in the air \
+            "precise waits per frame (VICTORY_SYNC_PRECISE=1 or VICTORY_STAGING_PRECISE=1): {:.1} submissions went on past staging buffers in the air \
              (each a wait for every flight before), {:.1} staging buffer writes waited for the submission copying from \
              them, {:.1} ms; hazards {:.1}",
             s[3],
@@ -5183,14 +5225,16 @@ impl Host {
                 self.settle(&mut submitted, why);
             }
         }
-        if late && sync_precise() {
+        if late && staging_precise() {
             // A staging buffer's write waits for its readers itself
             // (`crate::texture`); counted where this would have waited.
             if staging_in_flight(runs) {
                 crate::texture::SYNC_STATS[3].fetch_add(1, Ordering::Relaxed);
             }
             // What is read is no longer written by a flight in the air.
-            precise_check(runs);
+            if sync_precise() {
+                precise_check(runs);
+            }
         } else if late && staging_in_flight(runs) {
             if relay_exact() {
                 relay_wait(WHY_READ, |_| !staging_in_flight(runs));

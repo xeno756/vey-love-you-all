@@ -133,7 +133,7 @@ pub(crate) static SYNC_STATS: [std::sync::atomic::AtomicU64; 4] = [const { std::
 
 /// The submission being prepared copies from `staging` on the card.
 fn copying(staging: &Staging) {
-    if !crate::host::sync_precise() {
+    if !crate::host::staging_precise() {
         return;
     }
     READERS.lock().unwrap_or_else(|e| e.into_inner()).preparing.push(staging.mapped());
@@ -141,7 +141,7 @@ fn copying(staging: &Staging) {
 
 /// The submission prepared last went to the card, signalling `fence`.
 pub(crate) fn copies_sent(fence: u64) {
-    if !crate::host::sync_precise() {
+    if !crate::host::staging_precise() {
         return;
     }
     let mut readers = READERS.lock().unwrap_or_else(|e| e.into_inner());
@@ -1019,7 +1019,7 @@ impl Staging {
         // that one is waited for, here, where the buffer is written
         // (`VICTORY_SYNC_PRECISE`; without it the submission that reaches
         // this waited for every flight to land before it prepared).
-        if crate::host::sync_precise() {
+        if crate::host::staging_precise() {
             readers_done(self.mapped());
         }
         self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
