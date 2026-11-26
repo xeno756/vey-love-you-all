@@ -501,6 +501,7 @@ rem dans ses essais).
 :relay
 set "RELAIS=%~1"
 if not "%RELAIS%"=="2" set "RELAIS=1"
+if defined VICTORY_RELAY set "RELAIS=%VICTORY_RELAY%"
 set "VICTORY_RELAY=%RELAIS%"
 goto :eof
 
