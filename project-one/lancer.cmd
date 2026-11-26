@@ -282,8 +282,8 @@ if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
 if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune
 if "%RELAIS%"=="2" echo   relais  : niveau 2, une lecture n'attend que les soumissions qui ecrivent ce qu'elle lit
-if defined PRECIS echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
-if defined FENETRES echo   bornage : les dessins indirects qui se suivent sont bornes par fenetres, en une passe
+if defined PRECIS if "%VICTORY_SYNC_PRECISE%"=="1" echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
+if defined FENETRES if "%VICTORY_INDIRECT_WINDOW%"=="1" echo   bornage : les dessins indirects qui se suivent sont bornes par fenetres, en une passe
 if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
 if "%VICTORY_TEXTURE_GATE_S%"=="0" echo   arrivee : textures a l'allure ordinaire, sans rattrapage
 if defined VICTORY_TEXTURE_SPAN_MS echo   chargement : au plus %VICTORY_TEXTURE_SPAN_MS% ms par image passes a creer des textures
@@ -460,6 +460,8 @@ if defined VICTORY_SKIP_DRAW_SHADERS (
 set "TAG=%TAG%-sans-dessins-%~1"
 goto :eof
 
+rem (Les reglages ci-dessous ne remplacent pas une valeur deja donnee avant le
+rem lancement : VICTORY_INDIRECT_WINDOW=0 avant performance le coupe.)
 rem Les reglages de vitesse de ScarlettPort du cote du processeur : 1, les
 rem controles de contenu plus legers ; 2, en plus, la recopie de ce que les
 rem shaders ecrivent limitee a ce que le jeu relit.
@@ -476,11 +478,11 @@ set "VITESSE=%~1"
 if not defined VITESSE set "VITESSE=1"
 set "VICTORY_FAST_HASH=1"
 set "VICTORY_KNOWN_WRITES=1"
-if "%VITESSE%"=="3" set "VICTORY_CARD_REHASH_RUNS=1"
+if "%VITESSE%"=="3" if not defined VICTORY_CARD_REHASH_RUNS set "VICTORY_CARD_REHASH_RUNS=1"
 if "%VITESSE%"=="3" goto vitesse_2
 if not "%VITESSE%"=="2" goto :eof
 :vitesse_2
-set "VICTORY_COPY_BACK_ONLY_READBACK=1"
+if not defined VICTORY_COPY_BACK_ONLY_READBACK set "VICTORY_COPY_BACK_ONLY_READBACK=1"
 rem (Sans les petites zones l'image du jeu est noire : il relit d'autres
 rem resultats que ceux de ses tampons de relecture.)
 set "VICTORY_COPY_BACK_SMALL_KB=1024"
@@ -508,7 +510,7 @@ rem seulement la soumission qui la copie. Au lancement du 26/11, 11 ou 12 des
 rem 14 attentes par image venaient de la. Jamais lance ici : le journal dit
 rem "VICTORY_SYNC_PRECISE hazard" si une dependance lui echappe.
 :precise
-set "VICTORY_SYNC_PRECISE=1"
+if not defined VICTORY_SYNC_PRECISE set "VICTORY_SYNC_PRECISE=1"
 set "PRECIS=1"
 goto :eof
 
@@ -518,7 +520,7 @@ rem en une passe au lieu d'une passe de calcul avant chaque dessin. Mesure le
 rem 25/11 avec d'autres reglages (265 ms contre 293), image a requalifier :
 rem ses taches d'alors venaient peut-etre de la lumiere rebondie.
 :windows
-set "VICTORY_INDIRECT_WINDOW=1"
+if not defined VICTORY_INDIRECT_WINDOW set "VICTORY_INDIRECT_WINDOW=1"
 set "FENETRES=1"
 goto :eof
 
