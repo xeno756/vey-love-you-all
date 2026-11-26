@@ -157,6 +157,7 @@ if /i "%~2"=="sans-ombres" set "OMBRES_SOLEIL="
 if /i "%~2"=="ombres-soleil" call :sun_shadows 1
 if /i "%~2"=="attentes-textures" call :staging_precise
 if /i "%~2"=="personnages" call :characters
+if /i "%~2"=="marques" call :descriptor_marks
 if /i "%~2"=="ultra-bas" call :ultra_low
 if /i "%~2"=="equilibre" call :balanced
 if /i "%~2"=="capture" set "CAPTURE=1"
@@ -476,7 +477,6 @@ call :performance_core
 call :sun_shadows 1
 call :staging_precise
 call :characters
-call :descriptor_marks
 goto :eof
 
 rem Profil A : performance sans aucune carte d'ombres (le soleil traverse les
@@ -541,14 +541,16 @@ if not defined VICTORY_DETAIL_SKIP set "VICTORY_DETAIL_SKIP=1"
 set "PERSONNAGES=1"
 goto :eof
 
-rem ESSAI (26/11, jamais lance chez nous) : le port #2 d'avatarmanz
+rem ESSAI, RETIRE de performance (mot marques) : le port #2 d'avatarmanz
 rem (VIctory-7900XTX, GPL-3.0). Les 6 ecritures du jeu qui remplissent les
 rem tables de descripteurs (et son memcpy/memmove) marquent les cases qu'elles
 rem ecrivent ; la synchronisation des tas ne relit plus que ces cases au lieu
 rem de toutes les pages changees (mesure de 14 h 56 : 254 pages, 519 000 cases
 rem relues, 61 000 refaites, 110 ms par image sur le fil qui soumet). Un filet
-rem relit 16 pages entieres par image. VICTORY_PORT_DESCRIPTORS=0 avant le
-rem lancement le retire.
+rem relit 16 pages entieres par image. Partie de 16 h 41 : 5,1 images par
+rem seconde au lieu de 4,4, mais le filet trouve 150 a 450 descripteurs par
+rem image qu'aucune marque n'a signales (le jeu en ecrit par d'autres chemins),
+rem textures perimees, et la carte perdue a 14 min : retire de performance.
 :descriptor_marks
 if not defined VICTORY_PORT_DESCRIPTORS set "VICTORY_PORT_DESCRIPTORS=1"
 if "%VICTORY_PORT_DESCRIPTORS%"=="1" set "MARQUES=1"
