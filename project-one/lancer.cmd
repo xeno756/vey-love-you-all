@@ -144,6 +144,7 @@ set "PREREGLAGE="
 set "OMBRES_SOLEIL="
 set "ATTENTES_TEXTURES="
 set "PERSONNAGES="
+set "MARQUES="
 set "CADENCE="
 :args
 if "%~2"=="" goto args_done
@@ -290,6 +291,7 @@ if defined PREREGLAGE set "TAG=%TAG%-prereglage-%PREREGLAGE%"
 if defined OMBRES_SOLEIL set "TAG=%TAG%-soleil%OMBRES_SOLEIL%"
 if defined ATTENTES_TEXTURES set "TAG=%TAG%-attentes-textures"
 if defined PERSONNAGES set "TAG=%TAG%-personnages"
+if defined MARQUES set "TAG=%TAG%-marques"
 if defined CADENCE set "TAG=%TAG%-cadence%CADENCE%"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
@@ -316,6 +318,7 @@ if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de l
 if defined PREREGLAGE echo   prereglage : %PREREGLAGE% sur la base %VICTORY_PRESET_BASE% (le journal dit ce qui a ete change)
 if defined OMBRES_SOLEIL echo   soleil  : ombres des %VICTORY_SHADOW_CASCADES% cascades les plus proches, pas plus loin
 if defined ATTENTES_TEXTURES echo   attentes: une texture n'attend que la soumission qui lit encore son tampon d'envoi (mesure une fois : +22 %%)
+if defined MARQUES echo   marques: le jeu signale lui-meme les cases de descripteurs qu'il ecrit (VICTORY_PORT_DESCRIPTORS, port #2 d'avatarmanz)
 if defined PERSONNAGES echo   personnages: leurs textures gardent plus de niveaux de detail (au plus %VICTORY_DETAIL_SKIP% retire)
 if defined CADENCE echo   cadence : ESSAI, l'horloge du jeu bat a %CADENCE% au lieu de 30 images par seconde
 if defined VICTORY_PRESENT_SYNC echo   vsync   : intervalle de presentation %VICTORY_PRESENT_SYNC%
@@ -473,6 +476,7 @@ call :performance_core
 call :sun_shadows 1
 call :staging_precise
 call :characters
+call :descriptor_marks
 goto :eof
 
 rem Profil A : performance sans aucune carte d'ombres (le soleil traverse les
@@ -535,6 +539,19 @@ if not exist "%PROFILS%\details-personnages.txt" (
 if not defined VICTORY_DETAIL_SHADERS set "VICTORY_DETAIL_SHADERS=%PROFILS%\details-personnages.txt"
 if not defined VICTORY_DETAIL_SKIP set "VICTORY_DETAIL_SKIP=1"
 set "PERSONNAGES=1"
+goto :eof
+
+rem ESSAI (26/11, jamais lance chez nous) : le port #2 d'avatarmanz
+rem (VIctory-7900XTX, GPL-3.0). Les 6 ecritures du jeu qui remplissent les
+rem tables de descripteurs (et son memcpy/memmove) marquent les cases qu'elles
+rem ecrivent ; la synchronisation des tas ne relit plus que ces cases au lieu
+rem de toutes les pages changees (mesure de 14 h 56 : 254 pages, 519 000 cases
+rem relues, 61 000 refaites, 110 ms par image sur le fil qui soumet). Un filet
+rem relit 16 pages entieres par image. VICTORY_PORT_DESCRIPTORS=0 avant le
+rem lancement le retire.
+:descriptor_marks
+if not defined VICTORY_PORT_DESCRIPTORS set "VICTORY_PORT_DESCRIPTORS=1"
+if "%VICTORY_PORT_DESCRIPTORS%"=="1" set "MARQUES=1"
 goto :eof
 
 rem ESSAI : l'horloge que le jeu attend bat N fois par seconde (cadence:60) ou

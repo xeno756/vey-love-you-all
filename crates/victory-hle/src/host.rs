@@ -78,7 +78,14 @@ impl HostPolicy {
         if !self.allows(dll) {
             return None;
         }
-        imp::resolve(dll, symbol)
+        let address = imp::resolve(dll, symbol)?;
+        // (PROJECT ONE, renderer port #2) Records the title copies into its
+        // view heap with the runtime's `memcpy`/`memmove` are marked.
+        #[cfg(windows)]
+        if let ImportSymbol::Name { name, .. } = symbol {
+            return Some(victory_gpu::port_descriptors::import(name, address));
+        }
+        Some(address)
     }
 }
 

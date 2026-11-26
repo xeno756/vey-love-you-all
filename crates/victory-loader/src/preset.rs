@@ -496,9 +496,21 @@ pub(crate) fn jump_bytes(from: usize, to: usize) -> Option<[u8; 5]> {
 
 /// Executable memory holding `code`, within 2 GiB below or above `near`.
 pub(crate) fn code_near(near: usize, code: &[u8]) -> Option<usize> {
-    use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, VirtualAlloc, VirtualProtect,
-    };
+    use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READ, VirtualProtect};
+    let got = room_near(near, code.len())?;
+    let mut old = 0;
+    // SAFETY: our own fresh pages.
+    unsafe {
+        std::ptr::copy_nonoverlapping(code.as_ptr(), got as *mut u8, code.len());
+        VirtualProtect(got as *const _, code.len(), PAGE_EXECUTE_READ, &mut old);
+    }
+    Some(got)
+}
+
+/// Fresh read-write memory of `len` bytes within 2 GiB below or above `near`
+/// (made executable by the caller once its code is in).
+pub(crate) fn room_near(near: usize, len: usize) -> Option<usize> {
+    use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc};
     const STEP: usize = 0x10000;
     const REACH: usize = 0x7000_0000;
     let start = near & !(STEP - 1);
@@ -508,24 +520,10 @@ pub(crate) fn code_near(near: usize, code: &[u8]) -> Option<usize> {
             .flatten()
         {
             // SAFETY: asks for fresh pages at a free address; null if taken.
-            let got = unsafe {
-                VirtualAlloc(
-                    at as _,
-                    code.len().max(1),
-                    MEM_COMMIT | MEM_RESERVE,
-                    PAGE_READWRITE,
-                )
-            };
-            if got.is_null() {
-                continue;
+            let got = unsafe { VirtualAlloc(at as _, len.max(1), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+            if !got.is_null() {
+                return Some(got as usize);
             }
-            let mut old = 0;
-            // SAFETY: our own fresh pages.
-            unsafe {
-                std::ptr::copy_nonoverlapping(code.as_ptr(), got.cast::<u8>(), code.len());
-                VirtualProtect(got, code.len(), PAGE_EXECUTE_READ, &mut old);
-            }
-            return Some(got as usize);
         }
     }
     None

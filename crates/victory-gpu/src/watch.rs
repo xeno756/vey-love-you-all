@@ -1049,6 +1049,8 @@ fn install() {
         if open(&mut g, at, at + 1) {
             #[cfg(feature = "diagnostics")]
             crate::copystat::add(crate::copystat::C::GuardFaults, 1);
+            // (PROJECT ONE, renderer port #2) Who wrote the block, for its log.
+            crate::port_descriptors::faulted(at, r.ExceptionAddress as usize);
             return EXCEPTION_CONTINUE_EXECUTION;
         }
         if writable(at) {

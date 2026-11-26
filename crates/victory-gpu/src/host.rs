@@ -3669,6 +3669,7 @@ fn late_line(frames: f64) {
             r[4] / 1000.0,
         );
     }
+    crate::port_descriptors::line(frames);
     {
         // (PROJECT ONE) VICTORY_HEAP_SYNC.
         static SEEN: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];

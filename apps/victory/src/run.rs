@@ -151,6 +151,19 @@ pub fn run(
         }
     }
     show(&exe_name, image.bind_imports(&TakeDispatch(&with_dlls), policy)?);
+    // (PROJECT ONE, renderer port #2, VICTORY_PORT_DESCRIPTORS=1) The title's
+    // stores of descriptor records tell the layer their slots.
+    #[cfg(windows)]
+    if execute && victory_gpu::port_descriptors::on() {
+        use victory_loader::descriptor_sites::{Hooked, SITES, apply};
+        let size = image.info().size_of_image as usize;
+        // SAFETY: the image stays mapped, nothing of it has run yet, and the
+        // marks are a static.
+        let done = unsafe { apply(image.base(), size, victory_gpu::port_descriptors::marks_address(), &SITES) };
+        let patched = done.iter().filter(|d| **d == Hooked::Done).count();
+        println!("renderer port 2: {patched} of {} descriptor record stores of the title patched", SITES.len());
+        victory_gpu::port_descriptors::hooked(image.base(), size, patched);
+    }
     if !execute {
         println!("not executing (pass --execute to start the title)");
         return Ok(());

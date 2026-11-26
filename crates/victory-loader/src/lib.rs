@@ -23,6 +23,8 @@
 
 mod crash;
 #[cfg(windows)]
+pub mod descriptor_sites;
+#[cfg(windows)]
 mod hooks;
 pub mod prepare;
 #[cfg(windows)]

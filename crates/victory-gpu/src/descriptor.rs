@@ -150,6 +150,9 @@ fn shader_slot<'a>(handle: u64) -> Option<(&'a Heap, u32)> {
 /// is in a shader-visible heap.
 #[cfg(windows)]
 fn mirror(handle: u64) {
+    // (PROJECT ONE, renderer port #2) Looked at again with the title's own
+    // records, so the record last seen in the slot is the one it shows.
+    crate::port_descriptors::mark(handle);
     let Some((heap, index)) = shader_slot(handle) else {
         return;
     };
@@ -185,6 +188,7 @@ impl Drop for Heap {
         let mut heaps = SHADER_HEAPS.lock().unwrap_or_else(|e| e.into_inner());
         heaps.retain(|&(_, _, h)| h != at);
         drop(heaps);
+        crate::port_descriptors::let_go(self.start);
         if let Some(Some(host)) = self.host.get() {
             crate::memory::forget_heap(host);
         }
@@ -375,7 +379,7 @@ static VIEWS: std::sync::Mutex<Views> = std::sync::Mutex::new(Views {
     shapes: Vec::new(),
     shape_index: std::collections::BTreeMap::new(),
 });
-const VIEW_TAG: u32 = u32::from_le_bytes(*b"vVIE");
+pub(crate) const VIEW_TAG: u32 = u32::from_le_bytes(*b"vVIE");
 
 /// A record is the tag and two words, `i` and `generation` (the host keeps
 /// them as one 64-bit key per slot). The top two bits of `generation` say
@@ -676,13 +680,89 @@ pub(crate) fn sync_heaps() {
             continue;
         };
         let step = u64::from(step);
+        // Title slots with host counterparts (a capped host heap has none
+        // for the ones past it).
+        let slots_end = u64::from(heap.desc.count.min(host.count()));
+        // The slots of a whole page, from its first record that starts in it.
+        let page_slots = |from: usize, to: usize| {
+            let first = (from as u64 - start) / step;
+            let last_slot = ((to as u64 - start).div_ceil(step)).min(slots_end);
+            first.min(last_slot)..last_slot
+        };
+        if crate::port_descriptors::adopted(start) {
+            // (Renderer port #2) The slots the title's patched stores, its
+            // copies and our calls marked, in place of the changed pages;
+            // and a few of the pages the watch says were written, whole.
+            let frame = crate::frame::current();
+            let runs = crate::port_descriptors::take(start).unwrap_or_default();
+            let mut i = 0;
+            while i < runs.len() {
+                // Runs a few slots apart (a table's records) read at once, a
+                // page at most.
+                let first = u64::from(runs[i].0);
+                let (mut j, mut last) = (i + 1, first + u64::from(runs[i].1));
+                while j < runs.len()
+                    && u64::from(runs[j].0) <= last + GROUP_GAP
+                    && (u64::from(runs[j].0 + runs[j].1) - first) * step <= crate::watch::PAGE as u64
+                {
+                    last = u64::from(runs[j].0 + runs[j].1);
+                    j += 1;
+                }
+                let group: Vec<std::ops::Range<u64>> = runs[i..j]
+                    .iter()
+                    .map(|&(f, n)| u64::from(f).min(slots_end)..u64::from(f + n).min(slots_end))
+                    .filter(|r| !r.is_empty())
+                    .collect();
+                i = j;
+                let (Some(lo), Some(hi)) = (group.first(), group.last()) else {
+                    continue;
+                };
+                let span = |r: &std::ops::Range<u64>| ((start + r.start * step) as usize, (start + r.end * step) as usize);
+                let (from, to) = (span(lo).0, span(hi).1);
+                let got = sync_range(host, (start, step), (from, to), &group, &mut bytes).or_else(|| {
+                    // A page of it went meanwhile: run by run.
+                    let mut sum = (0, 0);
+                    for r in &group {
+                        if let Some((a, b)) = sync_range(host, (start, step), span(r), std::slice::from_ref(r), &mut bytes) {
+                            sum = (sum.0 + a, sum.1 + b);
+                        }
+                    }
+                    Some(sum)
+                });
+                if let Some((seen, n)) = got {
+                    pages += 1;
+                    looked += seen;
+                    made += n;
+                }
+            }
+            if crate::port_descriptors::ask_due(frame)
+                && let Some((now, written)) = crate::watch::writes(start as usize, end as usize, true)
+            {
+                let last = heap.asked.swap(now, Relaxed);
+                crate::port_descriptors::asked(
+                    written.into_iter().filter(|&(_, asked)| asked > last).map(|(page, _)| page * crate::watch::PAGE),
+                );
+            }
+            for page in crate::port_descriptors::to_check(frame) {
+                let (from, to) = (page.max(start as usize), (page + crate::watch::PAGE).min(end as usize));
+                if from >= to {
+                    continue;
+                }
+                let nothing = host::COPIED_KINDS[4].load(Relaxed);
+                if let Some((seen, n)) = sync_range(host, (start, step), (from, to), &[page_slots(from, to)], &mut bytes) {
+                    pages += 1;
+                    looked += seen;
+                    made += n;
+                    let other = host::COPIED_KINDS[4].load(Relaxed) - nothing;
+                    crate::port_descriptors::checked(page, n.saturating_sub(other), other);
+                }
+            }
+            continue;
+        }
         let Some((now, written)) = crate::watch::writes(start as usize, end as usize, true) else {
             continue;
         };
         let last = heap.asked.swap(now, Relaxed);
-        // Title slots with host counterparts (a capped host heap has none
-        // for the ones past it).
-        let slots_end = u64::from(heap.desc.count.min(host.count()));
         for (page, asked) in written {
             if asked <= last {
                 continue;
@@ -692,23 +772,51 @@ pub(crate) fn sync_heaps() {
             if from >= to {
                 continue;
             }
-            // Read through the kernel into a copy: a page the title unmaps
-            // meanwhile fails the read where a read in place would fault.
-            bytes.resize(to - from, 0);
-            if !crate::host::read_into(from as *const u8, &mut bytes) {
-                continue;
+            if let Some((seen, n)) = sync_range(host, (start, step), (from, to), &[page_slots(from, to)], &mut bytes) {
+                pages += 1;
+                looked += seen;
+                made += n;
             }
-            pages += 1;
-            let first = (from as u64 - start) / step;
-            let last_slot = ((to as u64 - start).div_ceil(step)).min(slots_end);
-            let (seen, n) = host.mirror_copied_page(first.min(last_slot)..last_slot, (start, step), from, &bytes);
-            looked += seen;
-            made += n;
         }
     }
     for (count, n) in SYNCED.iter().zip([pages, looked, made, started.elapsed().as_micros() as u64]) {
         count.fetch_add(n, Relaxed);
     }
+}
+
+/// (PROJECT ONE, renderer port #2) Marked runs at most this many slots apart
+/// are read in one go ([`sync_heaps`]).
+#[cfg(windows)]
+const GROUP_GAP: u64 = 64;
+
+/// (PROJECT ONE) Reads title bytes `from..to` of a heap whose slot `i` is at
+/// `start + i * step`, and makes again the records of `slots` there whose
+/// bytes changed (`HostHeap::mirror_copied_page`): the records looked at and
+/// those made; `None` if the bytes could not be read. Read through the
+/// kernel into a copy: a page the title unmaps meanwhile fails the read where
+/// a read in place would fault.
+#[cfg(windows)]
+fn sync_range(
+    host: &host::HostHeap,
+    (start, step): (u64, u64),
+    (from, to): (usize, usize),
+    slots: &[std::ops::Range<u64>],
+    bytes: &mut Vec<u8>,
+) -> Option<(u64, u64)> {
+    if from >= to {
+        return None;
+    }
+    bytes.resize(to - from, 0);
+    if !crate::host::read_into(from as *const u8, bytes) {
+        return None;
+    }
+    let (mut looked, mut made) = (0, 0);
+    for range in slots {
+        let (seen, n) = host.mirror_copied_page(range.clone(), (start, step), from, bytes);
+        looked += seen;
+        made += n;
+    }
+    Some((looked, made))
 }
 
 /// Makes again the host slots that show a host texture replaced since the
@@ -1073,6 +1181,12 @@ pub(crate) extern "system" fn create_heap(
         #[cfg(windows)]
         asked: std::sync::atomic::AtomicU64::new(0),
     });
+    // (PROJECT ONE, renderer port #2) The title's own stores tell this
+    // heap's slots.
+    #[cfg(windows)]
+    if placed && visible && desc.kind == VIEWS_KIND {
+        crate::port_descriptors::adopt(start, desc.count);
+    }
     #[cfg(windows)]
     if visible {
         let at = std::ptr::from_ref::<Heap>(&heap) as usize;
