@@ -469,3 +469,96 @@ processeur, et le manque de RAM.
 - Le gain réel : aucun lancement.
 - `qualite-s` avait été écarté pour des murs absents (BLOCKERS 10), que BLOCKERS 21 a
   retrouvés sans lui : le profil `performance` le reprend, à juger sur capture.
+
+### Cycle 1, mesuré (26/11, 7 h 50 à 8 h 03)
+
+Série lancée par l'utilisateur : `banc.ps1 -Options "series-x performance" -Series 2 -Propre`,
+banc propre accepté, 300 s de monde chacun. L'utilisateur jouait pendant la série : les plans
+ne sont pas ceux de la cinématique des mesures d'avant.
+
+| Lancement | Images par seconde | Médiane | 95 % sous | 99 % sous | Processeur + carte + recopie | Dessins / écartés | Défauts de page |
+|---|---|---|---|---|---|---|---|
+| `rapide`, banc propre (itération 4) | environ 3,0 | 327–337 ms | — | — | 93–101 + 197–200 + 36–38 | 4 980 / 0 | 53 000 (version diagnostic) |
+| `performance`, 7 h 50 | **4,68** | **201 ms** | 265 | 504 | 56 + 149 + 33 | 2 201 / 2 220 | 19 218 |
+| `performance`, 7 h 57 | **4,45** | **217 ms** | 266 | 396 | 57 + 161 + 35 | 2 498 / 1 810 | 18 658 |
+
+Aucune perte de carte, aucun manque de mémoire, aucun pipeline refusé, cache chaud. Carte
+active à 55–56 %, 62–64 °C. L'estimation d'avant le lancement (220 à 250 ms) était un peu
+pessimiste. **Objectif 10 images par seconde : non atteint (4,5). Objectif 15 : non atteint.**
+
+À l'image (capture d'écran de l'utilisateur, en jeu) : les murs sont là ; des rectangles de
+soleil traversent les murs, ce qui est le prix attendu de cartes d'ombres vides ; les
+cheveux restent une masse grise (défaut connu). **Le haut du corps du personnage au premier
+plan manque** (on voit la table à travers), et le haut de l'autre personnage est pâle.
+
+Cause probable, pas démontrée : le groupe d'effets `transparence`, que `performance` tenait
+de `maximum`. Il laisse de côté les calculs `alphaResolve:` qui composent ce qui est dessiné
+dans les cibles de transparence, et les captures de la veille montrent des personnages dans
+ces cibles (`MSNC_VS_PedTransformSkinAlpha + PS_PedAlphaPrepass`, `TransformSkin_AlphaPrepass`).
+Un personnage proche de la caméra y passe sans doute en entier. `performance` ne laisse plus
+ce groupe de côté (`19f3e56`) ; son gain n'avait jamais été mesuré à part, et aucun de ses
+calculs n'est dans les 40 premiers postes de la mesure par commande.
+
+**La liste d'ombres ne retire que des ombres.** Vérifié sur trois images du monde capturées
+la veille avec leurs opérations (`g0-relais-2`) : les 4 512 dessins que la liste écarte y
+vont tous vers une cible de profondeur seule de la taille d'une carte d'ombres (2048 × 8192,
+1024 × 1024, 2048 × 2048, 512 × 512), aucun vers une cible de 1280 × 720. Outil :
+`leftout_targets.py` (hors dépôt).
+
+### Où part le temps maintenant
+
+Journal du lancement de 7 h 50 (version normale, une ligne par seconde) :
+
+| Poste, par image de 197 ms | Valeur |
+|---|---|
+| Préparation des soumissions | 51–56 ms (copies de tampons 27–32 ms, textures 4–6 ms) |
+| Travail de la carte | environ 110 ms (elle n'a rien en file 80–88 ms) |
+| Carte sans travail pendant que le fil qui soumet prépare | 44–52 ms |
+| Carte sans travail en attendant le jeu | environ 35 ms |
+| **Attentes de la carte par le fil qui soumet** | **12,8 à 14 par image, 135 à 154 ms** |
+| Fil de recopie | 53–61 ms au travail, 86 ms à attendre la carte |
+
+52 + 110 + 35 = 197 : malgré le relais, processeur et carte travaillent encore l'un après
+l'autre. Le fil qui soumet envoie ses soumissions en avance, puis attend que tout ce qui
+est en vol soit fini avant de préparer la suivante, 14 fois par image. Raison de ces
+attentes, toutes classées « lecture de la mémoire du jeu » : 2,5 par image pour une copie
+de tampon, un remplissage ou une autre copie ; **les 11,5 autres parce qu'une soumission
+rafraîchit le tampon d'envoi d'une texture qu'une soumission en vol a nommé**, que la
+texture ait changé ou non.
+
+Le code de ScarlettPort a deux réglages écrits pour cela, éteints par défaut et jamais
+lancés ici :
+
+- `VICTORY_SYNC_PRECISE=1` : le tampon d'envoi d'une texture n'est plus une raison
+  d'attendre avant de préparer ; seule son écriture attend, et seulement la soumission
+  qui le copie. Son auteur comptait 12 à 13 de ces attentes sur 15 à 16 par image, comme
+  ici. Il écrit une alerte au journal si une dépendance lui échappe.
+- `VICTORY_RELAY=2` : une lecture n'attend que les soumissions qui écrivent ce qu'elle
+  lit. L'amont note 230 → 132 ms sur une autre carte, et le laisse éteint parce que ses
+  essais perdaient les murs de la première pièce.
+
+## Mission, cycle 2 (26/11, 8 h) : les attentes de la carte
+
+**Goulot.** Les 12,8 à 14 attentes par image ci-dessus : 135 à 154 ms pendant lesquelles
+le fil qui soumet ne prépare rien, sur une image de 200 ms.
+
+**Fait, sans toucher au runtime** (aucune recompilation, le cache préparé reste valable) :
+
+- Lanceur (branche fusionnée) : `precis` (`VICTORY_SYNC_PRECISE=1`), `relais:2`
+  (`VICTORY_RELAY=2`), `fenetres` (`VICTORY_INDIRECT_WINDOW=1`, le bornage de plusieurs
+  dessins indirects en une passe). À donner après le profil.
+- Banc : une ligne « attentes » par lancement (attentes par image, millisecondes, part du
+  temps où la carte travaille, alertes des attentes précises).
+- Hors dépôt : le groupe d'effets `volumetrie-collecte` (18,7 ms de carte dans la mesure
+  par commande du 25/11), jamais essayé.
+
+**Attendu, sans preuve.** Si ces attentes disparaissent, l'image tend vers le travail de
+la carte seul, environ 110 ms ; je m'attends plutôt à 120–150 ms, parce qu'il restera des
+dépendances réelles. Avec le brouillard et les fenêtres en moins sur la carte, 10 images
+par seconde deviennent possibles dans le meilleur cas, pas acquises.
+
+**Risques.** Image fausse (murs perdus comme en amont, taches), alerte des attentes
+précises, perte de carte. Le pool de tampons d'envoi (`c4cd932`, `7ee9224`) n'a jamais
+tourné avec les attentes précises : relu, je n'y vois pas d'incompatibilité (les lecteurs
+sont suivis par plage d'adresses, et un morceau du pool n'est rendu qu'une fois ses
+soumissions finies), mais rien ne l'a montré en jeu.

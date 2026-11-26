@@ -62,7 +62,8 @@ The launcher speaks French. Its main options:
 | `sans:<group>` | leaves out a group of compute effects (never a draw) |
 | `sans-dessins:<group>` | leaves out the DRAWS of a group of passes (`..\victory-profils\dessins-<group>.txt`): it takes geometry away, so keep it for passes the picture can do without |
 | `sans-ombres` | `sans-dessins:ombres`: the shadow maps are no longer drawn; the world stays lit, without cast shadows |
-| `performance` | everything measured or expected to be faster, picture quality second: `maximum`, plus `sans-ombres`, `relais` and the title's own low settings. Not measured yet |
+| `performance` | everything measured faster, picture quality second: `maximum` without its `transparence` group, plus `sans-ombres`, `relais` and the title's own low settings. Measured on 26/11: 4.5 frames a second against 3 with `rapide` |
+| `precis`, `relais:2`, `fenetres` | ScarlettPort's opt-in switches (`VICTORY_SYNC_PRECISE`, `VICTORY_RELAY=2`, `VICTORY_INDIRECT_WINDOW`), to give after the profile. Not measured here yet |
 | `traces` | diagnostics build: on a card loss, the log names the last commands |
 | `capture` | diagnostics build: saves frames |
 | `test` | prints what would run, runs nothing |

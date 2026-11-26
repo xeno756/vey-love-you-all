@@ -4,6 +4,23 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (8 h 15) — `performance` mesuré : 4,5 images par seconde ; cycle 2 prêt à lancer
+
+Détail : [FINDINGS.md](FINDINGS.md), « Cycle 1, mesuré » et « cycle 2 ».
+
+- **Mesuré.** `performance`, deux lancements en banc propre : 4,68 et 4,45 images par
+  seconde (201 et 217 ms par image) contre environ 3 avec `rapide`. Aucune perte de carte.
+  Les objectifs de 10 et 15 images par seconde ne sont pas atteints.
+- **Pourquoi ça reste lourd.** Le processeur attend la carte 13 à 14 fois par image
+  (135 à 154 ms sur 200) : les deux travaillent encore l'un après l'autre.
+- **Trois réglages de plus dans le lanceur**, à donner après le profil, aucun mesuré :
+  `precis` et `relais:2` (contre ces attentes), `fenetres` (moins de passes par dessin).
+  Rien n'est recompilé.
+- **Personnages incomplets.** Le haut du corps du personnage proche de la caméra manquait.
+  Cause probable : le groupe `transparence`. `performance` ne le laisse plus de côté.
+- **Banc.** Une ligne de plus par lancement : attentes de la carte par image, part du temps
+  où la carte travaille, alertes des attentes précises.
+
 ## 26/11/2026 (matin) — mission 10 à 15 images par seconde : audit, profil `performance`
 
 Détail : [FINDINGS.md](FINDINGS.md), cycle 1. **Rien de cette entrée n'est mesuré en jeu** :

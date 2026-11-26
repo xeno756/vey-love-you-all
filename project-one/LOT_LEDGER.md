@@ -4,7 +4,7 @@ Un lot est FAIT, EN COURS, À FAIRE ou REFUSÉ (avec la raison). Mis à jour à 
 Les preuves sont dans [FINDINGS.md](FINDINGS.md), ce qui bloque dans [BLOCKERS.md](BLOCKERS.md),
 les choix dans [DECISIONS.md](DECISIONS.md).
 
-Dernière mise à jour : 26/11/2026, mission 10 à 15 images par seconde, cycle 1.
+Dernière mise à jour : 26/11/2026 à 8 h 15, mission 10 à 15 images par seconde, cycle 1 mesuré, cycle 2 préparé.
 
 ## Mission 10 à 15 images par seconde
 
@@ -14,10 +14,12 @@ L'utilisateur fait tous les lancements : un cycle reste « non mesuré » jusqu'
 
 | Cycle | État | Ce qui est fait, ce qui manque |
 |---|---|---|
-| 1 cartes d'ombres écartées, profil `performance` | FAIT hors jeu, NON MESURÉ | `6eaf67c`, `aad682c`, `a409572`. Suite de tests réussie (780 tests ; deux intermittents d'amont, BLOCKERS 25). Manque : les trois séries du banc et une capture de contrôle. |
-| 2 brouillard volumétrique | À FAIRE | 18,7 ms de carte pour 4 calculs : un groupe d'effets `volumetrie-collecte` à écrire puis à essayer sur capture. |
-| 3 manque de RAM | À FAIRE | 53 000 défauts de page par image. Lot R2 (fenêtres page par page) ; `qualite-s` rend déjà 3,6 Go. À chiffrer d'abord avec la colonne `page_faults`. |
-| 4 dessins mesh regroupés | À FAIRE | BLOCKERS 14 : le plus gros poste de la carte après les ombres (environ 100 ms). |
+| 1 cartes d'ombres écartées, profil `performance` | FAIT, MESURÉ | `6eaf67c`, `aad682c`, `a409572`. Deux lancements en banc propre : 4,68 et 4,45 images par seconde (201 et 217 ms) contre environ 3 (327–337 ms). Objectifs non atteints. Manque : une capture de contrôle (opérations par image). |
+| 2 attentes de la carte | PRÉPARÉ, NON MESURÉ | `19f3e56` : `precis`, `relais:2`, `fenetres` dans le lanceur (réglages de ScarlettPort, aucun changement du runtime). Le banc affiche les attentes par image. Manque : les lancements. |
+| 2 bis brouillard volumétrique | PRÉPARÉ, NON MESURÉ | Groupe `volumetrie-collecte` écrit (hors dépôt) : 18,7 ms de carte pour 4 calculs dans la mesure du 25/11. À juger sur capture. |
+| 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |
+| 3 manque de RAM | À FAIRE | 18 700 à 19 200 défauts de page par image avec `performance` (53 000 avec `rapide`), RAM libre au plus bas 10 à 24 Mo. Lot R2 (fenêtres page par page). |
+| 4 dessins mesh regroupés | À FAIRE | BLOCKERS 14 : environ 2 300 dessins par image restent ; la carte travaille 110 ms par image. Après les mesures du cycle 2. |
 
 ### Registre de la mission
 
@@ -25,13 +27,13 @@ But : 330 ms → 100 ms par image (niveau 1), puis 66,7 ms (niveau 2).
 
 | Poste | Aujourd'hui | Levier | Gain estimé | Gain mesuré |
 |---|---|---|---|---|
-| Cartes d'ombres | ≥ 1 300 dessins, 25–30 ms de carte | `sans-ombres` | −25 à −30 ms, plus leur préparation | non mesuré |
-| Mise bout à bout | 91–98 % du temps d'image | `relais` | −54 ms | −54 ms (26/11, série « Discord ouvert ») |
-| Réglages bas du jeu | — | `qualite-s` | −13 % | 440 ms contre 506 (25/11, une mesure) |
-| Brouillard volumétrique | 18,7 ms de carte | groupe d'effets | −15 ms | 0 |
-| Dessins mesh restants | environ 100 ms de carte | regroupement | −60 à −80 ms | 0 |
-| Processeur et recopie | 93–101 + 36–38 ms | RAM, copies | à chiffrer | 0 |
-| **Total** | **327–337 ms (3 images par seconde)** | | **vers 220–250 ms avec le cycle 1** | **0 vérifié pour ce cycle** |
+| Cartes d'ombres, relais, réglages bas (profil `performance`) | 327–337 ms avec `rapide` | cycle 1 | vers 220–250 ms | **201 et 217 ms mesurés** (−120 ms, 4,5 images par seconde) |
+| Attentes de la carte | 12,8–14 par image, 135–154 ms | `precis`, `relais:2` | vers 120–150 ms par image | non mesuré |
+| Brouillard volumétrique | 18,7 ms de carte (25/11) | `sans:volumetrie-collecte` | −15 ms | non mesuré |
+| Bornage un par un | une passe de calcul par dessin indirect | `fenetres` | −10 ms | non mesuré seul |
+| Dessins mesh restants | environ 2 300 par image, carte au travail 110 ms | regroupement | −30 à −50 ms | 0 |
+| Processeur et recopie | 56–57 + 33–35 ms | RAM, copies | à chiffrer | 0 |
+| **Total** | **201–217 ms (4,5 images par seconde)** | | **100 ms possibles dans le meilleur cas du cycle 2** | **cycle 1 : −120 ms ; cycle 2 : 0 vérifié** |
 
 ## Lot E — métrologie
 

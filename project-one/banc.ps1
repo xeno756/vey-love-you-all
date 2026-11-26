@@ -143,6 +143,41 @@ function Get-Machine {
     }
 }
 
+# Ce que le journal du lancement dit des attentes de la carte (une ligne par
+# seconde) : mediane des 120 dernieres lignes, et les alertes des attentes
+# precises (VICTORY_SYNC_PRECISE). Le journal peut etre encore ouvert par le jeu.
+function Get-Waits([string]$Csv) {
+    $log = $Csv -replace '\.images\.csv$', '.err.log'
+    if (-not (Test-Path $log)) { return $null }
+    $settles = New-Object System.Collections.Generic.List[double]
+    $waited = New-Object System.Collections.Generic.List[double]
+    $busy = New-Object System.Collections.Generic.List[double]
+    $alerts = 0
+    $reader = $null
+    try {
+        $stream = New-Object IO.FileStream($log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $reader = New-Object IO.StreamReader($stream)
+        while ($null -ne ($line = $reader.ReadLine())) {
+            if ($line -match 'submissions sent ahead per frame: [0-9.]+ in ([0-9.]+) settles .*?, ([0-9.]+) ms waiting for the card') {
+                $settles.Add((Get-Number $Matches[1])); $waited.Add((Get-Number $Matches[2]))
+            } elseif ($line -match 'the card about ([0-9.]+)% busy') {
+                $busy.Add((Get-Number $Matches[1]))
+            } elseif ($line -match 'SYNC_PRECISE hazard') {
+                $alerts++
+            } elseif ($line -match 'precise waits per frame .*hazards ([0-9.]+)') {
+                if ((Get-Number $Matches[1]) -gt 0) { $alerts++ }
+            }
+        }
+    } catch { return $null } finally { if ($reader) { $reader.Dispose() } }
+    if ($settles.Count -eq 0) { return $null }
+    [pscustomobject]@{
+        attentes = Get-Median ($settles | Select-Object -Last 120)
+        attente_ms = [int](Get-Median ($waited | Select-Object -Last 120))
+        carte_occupee = $(if ($busy.Count) { [int](Get-Median ($busy | Select-Object -Last 120)) } else { $null })
+        alertes = $alerts
+    }
+}
+
 function Get-Summary([string]$Path) {
     $rows = New-Object System.Collections.Generic.List[object]
     foreach ($r in (Import-Csv $Path)) {
@@ -194,6 +229,7 @@ function Get-Summary([string]$Path) {
         budget_carte_min = [int]($world | Measure-Object -Property budget -Minimum).Minimum
         shaders_traduits = [int]($world | Measure-Object -Property translated -Sum).Sum
         attente_pipelines_ms = [int]($world | Measure-Object -Property wait -Sum).Sum
+        attentes_carte = (Get-Waits $Path)
     }
 }
 
@@ -205,6 +241,10 @@ function Show-Summary($s) {
     "images de plus de 0,8 s : {0} ; de plus de 50 ms : {1}" -f $s.longues, $s.plus_de_50
     "par image : processeur {0} ms + carte {1} + recopie {2} = {3:P0} du temps d'image" -f $s.processeur, $s.carte, $s.recopie, $s.bout_a_bout
     "par image : {0} dessins, {1} laisses de cote ; {2} defauts de page ; processus entier {3} ms noyau + {4} ms utilisateur (tous les fils)" -f $s.dessins, $s.dessins_ecartes, $s.defauts_de_page, $s.noyau, $s.utilisateur
+    $w = $s.attentes_carte
+    if ($w) {
+        "attentes : le fil qui soumet attend la carte {0} fois par image, {1} ms ; carte occupee {2} % du temps ; alertes des attentes precises : {3}" -f $w.attentes, $w.attente_ms, $w.carte_occupee, $w.alertes
+    }
     # Les deux objectifs de la mission, sur CE lancement (ni la stabilite sur
     # plusieurs lancements ni l'absence de gel ne se lisent ici).
     $level = { param($fps, $ms) if ($s.par_seconde -ge $fps -and $s.p95_exact -le $ms) { "ATTEINT sur ce lancement" } else { "non atteint" } }
