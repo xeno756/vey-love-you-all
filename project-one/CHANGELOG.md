@@ -4,6 +4,18 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (21 h) — la pâte bleue trouvée et corrigée
+
+Détail et preuves : [FINDINGS.md](FINDINGS.md).
+
+- **Cause.** L'éclairage du jeu lisait des textures de lumière rebondie que rien n'écrivait
+  (l'éclairage indirect est laissé de côté, le lancer de rayons n'est pas exécuté). Elles
+  gardaient ce que la mémoire contenait, souvent une image plus ancienne : d'où les blocs
+  bleus, différents à chaque lancement. Prouvé en les remplissant de magenta : la pâte devient
+  magenta.
+- **Correctif.** `rapide` et `maximum` les remplissent d'une lumière faible et constante :
+  plus de pâte sur deux lancements, aucun coût mesurable. `VICTORY_AMBIENT_FILL=off` le coupe.
+
 ## 25/11/2026 (19 h 30) — le fork VIctory-7900XTX essayé
 
 Détail et mesures : [docs/technical/11-victory-7900xtx.md](docs/technical/11-victory-7900xtx.md).
