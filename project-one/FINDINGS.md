@@ -703,7 +703,27 @@ seconde contre 8,77 sans lui. Le lancement sans lui (8 h 54) avait tenu 300 s ; 
 de ces deux pertes (adresse d'aucun objet) n'est pas celle de la perte de 8 h 25 (objets
 libérés).
 
-### `vitesse:3` perd la carte (9 h à 9 h 48, mes lancements)
+### Correction (10 h 45) : c'est le relais au niveau 2 avec les attentes précises
+
+La section suivante accusait `vitesse:3`, à tort ou en partie. Mes séries suivantes ont
+perdu la carte sans lui (F, 10 h 12 et 10 h 16 : 2 sur 2 ; G, 10 h 21 : 1 sur 2, sans même le
+réglage des fenêtres de 9 h 20). Sur toute la journée, le facteur commun est le **relais au
+niveau 2 avec les attentes précises** (`relais:2 precis`, entrés dans les profils à 8 h 13) :
+
+| Réglage | Lancements | Cartes perdues |
+|---|---|---|
+| relais au niveau 1, sans attentes précises (la nuit, 7 h 50, 7 h 57, série H) | 14 | 1 (un essai volontairement sous-dimensionné de la réserve d'envoi) |
+| relais au niveau 2 avec attentes précises (8 h 13 à 10 h 24) | 15 | 10 |
+
+Série H (10 h 31, 10 h 38) : `performance` avec le relais au niveau 1 et sans attentes
+précises, **300 s tenu deux fois**, 6,1 et 6,0 images par seconde, 95 % des images sous 190 et
+194 ms. C'est la version `performance` depuis `6fd9440`. Le relais au niveau 2 et les attentes
+précises allaient plus vite (jusqu'à 8 images par seconde) parce qu'ils laissent partir des
+soumissions sans attendre ce qu'elles lisent ; l'amont les avait laissés éteints après des
+défauts de ce genre. Mécanisme exact non trouvé (aucune commande du jeu en cours au moment
+de la faute).
+
+### `vitesse:3` perd la carte (9 h à 9 h 48, mes lancements) — à relire avec la correction ci-dessus
 
 Neuf lancements de 4 à 5 minutes, de la version complète puis en retirant un réglage à la
 fois (détail dans [PERF_JOURNAL.md](PERF_JOURNAL.md), « Mes lancements ») :

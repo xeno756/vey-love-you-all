@@ -62,8 +62,8 @@ The launcher speaks French. Its main options:
 | `sans:<group>` | leaves out a group of compute effects (never a draw) |
 | `sans-dessins:<group>` | leaves out the DRAWS of a group of passes (`..\victory-profils\dessins-<group>.txt`): it takes geometry away, so keep it for passes the picture can do without |
 | `sans-ombres` | `sans-dessins:ombres`: the shadow maps are no longer drawn; the world stays lit, without cast shadows |
-| `performance` | everything measured faster, picture quality second: `maximum` without its `transparence` group, plus `sans-ombres`, `relais` and the title's own low settings. Measured on 26/11: 4.5 frames a second against 3 with `rapide` |
-| `precis`, `relais:2`, `fenetres` | ScarlettPort's opt-in switches (`VICTORY_SYNC_PRECISE`, `VICTORY_RELAY=2`, `VICTORY_INDIRECT_WINDOW`), to give after the profile. Not measured here yet |
+| `performance` | everything measured faster that also held, picture quality second: `maximum` without its `transparence` group, `sans-ombres`, `relais`, the title's own low settings, `fenetres`, 256 lists in flight, the fog's gather left out. Measured on 26/11: 6 frames a second, two runs of 300 s held, against 3 with `rapide` |
+| `precis relais:2`, `vitesse:2`, `vitesse:3` | faster (up to 8 frames a second) but they lose the card: 10 runs of 15 on 26/11. Do not use them to play |
 | `traces` | diagnostics build: on a card loss, the log names the last commands |
 | `capture` | diagnostics build: saves frames |
 | `test` | prints what would run, runs nothing |

@@ -4,7 +4,20 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
-## 26/11/2026 (10 h 10) — `performance` stable : 6,3 images par seconde
+## 26/11/2026 (10 h 45) — `performance` tient : 6 images par seconde, deux fois 300 s
+
+Détail : [FINDINGS.md](FINDINGS.md), « Correction (10 h 45) ».
+
+- **La vraie cause des pertes de carte :** le relais au niveau 2 avec les attentes précises,
+  entrés dans les profils à 8 h 13. Avec eux, 10 lancements sur 15 ont perdu la carte ; sans
+  eux, 1 sur 14. L'entrée de 10 h 10 accusait `vitesse:3` : c'était incomplet.
+- **`performance` les retire** : relais au niveau 1, sans attentes précises, avec tout le
+  reste. Deux lancements de 300 s tenus : 6,1 et 6,0 images par seconde, 95 % des images sous
+  190 ms environ, la meilleure régularité de la journée.
+- Les réglages plus rapides mais instables restent des options, signalées dangereuses
+  dans le lanceur (`relais:2 precis`, `vitesse:2`, `vitesse:3`).
+
+## 26/11/2026 (10 h 10) — `performance` stable : 6,3 images par seconde (corrigé à 10 h 45)
 
 Détail : [FINDINGS.md](FINDINGS.md), « `vitesse:3` perd la carte » ; mes lancements dans
 [PERF_JOURNAL.md](PERF_JOURNAL.md).

@@ -240,9 +240,22 @@ lancement à l'autre.
 | 9 h 48 | D : C + 256 listes en vol (`VICTORY_LATE_WAIT_LISTS=256`), Discord et OBS ouverts | 5,99 | 164 / 236 / 396 ms | 76 + 67 + 112 | 1,7 par image, 67 ms | 240 s, carte tenue ; aucun dessin refusé faute d'emplacements ; la carte est occupée 81 % du temps |
 | 10 h 02 | E : D + la comparaison de la carte par groupe (`a191a66`), Discord et OBS ouverts | **6,31** | 151 / 223 / 397 ms | 82 + 52 + 88 | 1,1 par image, 55 ms | 240 s, carte tenue ; carte occupée 73 % (81 % avant), et pourtant 3 160 dessins par image au lieu de 2 590 : devenu `performance` (`532831c`) |
 | 10 h 09 | `performance` (`532831c`), **version diagnostic** avec captures, Discord (720 Mo) ouvert | — | — | — | — | **carte perdue avant le monde** (même signature) : la panne n'est donc pas seulement celle de `vitesse:3` ; les captures n'ont montré que le noir du début |
+| 10 h 12 et 10 h 16 | F : `performance` tel que commité (`532831c`), série de 2 | 7,86 et 8,07 | 121 et 115 / 201 et 197 ms | 65–67 + 36–38 + 69–72 | 1,1 par image, 34–37 ms | **carte perdue les deux fois** (vers 2 min de monde) : sans `vitesse:3` aussi |
+| 10 h 21 et 10 h 24 | G : le même **sans** les fenêtres qui passent (`VICTORY_WINDOW_PAST_BUFFER_WRITES=0`) | 3,27 et 6,66 | 289 et 142 ms | — | — | **perdue au premier, tenu 300 s au second** : ce réglage n'est pas la cause seul |
+| 10 h 31 et 10 h 38 | H : `performance` avec le **relais au niveau 1** et **sans attentes précises** | **6,13 et 5,98** | 158 et 161 / **190 et 194** / 291 et 385 ms | 65–66 + 91–92 + 31–32 | — | **300 s tenu les deux fois** : devenu `performance` (`6fd9440`) |
 
 À comparer : le même réglage sans la correction des objets libérés avait perdu la carte à
 90 s (8 h 25). Un lancement ne prouve pas la stabilité : il en faut d'autres.
+
+**Correction (10 h 30).** Le paragraphe suivant accusait `vitesse:3` à tort. Sur toute la
+journée, le facteur commun des pertes est le **relais au niveau 2 avec les attentes
+précises** (`relais:2 precis`, entrés dans les profils à 8 h 13) : 10 pertes sur 15
+lancements avec eux, 1 sur 12 sans eux (la nuit et le matin, relais au niveau 1 ; la seule
+perte était un essai volontairement sous-dimensionné de la réserve d'envoi). `vitesse:3`
+rend la perte plus probable, sans en être la seule cause. L'amont avait laissé ces deux
+réglages éteints pour des défauts de ce genre. Mesuré ensuite (série H, 10 h 31 et 10 h 38) : `performance`
+avec le relais au niveau 1 et sans attentes précises tient 300 s deux fois sur deux, à 6,0 et
+6,1 images par seconde. C'est la version `performance` depuis `6fd9440`.
 
 **Ce que ces pannes ont en commun (9 h 30).** Sur la journée, 6 lancements sur 7 avec
 `vitesse:3` ont perdu la carte (8 h 25, 9 h 07, 9 h 11, 9 h 20, 9 h 23, 9 h 28 ; seul 8 h 54
