@@ -196,6 +196,30 @@ Rien n'est recompilé, donc la suite de tests n'a pas été relancée. Vérifié
 `fenetres` ou `sans:volumetrie-collecte` ; ni que retirer `transparence` rend le haut du
 corps des personnages.
 
+### Cycles 4 et 5 (26/11, 8 h 30 à 9 h 10) : runtime modifié
+
+Mêmes commandes que plus haut, dans `..\victory-scarlettport`.
+
+| Vérification | Résultat | Durée |
+|---|---|---|
+| Suite complète après `ab1bec0` et `63caa72` | 784 réussis, 0 échec, 13 ignorés | 56 s |
+| Suite complète après `b4371fc` et `38da7cf` | 785 réussis, 0 échec, 13 ignorés | 55 s |
+| `clippy`, `xtask policy` (243 fichiers) | rien à signaler, les deux fois | |
+| Versions normale et diagnostic | compilées | 24 s et 30 s |
+
+Tests ajoutés (5) :
+
+- `graveyard` (4) : un objet libéré attend ses images **et** ses millisecondes ; son temps
+  passé, il attend les soumissions lancées entre-temps ; sans attente, la règle d'origine ;
+  tout ce qui est libéré part une fois, dans l'ordre.
+- `indirect::…warp_window_for_a_mesh_pipeline_run_as_compute_holds_its_arguments` : sur
+  l'adaptateur logiciel, une fenêtre de 16 enregistrements mesh sort comme les arguments de
+  leur calcul et de leur dessin (5 groupes demandés : 5 ; 519 pour 100 de place : 100 ;
+  vides ou jamais remplis : rien), et le budget de la liste est compté comme avant.
+
+En jeu, par mes propres lancements du banc : voir [PERF_JOURNAL.md](PERF_JOURNAL.md),
+« Mes lancements ».
+
 ## Ce que ces tests ne prouvent pas
 
 - **Le rendu en jeu** : un test unitaire réussi ne prouve pas que PROJECT GAME s'affiche.

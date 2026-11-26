@@ -148,9 +148,13 @@ git merge project-one/scarlettport
 
 ## Règles à garder
 
-- Ne jamais lancer PROJECT GAME : l'utilisateur fait tous les lancements (règle rétablie le
-  26/11 avec la mission 10 à 15 images par seconde ; `banc.ps1` lance le jeu, c'est donc lui
-  qui l'exécute). Travailler seul : aucun sous-agent, aucune délégation.
+- Lancer PROJECT GAME : permis de nouveau depuis le 26/11 à 8 h 55 (DECISIONS 29), par
+  `banc.ps1`, un lancement à la fois, jamais pendant une compilation, sans fermer les
+  programmes de l'utilisateur. L'interdiction du matin du 26/11 est levée par sa réponse ;
+  si une consigne plus récente la rétablit, redemander avant le lancement suivant.
+- Travailler seul : aucun sous-agent, aucune délégation.
+- Une seule version à lui donner à essayer : `series-x performance`, avec tous les
+  correctifs (DECISIONS 30).
 - Ne jamais fermer un processus par son nom : le jeu tourne sous le nom `victory.exe`.
 - Aucune ligne de `runtime/xcl` (GPL-2.0 seule) dans ce dépôt.
 - Rien qui vienne du jeu dans le dépôt : journaux, captures, listes de noms de shaders et

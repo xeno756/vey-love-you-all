@@ -4,6 +4,41 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (10 h 10) — `performance` stable : 6,3 images par seconde
+
+Détail : [FINDINGS.md](FINDINGS.md), « `vitesse:3` perd la carte » ; mes lancements dans
+[PERF_JOURNAL.md](PERF_JOURNAL.md).
+
+- **Les pertes de carte venaient de `vitesse:3`.** Avec lui, 6 lancements sur 7 ont perdu la
+  carte ; sans lui, aucun sur 4. Il allait plus vite (8,8 images par seconde) parce qu'il ne
+  recopiait plus vers le jeu ce que la carte calcule, et c'est justement ce qui finit par
+  donner au jeu des adresses fausses. Il est retiré de `performance`.
+- **Ce qui a été regagné sans lui :** 256 listes en vol au lieu de 128 ; des fenêtres de
+  mémoire qui n'attendent plus pour rien ; et nos propres passes de contrôle sur la carte,
+  réécrites pour lire chaque morceau à 64 fils au lieu d'un seul. De 5,3 à 6,3 images par
+  seconde.
+- **Retiré :** un essai pour que les dessins mesh prennent leurs arguments directement
+  (deux pertes de carte, aucun gain).
+- La version à essayer reste une seule : `series-x performance`.
+
+## 26/11/2026 (9 h) — `performance` : une seule version, 8,8 images par seconde, la carte tient
+
+Détail : [FINDINGS.md](FINDINGS.md), cycles 3 et 4 ; mes lancements dans
+[PERF_JOURNAL.md](PERF_JOURNAL.md).
+
+- **Une seule version à essayer : `series-x performance`.** Elle réunit tout ce qui a été
+  mesuré plus rapide. `performance-sur` garde le réglage d'avant (5 images par seconde).
+- **Mesuré (mon lancement de 8 h 54, 300 s de monde) :** 8,77 images par seconde, médiane
+  110 ms, 95 % sous 162 ms, contre 4,5 le matin et 3 avec `rapide`. Les objectifs de 10 et
+  15 images par seconde ne sont pas encore atteints.
+- **Perte de carte corrigée, à confirmer.** Le lancement de 8 h 25 avait perdu la carte à
+  90 s : des objets libérés étaient encore lus, parce que la marge de deux images ne dure
+  plus que 230 ms quand le jeu va vite. Ils attendent maintenant une seconde de plus. Un
+  lancement de 300 s a tenu ; il en faut d'autres.
+- **Chargement.** La création des textures est bornée à 80 ms par image : la première
+  minute tourne à 4–6 images par seconde au lieu de 2–3, et les textures arrivent plus tard.
+- **Je lance de nouveau le jeu moi-même** pour mesurer (DECISIONS 29).
+
 ## 26/11/2026 (8 h 25) — attentes précises mesurées : 5 images par seconde ; cycle 3 prêt
 
 Détail : [FINDINGS.md](FINDINGS.md), « Cycle 2, mesuré » et « cycle 3 ».
