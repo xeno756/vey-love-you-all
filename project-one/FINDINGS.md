@@ -82,3 +82,62 @@ par le processeur). L'écart du 99e centile ne vient pas de lui : dans les deux 
 les images longues forment une grappe entre 60 et 100 s de monde (19 puis 10 images de plus
 de 0,8 s), côté processeur (276 à 335 ms en moyenne), sans pipeline en cours de création.
 C'est le prochain poste du 99e centile (BLOCKERS 17).
+
+## Chantier B1 — le débit des pipelines (25/11, 21 h 18)
+
+Six colonnes ajoutées au fichier `.images.csv` : temps que les fils d'enregistrement ont
+attendu des pipelines en cours (`pipe_wait_ms`), pipelines faits et leur temps de création
+(`pipes_made`, `pipe_make_ms`), shaders traduits pendant le jeu (`shaders_translated`) et
+trouvés dans le cache disque (`shader_cache_hits`), âge du plus vieux pipeline qu'un dessin
+attend (`pipe_oldest_ms`).
+
+Lancement de 21 h 18 (version normale, `rapide`, après `preparer` et `preparer-graphiques`) :
+
+| | 60 premières secondes de monde | Ensuite (240 s) |
+|---|---|---|
+| Attente des pipelines par les images | 0 ms | 0 ms |
+| Pipelines faits pendant le jeu | 6 (81 ms) | 5 (196 ms) |
+| Shaders traduits pendant le jeu | 0 | 0 |
+| File de pipelines, au plus | 0 | 1 |
+| Plus vieux pipeline attendu | 0 ms | 0 ms |
+
+**Les pipelines ne freinent pas cette scène** : tout est préparé avant le lancement. Les
+« dessins laissés de côté » du fichier (environ 430 par image) sont ceux laissés exprès :
+l'éclairage indirect de `rapide` et les passes qui demandent le lancer de rayons.
+
+## La grappe du 99e centile (BLOCKERS 17)
+
+**Cause prouvée** : le rattrapage des textures repris de victory-amd. Tant que plus de 2 000
+emplacements attendent et qu'il reste du surplus (60 s au total, `VICTORY_TEXTURE_GATE_S`),
+chaque passe de textures peut prendre jusqu'à 1,5 s et 512 Mo par image, sur le fil qui
+enregistre l'image. Minutage ajouté au journal (ligne « texture pass, last 5 s ») : pendant
+le rattrapage, 4 passes prennent 6 048 ms pour 4 746 copies de textures créées en 2 207 ms
+et 5 071 tampons d'envoi créés en 2 116 ms. **72 % de la passe est de la création de
+ressources** : une copie sur la carte et un tampon d'envoi propre à chaque texture.
+
+| Lancement (version normale, 300 s) | Médiane | 95 % sous | 99 % sous | Images > 0,8 s | Textures envoyées à 60 / 120 / 240 s |
+|---|---|---|---|---|---|
+| 20 h 46, rattrapage par défaut | 327 ms | 400 | 1 062 | 48 | 53 953 / 70 963 / 72 254 |
+| 21 h 18, rattrapage par défaut | 337 ms | 497 | 1 204 | 40 | 46 676 / 64 328 / 65 323 |
+| 21 h 08, sans rattrapage (`VICTORY_TEXTURE_GATE_S=0`) | 332 ms | 448 | **754** | 11 | 23 713 / 37 170 / 38 798 |
+| 21 h 27, passes de rattrapage de 500 ms (`VICTORY_TEXTURE_CATCHUP_MS=500`) | 330 ms | 397 | 813 | 37 | 29 217 / 39 372 / 40 709 |
+
+Sans rattrapage, le 99e centile baisse d'un tiers, mais deux fois moins de textures sont
+envoyées ; à 500 ms, à peine plus qu'au plus bas. La file ne se vide dans aucun cas :
+environ 21 000 emplacements attendent que le jeu remplisse leur mémoire.
+
+**Le défaut reste inchangé** (rattrapage de 1,5 s) : la capture qui devait montrer si le
+monde reste habillé sans rattrapage s'est arrêtée sur un manque de mémoire (ci-dessous), et
+aucun gain n'est annoncé sans cette preuve. Le vrai correctif est de rendre la passe moins
+chère : réutiliser les tampons d'envoi au lieu d'en créer un par texture, ou créer les
+copies hors du fil qui enregistre l'image. Ce n'est pas fait : un tampon d'envoi peut être
+gardé par une liste indépendamment de son état, et le réutiliser trop tôt corromprait une
+texture.
+
+## Manque de mémoire partagée (25/11, 21 h 15)
+
+Capture de la version diagnostic sans rattrapage : fermée après moins d'une minute de monde,
+`0x8007000E` (« no shared buffer », « no upload buffer »). La mémoire partagée avec la carte
+était à 7,7 Go, sa limite sur ce PC ; le budget de la carte était tombé à 4,3 Go (5,3 Go
+d'habitude : d'autres programmes s'en servaient). Les lancements normaux y montent déjà à
+6,8–7,3 Go. BLOCKERS 18.
