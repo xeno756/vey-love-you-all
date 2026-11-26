@@ -4,6 +4,19 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (8 h 25) — attentes précises mesurées : 5 images par seconde ; cycle 3 prêt
+
+Détail : [FINDINGS.md](FINDINGS.md), « Cycle 2, mesuré » et « cycle 3 ».
+
+- **Mesuré.** `performance precis relais:2` : 4,97 images par seconde (médiane 187 ms),
+  sans alerte ni perte de carte. Le processeur n'attend plus la carte que 4 fois par image
+  au lieu de 13, mais ces attentes durent encore 119 ms.
+- **Pourquoi.** Elles attendent la relecture de ce que les shaders écrivent sur la carte :
+  36 Mo par image.
+- **Suite.** `vitesse:2` limite cette relecture à ce que le jeu relit ; `vitesse:3` joint
+  en plus les passes de contrôle du runtime sur la carte. À lancer.
+- **Banc.** Une ligne « recopie » de plus par lancement.
+
 ## 26/11/2026 (8 h 15) — `performance` mesuré : 4,5 images par seconde ; cycle 2 prêt à lancer
 
 Détail : [FINDINGS.md](FINDINGS.md), « Cycle 1, mesuré » et « cycle 2 ».

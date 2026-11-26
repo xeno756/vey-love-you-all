@@ -557,7 +557,56 @@ la carte seul, environ 110 ms ; je m'attends plutôt à 120–150 ms, parce qu'i
 dépendances réelles. Avec le brouillard et les fenêtres en moins sur la carte, 10 images
 par seconde deviennent possibles dans le meilleur cas, pas acquises.
 
-**Risques.** Image fausse (murs perdus comme en amont, taches), alerte des attentes
+### Cycle 2, mesuré (26/11, 8 h 13)
+
+Lancement de l'utilisateur : `performance precis relais:2`, banc propre, 150 s de monde.
+
+| Mesure | `performance` (7 h 50, 7 h 57) | avec `precis relais:2` (8 h 13) |
+|---|---|---|
+| Images par seconde | 4,68 et 4,45 | **4,97** |
+| Médiane / 95 % / 99 % | 201–217 / 265 / 396–504 ms | **187** / 281 / 513 ms |
+| Attentes de la carte par le fil qui soumet | 12,8 à 14 par image, 135–154 ms | **4 par image, 119 ms** |
+| Carte au travail | 55–60 % du temps | 68–72 % |
+| Fil de recopie : attente des relectures | 16–18 ms | **60–104 ms** |
+| Alertes des attentes précises, pertes de carte | — | 0, 0 |
+| Défauts de page par image | 18 700–19 200 | 10 400 |
+
+Les attentes précises font ce pour quoi elles sont écrites (8,5 à 9 soumissions par image
+passent sans attendre), sans alerte. Mais le gain n'est que de 7 à 14 % : **l'attente
+s'est déplacée**. Les 4 attentes qui restent durent 30 à 60 ms chacune ; ce sont des
+lectures de mémoire du jeu que des soumissions en vol écrivent, et elles attendent que le
+fil de recopie ait fini. Lui attend la carte : chaque image, la carte compare les 11 100
+morceaux de 64 Kio des copies qu'elle garde (657 Mo), 570 ont changé (36 Mo), et il faut
+une dizaine d'allers-retours avec la carte pour les relire.
+
+Objectifs : **10 images par seconde non atteint (4,97), 15 non atteint.**
+
+## Mission, cycle 3 (26/11, 8 h 20) : la relecture de ce que les shaders écrivent
+
+**Goulot.** Ci-dessus : 36 Mo relus de la carte par image, 60 à 104 ms d'attente sur le
+fil de recopie, que le fil qui soumet attend à son tour (119 ms).
+
+**Levier.** `vitesse:2`, un réglage de ScarlettPort déjà dans le lanceur : ce que les
+shaders écrivent n'est recopié vers la mémoire du jeu que pour les tampons que le jeu
+relit, et pour les zones de 1 Mio au plus. Mesuré seul le 25/11 : environ 40 % de temps
+d'image en moins, image présente. Écarté alors pour une perte de carte après 72 s : le
+rapport nommait une copie de mémoire du jeu libérée encore lue, la famille de pannes que
+`c4cd932` a fermée le soir même (2 pertes sur 2 avant, 0 sur 10 après). Rien ne l'a
+remontré depuis : c'est un pari raisonnable, pas une preuve.
+
+**Ajouté au lanceur** (`vitesse:3`) : en plus, les passes de contrôle que le runtime fait
+lui-même sur la carte après chaque envoi (180 à 190 par image) sont jointes
+(`VICTORY_CARD_REHASH_RUNS=1`). Jamais lancé.
+
+**Banc.** Une ligne « recopie » par lancement : morceaux comparés, relus, et attente du
+fil de recopie.
+
+**Risques.** Perte de carte, image fausse si le jeu relit par le processeur un résultat
+de plus de 1 Mio hors de ses tampons de relecture.
+
+### Risques du cycle 2 (pour mémoire)
+
+Image fausse (murs perdus comme en amont, taches), alerte des attentes
 précises, perte de carte. Le pool de tampons d'envoi (`c4cd932`, `7ee9224`) n'a jamais
 tourné avec les attentes précises : relu, je n'y vois pas d'incompatibilité (les lecteurs
 sont suivis par plage d'adresses, et un morceau du pool n'est rendu qu'une fois ses

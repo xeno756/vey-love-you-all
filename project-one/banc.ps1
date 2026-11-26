@@ -152,6 +152,12 @@ function Get-Waits([string]$Csv) {
     $settles = New-Object System.Collections.Generic.List[double]
     $waited = New-Object System.Collections.Generic.List[double]
     $busy = New-Object System.Collections.Generic.List[double]
+    # Ce que les shaders ecrivent dans les copies gardees sur la carte : morceaux
+    # compares, relus, et ce que le fil qui recopie attend pour les relire.
+    $compared = New-Object System.Collections.Generic.List[double]
+    $fetched = New-Object System.Collections.Generic.List[double]
+    $fetchedMb = New-Object System.Collections.Generic.List[double]
+    $fetchMs = New-Object System.Collections.Generic.List[double]
     $alerts = 0
     $reader = $null
     try {
@@ -162,6 +168,10 @@ function Get-Waits([string]$Csv) {
                 $settles.Add((Get-Number $Matches[1])); $waited.Add((Get-Number $Matches[2]))
             } elseif ($line -match 'the card about ([0-9.]+)% busy') {
                 $busy.Add((Get-Number $Matches[1]))
+            } elseif ($line -match '([0-9]+) pieces compared on the card, ([0-9]+) of them fetched \(([0-9.]+) MB\)') {
+                $compared.Add((Get-Number $Matches[1])); $fetched.Add((Get-Number $Matches[2])); $fetchedMb.Add((Get-Number $Matches[3]))
+            } elseif ($line -match "and ([0-9.]+) ms for fetches of card copies' pieces") {
+                $fetchMs.Add((Get-Number $Matches[1]))
             } elseif ($line -match 'SYNC_PRECISE hazard') {
                 $alerts++
             } elseif ($line -match 'precise waits per frame .*hazards ([0-9.]+)') {
@@ -175,6 +185,10 @@ function Get-Waits([string]$Csv) {
         attente_ms = [int](Get-Median ($waited | Select-Object -Last 120))
         carte_occupee = $(if ($busy.Count) { [int](Get-Median ($busy | Select-Object -Last 120)) } else { $null })
         alertes = $alerts
+        morceaux_compares = $(if ($compared.Count) { [int](Get-Median ($compared | Select-Object -Last 24)) } else { $null })
+        morceaux_relus = $(if ($fetched.Count) { [int](Get-Median ($fetched | Select-Object -Last 24)) } else { $null })
+        relus_mo = $(if ($fetchedMb.Count) { [int](Get-Median ($fetchedMb | Select-Object -Last 24)) } else { $null })
+        relecture_ms = $(if ($fetchMs.Count) { [int](Get-Median ($fetchMs | Select-Object -Last 120)) } else { $null })
     }
 }
 
@@ -244,6 +258,9 @@ function Show-Summary($s) {
     $w = $s.attentes_carte
     if ($w) {
         "attentes : le fil qui soumet attend la carte {0} fois par image, {1} ms ; carte occupee {2} % du temps ; alertes des attentes precises : {3}" -f $w.attentes, $w.attente_ms, $w.carte_occupee, $w.alertes
+        if ($null -ne $w.morceaux_compares) {
+            "recopie : la carte compare {0} morceaux par image, {1} sont relus ({2} Mo) ; le fil qui recopie attend ces relectures {3} ms" -f $w.morceaux_compares, $w.morceaux_relus, $w.relus_mo, $w.relecture_ms
+        }
     }
     # Les deux objectifs de la mission, sur CE lancement (ni la stabilite sur
     # plusieurs lancements ni l'absence de gel ne se lisent ici).
