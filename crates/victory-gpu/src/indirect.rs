@@ -1002,12 +1002,10 @@ void main() {
                 }
                 warp.list.SetComputeRootSignature(&compare.root);
                 warp.list.SetPipelineState(&compare.pso);
-                let constants = [0u32, 0, size as u32, PIECES, 0, mode];
-                warp.list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
                 warp.list.SetComputeRootShaderResourceView(1, now_gpu);
                 warp.list.SetComputeRootUnorderedAccessView(2, hashes_gpu);
                 warp.list.SetComputeRootUnorderedAccessView(3, differs_gpu);
-                warp.list.Dispatch(PIECES.div_ceil(64), 1, 1);
+                crate::host::dispatch_pieces(&warp.list, [0u32, 0, size as u32, PIECES, 0, mode]);
             }
             warp.submit_and_wait();
             // SAFETY: as above.
@@ -1035,6 +1033,23 @@ void main() {
         set(content[at]);
         assert_eq!(run(&mut warp, 2), [0, 1, 0]);
         assert_eq!(run(&mut warp, 2), [0, 0, 0]);
+        // (PROJECT ONE) Each 16-byte place of a piece counts, wherever it
+        // falls among the 64 lanes that walk it, and so does the last
+        // place of the last piece; two places swapped are a change too.
+        for at in [2 * PIECE + 16 * 63, 2 * PIECE + 1024 * 63 + 16 * 5, size - 1] {
+            // SAFETY (each): inside the mapping.
+            let set = |value: u8| unsafe { now_ptr.add(at).write_volatile(value) };
+            set(content[at] ^ 1);
+            assert_eq!(run(&mut warp, 2), [0, 0, 1], "a byte at {at:#x}");
+            set(content[at]);
+            assert_eq!(run(&mut warp, 2), [0, 0, 1], "back at {at:#x}");
+        }
+        let (a, b) = (PIECE + 16, PIECE + 1024 + 16);
+        // SAFETY: inside the mapping; 16 bytes each, apart.
+        unsafe {
+            std::ptr::swap_nonoverlapping(now_ptr.add(a), now_ptr.add(b), 16);
+        }
+        assert_eq!(run(&mut warp, 2), [0, 1, 0], "16 bytes of two lanes' walks swapped");
     }
 
     /// The clamp compiles with the system's compiler and the host takes it.
