@@ -2539,6 +2539,41 @@ mod relay_tests {
         assert!(touches_other(&written, &by_copy, copy_a, 0x4000, 0x4080));
         assert!(touches_other(&written, &by_copy, copy_b, 0x4080, 0x4200));
     }
+
+    /// (PROJECT ONE) With `VICTORY_WINDOW_PAST_BUFFER_WRITES`: the refresh
+    /// of a window goes on past a title buffer's shader writes in its range,
+    /// and is still held back by another window's writes and by read-backs.
+    /// A buffer's copy is held back by both, as before, and a copy is never
+    /// held back by its own writes, tagged or not.
+    #[test]
+    fn a_window_refresh_passes_writes_to_title_buffers_only() {
+        use super::{OWNER_BUFFER, window_touches_other};
+        let (window_a, window_b, buffer_c) = (0xaaaa_0000usize, 0xbbbb_0000usize, 0xcccc_0000usize);
+        let mut written = Vec::new();
+        let mut by_copy = Vec::new();
+        join_ranges(&mut written, [(0x1000, 0x1100), (0x3000, 0x3100), (0x5000, 0x5100)]);
+        join_copy_ranges(
+            &mut by_copy,
+            [
+                (buffer_c | OWNER_BUFFER, 0x1000, 0x1100),
+                (window_b, 0x3000, 0x3100),
+                (0, 0x5000, 0x5100),
+            ],
+        );
+        // Window A over a buffer that a flight writes: passed, and counted.
+        assert_eq!(window_touches_other(&written, &by_copy, window_a, 0x0000, 0x2000), (false, true));
+        // Over another window's writes, or a read-back's: held.
+        assert_eq!(window_touches_other(&written, &by_copy, window_a, 0x2000, 0x4000), (true, false));
+        assert_eq!(window_touches_other(&written, &by_copy, window_a, 0x4000, 0x6000), (true, false));
+        // Over nothing in the air: neither.
+        assert_eq!(window_touches_other(&written, &by_copy, window_a, 0x6000, 0x7000), (false, false));
+        // Window B over its own writes: not held.
+        assert_eq!(window_touches_other(&written, &by_copy, window_b, 0x3000, 0x3080), (false, false));
+        // Without the switch every copy is held by the buffer's writes but
+        // the buffer's own copy, whose tag is not part of its address.
+        assert!(touches_other(&written, &by_copy, window_a, 0x1000, 0x1080));
+        assert!(!touches_other(&written, &by_copy, buffer_c, 0x1000, 0x1080));
+    }
 }
 
 /// The most host lists in the air before the flights are settled
@@ -2729,7 +2764,75 @@ fn touches_other(
     touches(written, from, to)
         && by_copy
             .iter()
-            .any(|&(owner, a, b)| owner != copy && a < to && b > from)
+            .any(|&(owner, a, b)| owner & !OWNER_BUFFER != copy && a < to && b > from)
+}
+
+/// (PROJECT ONE) In an owner of [`Line::by_copy`] ([`owner_of`]): the copy
+/// is a title buffer's, not a window of memory outside buffers. (The low
+/// bit of an address that is never odd.)
+const OWNER_BUFFER: usize = 1;
+
+/// (PROJECT ONE) What [`Line::by_copy`] names a flight's writing copy by:
+/// its address, with [`OWNER_BUFFER`] for a title buffer's copy.
+fn owner_of(shadow: &std::sync::Arc<crate::shadow::Shadow>) -> usize {
+    let window = shadow.what().2;
+    std::sync::Arc::as_ptr(shadow) as usize | if window { 0 } else { OWNER_BUFFER }
+}
+
+/// (PROJECT ONE) `VICTORY_WINDOW_PAST_BUFFER_WRITES=1` (off by default): the
+/// refresh of a window of title memory outside buffers does not wait for a
+/// flight's shader writes to a title buffer that lies in the refreshed
+/// range.
+///
+/// A root view names no length, so its window is refreshed from the view's
+/// address to the window's end: megabytes. A title buffer anywhere in them
+/// that a flight's shaders write held the submission back until that
+/// flight had landed, though the bytes of a buffer are read through the
+/// buffer's own copy (`crate::shadow::lookup` takes the innermost buffer
+/// holding an ask), not through the window. In the run of 26/11, 9:07,
+/// every refresh held back was one of these: 1.2 to 3.8 MB of a window
+/// behind 384 to 32,768 bytes written to a buffer 1.5 MB further on; they
+/// were all the waits the submitting thread had left (2 to 3 a frame, 51
+/// ms of a frame of 110).
+///
+/// What it gives up: a view that begins outside every buffer and reads on
+/// into one whose bytes a shader has just written sees them a submission
+/// late through its window.
+fn window_past_buffer_writes() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_WINDOW_PAST_BUFFER_WRITES").is_some_and(|v| v == "1");
+        if on {
+            tracing::info!(
+                "refreshes of windows of title memory do not wait for shader writes to buffers in them (VICTORY_WINDOW_PAST_BUFFER_WRITES=1)"
+            );
+        }
+        on
+    })
+}
+
+/// (PROJECT ONE) Refreshes of windows that went on past a flight's writes
+/// to a title buffer since the last line ([`window_past_buffer_writes`]).
+static WINDOWS_PAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) [`touches_other`] for the refresh of a window with
+/// [`window_past_buffer_writes`]: the writes of another window and the
+/// read-backs hold it back, a title buffer's own do not. Also whether
+/// such a buffer's writes lie in the range at all.
+fn window_touches_other(
+    written: &[(usize, usize)],
+    by_copy: &[(usize, usize, usize)],
+    copy: usize,
+    from: usize,
+    to: usize,
+) -> (bool, bool) {
+    if !touches(written, from, to) {
+        return (false, false);
+    }
+    let over = |&&(_, a, b): &&(usize, usize, usize)| a < to && b > from;
+    let held = by_copy.iter().filter(over).any(|&(owner, ..)| owner & OWNER_BUFFER == 0 && owner != copy);
+    let passed = by_copy.iter().filter(over).any(|&(owner, ..)| owner & OWNER_BUFFER != 0);
+    (held, passed)
 }
 
 /// `ranges` with `more`, in order, joined where they overlap or touch.
@@ -2835,7 +2938,18 @@ fn blocked_by(
                 Step::Refresh(shadow, address, len) => {
                     let (from, to) = (*address, *address + *len);
                     let copy = std::sync::Arc::as_ptr(shadow) as usize;
-                    if touches_other(written, by_copy, copy, from, to) || touches(immed, from, to) {
+                    // (PROJECT ONE) A window is not held back by writes to
+                    // a title buffer in the range it refreshes.
+                    let held = if window_past_buffer_writes() && shadow.what().2 {
+                        let (held, passed) = window_touches_other(written, by_copy, copy, from, to);
+                        if count && passed && !held && !touches(immed, from, to) {
+                            WINDOWS_PAST.fetch_add(1, Ordering::Relaxed);
+                        }
+                        held
+                    } else {
+                        touches_other(written, by_copy, copy, from, to)
+                    };
+                    if held || touches(immed, from, to) {
                         if count {
                             LATE_STATS[18].fetch_add(1, Ordering::Relaxed);
                             note_held_refresh(shadow, (from, to), by_copy, immed);
@@ -2885,7 +2999,7 @@ fn note_held_refresh(
     // (0), or a bottom-of-pipe write (2).
     let writer = by_copy
         .iter()
-        .find(|&&(owner, a, b)| owner != copy && a < to && b > from)
+        .find(|&&(owner, a, b)| owner & !OWNER_BUFFER != copy && a < to && b > from)
         .map(|&(owner, a, b)| (u64::from(owner != 0), a, b))
         .or_else(|| immed.iter().find(|r| r.0 < to && r.1 > from).map(|&(a, b)| (2, a, b)));
     let Some((kind, a, b)) = writer else {
@@ -3448,6 +3562,12 @@ fn late_line(frames: f64) {
             .map(|&(why, name)| format!("{name} {:.1} long, longest {:.1} ms", long[why], most[why]))
             .collect();
         tracing::info!("settles of 8 ms or more per frame, by what settled: {}", parts.join("; "));
+        if window_past_buffer_writes() {
+            tracing::info!(
+                "refreshes of windows that went on past shader writes to title buffers per frame: {:.1} (VICTORY_WINDOW_PAST_BUFFER_WRITES=1)",
+                WINDOWS_PAST.swap(0, Ordering::Relaxed) as f64 / frames
+            );
+        }
         // (PROJECT ONE) Every sixth line (about half a minute): what the
         // refreshes held back waited for.
         static LINES: AtomicU32 = AtomicU32::new(0);
@@ -4553,7 +4673,7 @@ impl Host {
                 if let Late::Run(flight) = item {
                     *lists += flight.order.len().max(1);
                     for (shadow, r) in &flight.back {
-                        let owner = std::sync::Arc::as_ptr(shadow) as usize;
+                        let owner = owner_of(shadow);
                         ranges.extend(r.iter().copied());
                         copy_ranges.extend(r.iter().map(|&(a, b)| (owner, a, b)));
                     }
@@ -4746,7 +4866,7 @@ impl Host {
                 sent.back
                     .iter()
                     .flat_map(|(shadow, ranges)| {
-                        let owner = std::sync::Arc::as_ptr(shadow) as usize;
+                        let owner = owner_of(shadow);
                         ranges.iter().map(move |&(a, b)| (owner, a, b))
                     })
                     .chain(sent.backs.iter().map(|&(a, b)| (0, a, b))),
@@ -4807,7 +4927,7 @@ impl Host {
                 sent.back
                     .iter()
                     .flat_map(|(shadow, ranges)| {
-                        let owner = std::sync::Arc::as_ptr(shadow) as usize;
+                        let owner = owner_of(shadow);
                         ranges.iter().map(move |&(a, b)| (owner, a, b))
                     })
                     .chain(sent.backs.iter().map(|&(a, b)| (0, a, b))),
