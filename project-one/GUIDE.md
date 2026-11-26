@@ -62,7 +62,8 @@ The launcher speaks French. Its main options:
 | `sans:<group>` | leaves out a group of compute effects (never a draw) |
 | `sans-dessins:<group>` | leaves out the DRAWS of a group of passes (`..\victory-profils\dessins-<group>.txt`): it takes geometry away, so keep it for passes the picture can do without |
 | `sans-ombres` | `sans-dessins:ombres`: the shadow maps are no longer drawn; the world stays lit, without cast shadows |
-| `performance` | everything measured faster that also held, picture quality second: `maximum` without its `transparence` group, `sans-ombres`, `relais`, the title's own low settings, `fenetres`, 256 lists in flight, the fog's gather left out. Measured on 26/11: 6 frames a second, two runs of 300 s held, against 3 with `rapide` |
+| `performance` | everything measured faster that also held, picture quality second: `maximum` without its `transparence` group, `sans-ombres`, `relais`, the title's own low settings, `fenetres`, 256 lists in flight. The fog is rendered: leaving its gather out turned the world black (26/11, 8 h 25 to 10 h 38), so the 6 frames a second measured then do not count. Not yet measured with the fog back |
+| `prereglage:bas`, `extreme`, `diagnostic`, `safemode` | the title takes its SafeMode preset, then some settings are lowered before it applies them (qualities at Low, no motion blur, lower detail and grass; `extreme` also fewer pedestrians and vehicles). `prereglage-base:jeu` keeps the title's own preset. Off by default, never run yet: the log says what was changed |
 | `precis relais:2`, `vitesse:2`, `vitesse:3` | faster (up to 8 frames a second) but they lose the card: 10 runs of 15 on 26/11. Do not use them to play |
 | `traces` | diagnostics build: on a card loss, the log names the last commands |
 | `capture` | diagnostics build: saves frames |

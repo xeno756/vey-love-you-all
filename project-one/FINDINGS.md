@@ -773,3 +773,87 @@ précises, perte de carte. Le pool de tampons d'envoi (`c4cd932`, `7ee9224`) n'a
 tourné avec les attentes précises : relu, je n'y vois pas d'incompatibilité (les lecteurs
 sont suivis par plage d'adresses, et un morceau du pool n'est rendu qu'une fois ses
 soumissions finies), mais rien ne l'a montré en jeu.
+
+## Le monde noir (26/11, 11 h)
+
+L'utilisateur, à 8 h 25 : un pic à 12 images par seconde pendant le prologue, mais « pas de
+monde, rien du tout, juste les textes ». Puis, dans la mission de 11 h : le monde n'est plus
+visible, un écran noir avec quelques couleurs. **Un écran noir plus rapide ne compte pas** :
+les 6 images par seconde de la série H (10 h 31, 10 h 38) étaient mesurées sur ce monde
+noir.
+
+### Ce que disent les journaux
+
+Le runtime écrit chaque motif de shader laissé de côté. La collecte du brouillard
+(`CS_Gather_Classified_`, `CS_GatherRaymarchedLocalLights`, groupe `volumetrie-collecte`)
+y figure :
+
+| Lancements | Brouillard collecté ? | Ce qui a été vu |
+|---|---|---|
+| 7 h 50, 7 h 57, 8 h 13 | oui | 8 h 13 : l'utilisateur voit les modèles (« ça rame, surtout les modèles ») |
+| 8 h 25 | **non** (premier lancement sans) | l'utilisateur : rien que les textes |
+| 8 h 54 à 9 h 28, 9 h 42 à 10 h 38 (16 lancements) | **non** | capture de 10 h 10 (version diagnostic) : image presque noire, bandes de cinéma |
+| 9 h 38 (`performance-sur`) | oui | pas de capture |
+
+La passe qui applique le brouillard lit les textures que la collecte écrit ; sans elle, elle
+lit ce qu'il y a dans la mémoire (rien, ou des restes), et ce voile couvre tout le monde. Le
+25/11, `maximum` gardait déjà exprès le groupe `volumetrie` pour cette raison (« sans elle
+l'image peut être noire »). J'ai ajouté `volumetrie-collecte` le 26/11 pour ses 18,7 ms de
+carte sans vérifier l'image : c'est l'erreur. `2273cfe` le retire de `performance`, et le
+fichier du groupe dit maintenant de ne pas l'utiliser pour jouer.
+
+**Ce n'est pas démontré à l'image** : aucune capture du monde en 3D n'existe pour ces
+lancements. Les seules images enregistrées sont des écrans de chargement en 2D (illustrations,
+à ne pas confondre avec le monde) et l'image presque noire de 10 h 10, prise peut-être avant
+l'arrivée du monde.
+
+### Les autres changements récents, un par un
+
+| Changement (heure) | Peut-il cacher le monde ? | Verdict |
+|---|---|---|
+| collecte du brouillard laissée de côté (8 h 25) | oui : voile lu dans des textures jamais écrites | **cause probable**, rendu de nouveau (`2273cfe`) |
+| `vitesse:3` (8 h 25) | il ne recopiait plus vers le jeu ce que la carte calcule | retiré de `performance` depuis 10 h 08 (pertes de carte) ; le noir a continué sans lui |
+| `fenetres`, bornage indirect par fenêtres (8 h 25) | oui en théorie : une borne fausse ferait sauter des dessins | **suspect second**, gardé ; se coupe par `VICTORY_INDIRECT_WINDOW=0` |
+| fenêtres qui passent les écritures des tampons (`9e52aa5`, dans `performance` à 10 h 08) | idem, en plus rare | après le début du noir ; se coupe par `VICTORY_WINDOW_PAST_BUFFER_WRITES=0` |
+| objets libérés gardés une seconde (`ab1bec0`, 8 h 52) | non : une libération n'arrive que plus tard, jamais plus tôt (lu dans `graveyard.rs`, 4 tests) | après le début du noir. Mémoire : carte 3,4 à 3,6 Go et mémoire partagée 5,9 à 6,3 Go avant comme après (médianes après 120 s) |
+| textures créées 80 ms par image au plus (`63caa72`, 8 h 52) | non : les textures arrivent plus tard, aucun dessin n'est retiré | après le début du noir |
+| 256 listes en vol (10 h 08) | non | après le début du noir ; mémoire inchangée |
+| comparaisons de la carte par groupes de 64 fils (`a191a66`, 10 h 02) | une comparaison fausse garderait des données périmées | après le début du noir ; le test sur l'adaptateur logiciel compare chaque octet |
+| arguments des dessins mesh pris dans la fenêtre (`38da7cf`) | — | retiré (`5572a82`), reste retiré |
+
+Une remarque sur la mémoire : la marge de mémoire validable du système est passée d'environ
+11,8 Go (lancements jusqu'à 8 h 54) à 8,0 à 9,2 Go (à partir de 9 h 38). Ce compteur couvre
+tout le système (les autres programmes, les compilations) : la cause n'est pas établie, et
+la mémoire du runtime suivie par le CSV (carte, partagée, envoi) n'a pas bougé.
+
+### Le préréglage du jeu (lu dans le binaire)
+
+Ce qui est vérifié dans l'exécutable 1.0.2.1 (empreinte SHA-256 vérifiée) :
+
+- l'appelant (RVA `0x5b56ae2` à `0x5b56b3b`) remplit une structure de réglages, appelle le
+  sélecteur (`0x5b56bc0`, par le relais `0x5b56b90`), puis `0x1d70c40`, qui applique la
+  structure et appelle les fonctions de rappel des réglages ;
+- le sélecteur demande la plateforme (2 sur une Series X, 1 avec le drapeau Series S de
+  `qualite-s`), choisit la clé Anaconda (`0xBEEFBABE`) ou Lockhart (`0xDEADBEEF`), la range à
+  la structure + `0x6F0`, puis saute (`0x5b56bf3`, `jmp rel32`) dans la recherche `0x1d704f0`
+  (gestionnaire, clé, structure) ;
+- la recherche trouve la clé dans la table du gestionnaire et désérialise le préréglage dans
+  la structure ; elle rend 0 si la clé n'y est pas ;
+- la table des noms (RVA `0x6556c50`) : Lockhart, Prospero, Anaconda, Trinity, SafeMode
+  (`0x7C3F7B63`) et une sixième clé.
+
+Le crochet (`2cf979c`, `crates/victory-loader/src/preset.rs`) remplace ce saut final par un
+saut vers une fonction du runtime : elle cherche SafeMode (ou la clé du jeu s'il n'est pas
+dans la table), puis abaisse les champs du profil, chacun lu et vérifié avant d'être écrit à
+sa taille (énumération 0 à 4 sur 4 octets, booléen 0 ou 1 sur **un** octet, flottant 0 à 16
+sur 4 octets). L'appelant applique ensuite la structure comme toujours.
+
+Les positions des neuf champs viennent de l'extraction du schéma fournie par l'utilisateur.
+Dans le jeu, les noms de ces champs (leurs empreintes `joaat`) sont rangés dans le même
+ordre, avec leurs types (énumération, flottant, booléen) et leurs valeurs par défaut ; mais
+ma reconstruction des positions à partir de ces métadonnées n'a retrouvé que 2 positions sur
+7 : je ne peux ni confirmer ni infirmer les positions fournies. D'où la lecture avant
+écriture. Trois réglages proposés n'ont pas de position connue et ne sont pas écrits :
+`decorationResolutionShift`, `vehicleHDCount`, `waterReflectionSSR`. Les 93 réglages du
+schéma ne sont donc pas tous cartographiés : 9 le sont, par l'extraction, et aucun n'est
+vérifié en jeu.

@@ -4,6 +4,26 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (11 h 15) — le monde noir : le brouillard rendu de nouveau ; préréglage SafeMode
+
+Détail : [FINDINGS.md](FINDINGS.md), « Le monde noir ».
+
+- **Pourquoi le monde était noir de 8 h 25 à 10 h 38 :** `performance` laissait de côté la
+  collecte du brouillard volumétrique (`sans:volumetrie-collecte`), ajoutée sans vérifier
+  l'image. La passe qui applique le brouillard lit alors des textures que rien n'écrit. Les
+  journaux le montrent : ce groupe est laissé de côté dans tous les lancements depuis 8 h 25,
+  et dans aucun avant (8 h 13 : l'utilisateur voyait les modèles). Cause probable, pas
+  démontrée à l'image.
+- **`performance` rend de nouveau le brouillard** (`2273cfe`, branche fusionnée). **Non
+  vérifié en jeu.** Les 6 images par seconde du matin étaient mesurées sans brouillard,
+  donc sur un monde noir : elles ne comptent pas. Avec le brouillard, la vitesse n'est pas
+  mesurée.
+- **Préréglage du jeu** (`2cf979c`, branche fusionnée) : `prereglage:bas`, `extreme`,
+  `diagnostic` ou `safemode`. Le jeu prend son préréglage SafeMode au lieu du sien, puis
+  certains réglages sont abaissés avant qu'il ne l'applique (qualités au plus bas, flou de
+  mouvement coupé, niveau de détail et herbe réduits). Éteint par défaut, **jamais lancé**.
+- Je ne lance plus le jeu : l'utilisateur fait tous les lancements (DECISIONS 35).
+
 ## 26/11/2026 (10 h 45) — `performance` tient : 6 images par seconde, deux fois 300 s
 
 Détail : [FINDINGS.md](FINDINGS.md), « Correction (10 h 45) ».
