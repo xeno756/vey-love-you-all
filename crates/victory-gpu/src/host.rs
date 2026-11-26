@@ -3671,6 +3671,20 @@ fn late_line(frames: f64) {
     }
     crate::port_descriptors::line(frames);
     {
+        // (PROJECT ONE) Where the making of host slots from title records goes.
+        static SEEN: [[std::sync::atomic::AtomicU64; 8]; 2] = [const { [const { std::sync::atomic::AtomicU64::new(0) }; 8] }; 2];
+        let part = |d: usize| {
+            let v: Vec<f64> = (0..8)
+                .map(|k| {
+                    let n = crate::descriptor::host::MIRROR_NS[d][k].load(Ordering::Relaxed);
+                    (n - SEEN[d][k].swap(n, Ordering::Relaxed)) as f64 / frames
+                })
+                .collect();
+            format!("{:.0} made already and {:.0} empty already (no lock taken), {:.0} with the lock, {:.1} ms waiting for it", v[1], v[2], v[7], v[0] / 1e6)
+        };
+        tracing::info!("host slots made from title records per frame (HostHeap::mirror): not for a draw {}; for a draw {}", part(0), part(1));
+    }
+    {
         // (PROJECT ONE) VICTORY_HEAP_SYNC.
         static SEEN: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
         let now: Vec<u64> = crate::descriptor::SYNCED
@@ -3688,7 +3702,7 @@ fn late_line(frames: f64) {
                 "descriptor records the title copied into its heaps as bytes, per frame (VICTORY_HEAP_SYNC): \
                  {:.1} changed heap pages read, {:.0} records looked at, {:.1} made again (empty or stale before), \
                  {:.0} left to the draws reading them through tables; {:.1} ms; slots written with the view they \
-                 show already, kept (VICTORY_SAME_VIEWS): {:.0}; made again by kind: {}",
+                 show already, kept (VICTORY_SAME_VIEWS): {:.0}; made again by kind: {}; ms making them by kind, then ms waiting for the made slots' lock (not for draws): {}",
                 d[0],
                 d[1],
                 d[2],
@@ -3708,6 +3722,20 @@ fn late_line(frames: f64) {
                         })
                         .collect::<Vec<_>>()
                         .join(", ")
+                },
+                {
+                    // Milliseconds a frame, by the same kinds, then the
+                    // waits for the made slots' lock of makes not for a draw.
+                    static NS: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
+                    crate::descriptor::host::COPIED_NS
+                        .iter()
+                        .zip(NS.iter())
+                        .map(|(c, s)| {
+                            let n = c.load(Ordering::Relaxed);
+                            format!("{:.1}", (n - s.swap(n, Ordering::Relaxed)) as f64 / 1e6 / frames)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" / ")
                 }
             );
         }
@@ -7529,6 +7557,11 @@ impl Meter {
         let picked = crate::draw::HEAP_BUFFER_PASSES.swap(0, Ordering::Relaxed) as f64 / frames;
         let picked_ms =
             crate::draw::HEAP_BUFFER_MICROS.swap(0, Ordering::Relaxed) as f64 / 1e3 / frames;
+        let heap_parts = crate::draw::HEAP_BUFFER_PARTS
+            .iter()
+            .map(|p| format!("{:.1}", p.swap(0, Ordering::Relaxed) as f64 / 1e3 / frames))
+            .collect::<Vec<_>>()
+            .join(" / ");
         // Copies between depth textures and their colour twins, each way.
         let [twin_to_depth, twin_to_colour] =
             [2, 3].map(|i| crate::resource::TWINS[i].swap(0, Ordering::Relaxed) as f64 / frames);
@@ -7631,7 +7664,7 @@ impl Meter {
                  {copy_mb:.1} MB, textures {texture_ms:.1} ms {texture_mb:.1} MB; {gpu:.1} on the \
                  GPU; {back_ms:.1} copying back {back_mb:.1} MB), {draws:.0} draws/frame, \
                  dropped {dropped:.0} without a host pipeline ({making} being made) and \
-                 {indirect:.0} indirect; heap buffers {picked:.1} passes {picked_ms:.1} ms;                  texture slots written so far: {placed} placed, {objects} of objects; \
+                 {indirect:.0} indirect; heap buffers {picked:.1} passes {picked_ms:.1} ms ({heap_parts} ms: slots made / copies brought up to date / textures);                  texture slots written so far: {placed} placed, {objects} of objects; \
                  textures picked by index: {picked_textures} uploaded so far ({picked_mb} MB), \
                  {picked_waiting} waiting, {picked_away} passed over unmapped; depth textures with                  unordered access: {du0} made, bound as depth {du1}x, cleared as depth {du2}x,                  unordered views refused {du3}x; buffer views left null as the host would refuse them: {refused}",
                 picked_textures = crate::draw::HEAP_TEXTURES.load(Ordering::Relaxed),

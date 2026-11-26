@@ -524,6 +524,16 @@ pub(crate) static HEAP_VIEWS_ELSEWHERE: AtomicU64 = AtomicU64::new(0);
 /// index ([`State::heap_buffers`]), and the microseconds they took.
 pub(crate) static HEAP_BUFFER_PASSES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_BUFFER_MICROS: AtomicU64 = AtomicU64::new(0);
+
+/// (PROJECT ONE) `VICTORY_TABLE_SLOTS=0`: a draw's table notes only its
+/// texture views' slots as a table's, as before (`State::tables`).
+fn table_slots() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_TABLE_SLOTS").is_none_or(|v| v != "0"))
+}
+/// (PROJECT ONE) Of [`HEAP_BUFFER_MICROS`]: the slots made, the copies brought
+/// up to date, the textures (microseconds).
+pub(crate) static HEAP_BUFFER_PARTS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 /// Textures brought up to date for shaders that pick them by index
 /// ([`State::heap_textures`]), the bytes of their memory, and the slots
 /// still waiting.
@@ -1719,6 +1729,7 @@ impl State {
             ranges.insert(index, (shadow, address, address + len));
         }
         let views = ranges.len() as u32;
+        let slots_made = started.elapsed();
         // Per host copy, the span its picked views cover.
         let mut spans: std::collections::HashMap<usize, (std::sync::Arc<crate::shadow::Shadow>, u64, u64)> =
             std::collections::HashMap::new();
@@ -1762,7 +1773,11 @@ impl State {
             }
             shadow.refresh(list, *from, to - from);
         }
+        let refreshed = started.elapsed();
         self.heap_textures(list, heap, host);
+        for (part, took) in HEAP_BUFFER_PARTS.iter().zip([slots_made, refreshed - slots_made, started.elapsed() - refreshed]) {
+            part.fetch_add(took.as_micros() as u64, Ordering::Relaxed);
+        }
         HEAP_BUFFER_PASSES.fetch_add(1, Ordering::Relaxed);
         HEAP_BUFFER_MICROS.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
         static LOGGED: AtomicU64 = AtomicU64::new(0);
@@ -2800,6 +2815,18 @@ impl State {
             for k in 0..n {
                 let index = first + k;
                 let used = entries.iter().find(|u| u.table_offset_dwords / 8 == k);
+                // (PROJECT ONE) The title's slot is a table's whatever it
+                // holds: the draw makes what it reads of it in its dynamic
+                // slots, so the copied records' sync and the pass over buffer
+                // views need not make it in place (before, only texture
+                // views were noted, and 12,000-13,000 constant and buffer
+                // views a frame were made twice for nothing: run of 26/11
+                // 18:00). `VICTORY_TABLE_SLOTS=0`: as before.
+                if let Some(title) = title_first
+                    && table_slots()
+                {
+                    host.table_slot_made(title + k);
+                }
                 match crate::descriptor::view(table + u64::from(k) * 32) {
                     Some(View::Constant(address, size)) => {
                         let Some((gpu, to)) = list.scratch(u64::from(size)) else {
