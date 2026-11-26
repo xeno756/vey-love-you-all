@@ -1,5 +1,17 @@
 # VIctory fork (work in progress)
 
+## PROJECT ONE (this branch)
+
+This branch, `project-one/scarlettport`, is PROJECT ONE: the Xbox Series X version of the
+title run from your own files, tuned on a modest PC (Ryzen 7 5700, Radeon RX 5600 XT 6 GB),
+with ScarlettPort's shader translator merged in and no need for mesh shaders or barycentrics
+on the card. About 3 frames per second there, not playable yet. **No game files here.**
+
+How to set it up and run it, and what to expect: **[project-one/GUIDE.md](project-one/GUIDE.md)**.
+Notes, in French: [project-one/README.md](project-one/README.md).
+
+The sections below describe the forks this one is built on.
+
 ## victory-amd
 
 This copy is a fork of
