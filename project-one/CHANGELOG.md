@@ -4,6 +4,20 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (21 h 40) — pipelines mesurés, cause des images longues trouvée
+
+Détail : [FINDINGS.md](FINDINGS.md).
+
+- **Pipelines.** Le fichier par image dit maintenant combien de temps les images attendent
+  des pipelines, combien sont faits et traduits pendant le jeu. Dans la scène mesurée : rien.
+  Ils ne freinent pas l'image tant que `preparer` et `preparer-graphiques` ont tourné.
+- **Images de 1,5 s dans les deux premières minutes du monde.** C'est le rattrapage des
+  textures : chaque passe crée une copie et un tampon d'envoi par texture, 72 % de son temps.
+  Sans rattrapage, le 99e centile baisse d'un tiers mais deux fois moins de textures
+  arrivent ; le défaut ne change pas tant que l'image n'a pas été vérifiée.
+- **Mémoire partagée.** Une capture s'est arrêtée faute de mémoire partagée avec la carte
+  (7,7 Go, la limite de ce PC). À surveiller.
+
 ## 25/11/2026 (21 h) — la pâte bleue trouvée et corrigée
 
 Détail et preuves : [FINDINGS.md](FINDINGS.md).
