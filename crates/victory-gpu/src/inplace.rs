@@ -269,9 +269,51 @@ struct Views {
     views: BTreeMap<usize, (usize, usize, u64)>,
     /// Sections by handle: bytes, and whether made committed.
     sections: Vec<(usize, u64, bool)>,
+    /// (PROJECT ONE) By 64 KiB page of a section (its handle, the page's
+    /// offset): every title address that shows it ([`pages_of`]).
+    pages: BTreeMap<(usize, u64), Vec<usize>>,
 }
 
-static VIEWS: Mutex<Views> = Mutex::new(Views { views: BTreeMap::new(), sections: Vec::new() });
+static VIEWS: Mutex<Views> =
+    Mutex::new(Views { views: BTreeMap::new(), sections: Vec::new(), pages: BTreeMap::new() });
+
+/// (PROJECT ONE) Notes (`add`) or forgets the pages of the view at `at` in
+/// [`Views::pages`]; only whole 64 KiB pages on both sides are noted.
+fn index_view(pages: &mut BTreeMap<(usize, u64), Vec<usize>>, at: usize, (len, section, offset): (usize, usize, u64), add: bool) {
+    if !at.is_multiple_of(K64) || !offset.is_multiple_of(K64 as u64) {
+        return;
+    }
+    for k in 0..len / K64 {
+        let key = (section, offset + (k * K64) as u64);
+        let address = at + k * K64;
+        if add {
+            let shown = pages.entry(key).or_default();
+            if !shown.contains(&address) {
+                shown.push(address);
+            }
+        } else if let Some(shown) = pages.get_mut(&key) {
+            shown.retain(|&a| a != address);
+            if shown.is_empty() {
+                pages.remove(&key);
+            }
+        }
+    }
+}
+
+/// (PROJECT ONE, after fxceless/victory-fork 8dd30ab) The address of the
+/// 64 KiB page shown at `page` in every title view that shows it, `page`'s
+/// own address included; empty if `page` is not the start of a view's page.
+pub(crate) fn pages_of(page: usize) -> Vec<usize> {
+    let v = views();
+    let Some((&base, &(bytes, section, offset))) = v.views.range(..=page).next_back() else {
+        return Vec::new();
+    };
+    let within = page.wrapping_sub(base);
+    if within >= bytes || !within.is_multiple_of(K64) {
+        return Vec::new();
+    }
+    v.pages.get(&(section, offset + within as u64)).cloned().unwrap_or_default()
+}
 
 fn views() -> std::sync::MutexGuard<'static, Views> {
     VIEWS.lock().unwrap_or_else(|e| e.into_inner())
@@ -289,7 +331,12 @@ pub fn title_memory_section(section: usize, bytes: u64, committed: bool) {
 /// `offset` on. Call after [`crate::title_memory_remapped`] of the range.
 pub fn title_memory_view(at: usize, len: usize, section: usize, offset: u64) {
     crate::regions::mapped(at, len);
-    views().views.insert(at, (len, section, offset));
+    let mut v = views();
+    let v = &mut *v;
+    if let Some(old) = v.views.insert(at, (len, section, offset)) {
+        index_view(&mut v.pages, at, old, false);
+    }
+    index_view(&mut v.pages, at, (len, section, offset), true);
 }
 
 /// What `[at, at + len)` showed is gone ([`crate::title_memory_remapped`]):
@@ -303,8 +350,11 @@ pub(crate) fn views_gone(at: usize, len: usize) {
     let end = at.saturating_add(len);
     let first = v.views.range(..=at).next_back().filter(|(base, view)| *base + view.0 > at).map(|(base, _)| *base);
     let gone: Vec<usize> = first.into_iter().chain(v.views.range(at.saturating_add(1)..end).map(|(base, _)| *base)).collect();
+    let v = &mut *v;
     for base in gone {
-        v.views.remove(&base);
+        if let Some(view) = v.views.remove(&base) {
+            index_view(&mut v.pages, base, view, false);
+        }
     }
 }
 

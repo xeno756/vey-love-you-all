@@ -90,6 +90,10 @@ pub(crate) struct HostHeap {
     /// Of those and of the slots that left the set: the ones written since
     /// [`HostHeap::buffer_changes`] last took them.
     changed: Mutex<std::collections::HashSet<u32>>,
+    /// (PROJECT ONE) A fingerprint of the record each title slot held when
+    /// the pass over records the title copies in as bytes last looked
+    /// (`super::sync_heaps`); 0: never looked at. Empty until that pass runs.
+    copied: Mutex<Vec<u64>>,
     /// Title slots holding a view of a texture the title may fill itself (a
     /// placed texture, a texture object), with the frame from which they
     /// are due: such a texture is uploaded when a draw reads it through a
@@ -477,6 +481,37 @@ pub(crate) fn remapped(at: usize, len: usize) {
         ranges.clear();
     }
     ranges.push((start, end));
+}
+
+/// (PROJECT ONE) Records the title copied in as bytes that were left to the
+/// draws reading them through tables ([`HostHeap::mirror_copied_page`]),
+/// since the start.
+pub(crate) static COPIED_TABLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) `VICTORY_HEAP_SYNC_TABLES=1`: records copied into slots
+/// draws read through tables lately are made too.
+fn sync_tables() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_SYNC_TABLES").is_some_and(|v| v == "1"))
+}
+
+/// (PROJECT ONE) A 64-bit fingerprint of a descriptor record's bytes (16 or
+/// 32 of them): equal records give equal prints, two different ones the same
+/// print about once in 2^64. A multiply-and-fold over the record's words
+/// (fxceless measured BLAKE3 here as most of a 35-42 ms pass).
+pub(crate) fn record_print(record: &[u8]) -> u64 {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut h = K ^ record.len() as u64;
+    let mut words = record.chunks_exact(8);
+    for word in &mut words {
+        let w = u64::from_le_bytes(word.try_into().unwrap_or([0; 8]));
+        h = (h ^ w).wrapping_mul(K);
+        h ^= h >> 29;
+    }
+    for &b in words.remainder() {
+        h = (h ^ u64::from(b)).wrapping_mul(K);
+    }
+    h ^ (h >> 32)
 }
 
 /// Frames for which a slot a draw read through a table counts as a table's
@@ -1250,6 +1285,7 @@ impl HostHeap {
             words,
             buffers: Mutex::default(),
             changed: Mutex::default(),
+            copied: Mutex::default(),
             textures: Mutex::default(),
             tabled: (0..if sampler { 0 } else { titled })
                 .map(|_| std::sync::atomic::AtomicU32::new(0))
@@ -1911,6 +1947,73 @@ impl HostHeap {
                 }
             }
         }
+    }
+
+    /// (PROJECT ONE, after fxceless/victory-fork a26859f and its pull request
+    /// #305, itself after upstream VIctory 86a5ed6) One page of a title view
+    /// heap that changed (`super::sync_heaps`): of title slots `slots`, the
+    /// record of slot `i` at title address `start + i * step` and `page` the
+    /// bytes read from title address `from` on, each record whose bytes are
+    /// not the ones last seen there is made again ([`HostHeap::mirror`]).
+    /// Returns the records looked at and those made.
+    ///
+    /// The title copies descriptor records into its heaps as plain bytes as
+    /// well as through `Create*View`; nothing announces those, and their host
+    /// slots stayed null or went on showing what they showed before
+    /// (fxceless measured about 40,000 a frame in this title's world: "the
+    /// first room renders right", walls, textures, people, lamps, since).
+    /// A slot draws read through a table lately is left to its draws (the
+    /// title writes its per-draw tables into the same heap every frame, and
+    /// each draw makes what its table shows): `VICTORY_HEAP_SYNC_TABLES=1`
+    /// makes those too.
+    pub(crate) fn mirror_copied_page(
+        &self,
+        slots: std::ops::Range<u64>,
+        (start, step): (u64, u64),
+        from: usize,
+        page: &[u8],
+    ) -> (u64, u64) {
+        let (frame, tables) = (crate::frame::current(), sync_tables());
+        let mut looked = 0u64;
+        let mut due: Vec<(u32, u64)> = Vec::new();
+        {
+            let mut copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
+            if copied.is_empty() {
+                copied.resize(self.count as usize, 0);
+            }
+            for index in slots {
+                let handle = start + index * step;
+                // A record across the page's start is left to the page
+                // that holds its first byte.
+                let Some(at) = (handle as usize).checked_sub(from) else {
+                    continue;
+                };
+                let Some(record) = page.get(at..at + step as usize) else {
+                    continue;
+                };
+                let Some(last) = copied.get_mut(index as usize) else {
+                    continue;
+                };
+                looked += 1;
+                // Never 0, which is "never looked at".
+                let print = record_print(record) | 1;
+                // The record last seen, or a slot never looked at that holds
+                // nothing: as it was.
+                if *last == print || (*last == 0 && record.iter().all(|&b| b == 0)) {
+                    continue;
+                }
+                if !tables && self.tabled_lately(index as u32, frame) {
+                    COPIED_TABLED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+                *last = print;
+                due.push((index as u32, handle));
+            }
+        }
+        for &(index, handle) in &due {
+            self.mirror(index, handle, false);
+        }
+        (looked, due.len() as u64)
     }
 
     /// Whether title slot `index` was a table's within the last
@@ -4036,6 +4139,31 @@ mod tests {
 
     /// Memory the runtime maps under a slot's texture makes the slot due
     /// again from the next frame; a stale slot leaves the queue.
+    #[test]
+    fn copied_records_are_made_again_only_when_their_bytes_change() {
+        let Some(heap) = HostHeap::new(false, 8) else {
+            return; // no host GPU
+        };
+        // Eight 32-byte records standing for a page of the title's heap.
+        let mut page = vec![0u8; 8 * 32];
+        let start = page.as_ptr() as u64;
+        // Never written, all zeros: nothing to make.
+        assert_eq!(heap.mirror_copied_page(0..8, (start, 32), start as usize, &page), (8, 0));
+        // Two records copied in as bytes: both made, then not again.
+        page[32..64].fill(0x11);
+        page[96..128].fill(0x22);
+        assert_eq!(heap.mirror_copied_page(0..8, (start, 32), start as usize, &page), (8, 2));
+        assert_eq!(heap.mirror_copied_page(0..8, (start, 32), start as usize, &page), (8, 0));
+        // One changes again; a record cleared back to zeros counts as a change.
+        page[33] = 0x33;
+        page[96..128].fill(0);
+        assert_eq!(heap.mirror_copied_page(0..8, (start, 32), start as usize, &page), (8, 2));
+        // A page that begins past slot 0 looks only at what it holds.
+        assert_eq!(heap.mirror_copied_page(2..8, (start, 32), start as usize + 64, &page[64..]), (6, 0));
+        assert_ne!(record_print(&[1u8; 32]), record_print(&[2u8; 32]));
+        assert_eq!(record_print(&[7u8; 16]), record_print(&[7u8; 16]));
+    }
+
     #[test]
     fn remapped_memory_makes_its_texture_slots_due() {
         let Some(heap) = HostHeap::new(false, 8) else {

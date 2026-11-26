@@ -3670,6 +3670,49 @@ fn late_line(frames: f64) {
         );
     }
     {
+        // (PROJECT ONE) VICTORY_HEAP_SYNC.
+        static SEEN: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+        let now: Vec<u64> = crate::descriptor::SYNCED
+            .iter()
+            .map(|c| c.load(Ordering::Relaxed))
+            .chain([crate::descriptor::host::COPIED_TABLED.load(Ordering::Relaxed)])
+            .collect();
+        let d: Vec<f64> =
+            now.iter().zip(SEEN.iter()).map(|(&n, s)| (n - s.swap(n, Ordering::Relaxed)) as f64 / frames).collect();
+        if d.iter().any(|&x| x > 0.0) {
+            tracing::info!(
+                "descriptor records the title copied into its heaps as bytes, per frame (VICTORY_HEAP_SYNC): \
+                 {:.1} changed heap pages read, {:.0} records looked at, {:.1} made again (empty or stale before), \
+                 {:.0} left to the draws reading them through tables; {:.1} ms",
+                d[0],
+                d[1],
+                d[2],
+                d[4],
+                d[3] / 1000.0
+            );
+        }
+    }
+    {
+        // (PROJECT ONE) VICTORY_VIEW_GUARD.
+        static SEEN: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+        let d: Vec<f64> = crate::watch::ALIASES
+            .iter()
+            .zip(SEEN.iter())
+            .map(|(c, s)| {
+                let n = c.load(Ordering::Relaxed);
+                (n - s.swap(n, Ordering::Relaxed)) as f64 / frames
+            })
+            .collect();
+        if d.iter().any(|&x| x > 0.0) {
+            tracing::info!(
+                "pages shown at several addresses, per frame (VICTORY_VIEW_GUARD): {:.1} blocks guarded with their other views, \
+                 {:.1} other views opened because one was written (each a copy that would have stayed stale)",
+                d[0],
+                d[1]
+            );
+        }
+    }
+    {
         // (PROJECT ONE) VICTORY_SHADOW_CASCADES.
         static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let all = crate::draw::CASCADE_DRAWS_LEFT_OUT.load(Ordering::Relaxed);
@@ -5259,6 +5302,9 @@ impl Host {
             SWEPT.store(now_ms(), Ordering::Relaxed);
         }
         let behind = late && flying();
+        // (PROJECT ONE) The records the title copied into its view heaps as
+        // plain bytes since the last submission (`VICTORY_HEAP_SYNC`).
+        crate::descriptor::sync_heaps();
         // The slots that waited for a texture's host copy, before the
         // lists that may read them run.
         crate::descriptor::make_waiting();

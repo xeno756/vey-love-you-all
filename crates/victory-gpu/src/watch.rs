@@ -400,13 +400,37 @@ struct Guards {
     /// Blocks already copied as zeros. While they remain wholly uncommitted,
     /// the copy can skip hundreds of MB of failing kernel reads per world frame.
     absent: BTreeSet<usize>,
+    /// (PROJECT ONE) Blocks guarded together with the other views of their
+    /// pages ([`protect`], `VICTORY_VIEW_GUARD`): opening one opens them all.
+    aliased: BTreeSet<usize>,
 }
 
 static GUARDS: Mutex<Guards> = Mutex::new(Guards {
     protected: BTreeSet::new(),
     clean: BTreeSet::new(),
     absent: BTreeSet::new(),
+    aliased: BTreeSet::new(),
 });
+
+/// Views of one page past which its views are not guarded together (the
+/// page the title shows wherever it has nothing is in thousands).
+const MANY_VIEWS: usize = 64;
+
+/// (PROJECT ONE, after fxceless/victory-fork 8dd30ab) Whether all the views
+/// of a guarded page are guarded together. The title shows one physical page
+/// at several addresses, and a copy was guarded at one of them only: a write
+/// through another one left the copy stale (fxceless measured 0.8 to 1.0
+/// million such writes in a five-minute run; since, the first room had its
+/// walls in 4 runs of 4, against 2 of 5). `VICTORY_VIEW_GUARD=0`: the other
+/// views are left as they are, as before.
+fn view_guard() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_VIEW_GUARD").is_none_or(|v| v != "0"))
+}
+
+/// (PROJECT ONE) Since the start: blocks guarded together with another view
+/// of theirs, and other views opened because one view was written.
+pub(crate) static ALIASES: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 
 fn guards() -> std::sync::MutexGuard<'static, Guards> {
     GUARDS.lock().unwrap_or_else(|e| e.into_inner())
@@ -539,10 +563,56 @@ fn is_view(start: usize, end: usize) -> bool {
     }
 }
 
-/// Makes blocks `[from, to)` read-only and notes them guarded and clean;
+/// Makes blocks `[from, to)` read-only and notes them guarded and clean
+/// ([`protect_here`]). With [`view_guard`], the same physical pages at every
+/// other view of them are made read-only too, not noted clean: a write
+/// through one of those is this memory written, and only a fault says so.
+fn protect(g: &mut Guards, from: usize, to: usize) {
+    protect_here(g, from, to);
+    if !view_guard() {
+        return;
+    }
+    for block in from..to {
+        if !g.protected.contains(&block) {
+            continue;
+        }
+        let shown = crate::inplace::pages_of(block * BLOCK);
+        if shown.len() < 2 || shown.len() > MANY_VIEWS {
+            continue;
+        }
+        ALIASES[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        for alias in shown {
+            let alias = alias / BLOCK;
+            g.aliased.insert(alias);
+            if alias != block {
+                protect_alias(g, alias);
+            }
+        }
+    }
+}
+
+/// (PROJECT ONE) Makes `block`, another view of pages a copy has just taken
+/// through its own view, read-only, so that a write through it faults too.
+/// Not noted clean: the copies of title memory at this view have not taken
+/// the pages, and [`guard`] reports a read-only block that is not clean as
+/// written (then notes it clean). A block guarded already stays as it is.
+fn protect_alias(g: &mut Guards, block: usize) {
+    use windows_sys::Win32::System::Memory::{PAGE_READONLY, VirtualProtect};
+    if g.protected.contains(&block) {
+        return;
+    }
+    let mut old = 0;
+    // SAFETY: title view memory (a view the runtime told of); only its
+    // protection changes.
+    if unsafe { VirtualProtect((block * BLOCK) as *const _, BLOCK, PAGE_READONLY, &mut old) } != 0 {
+        g.protected.insert(block);
+    }
+}
+
+/// [`protect`] for one range, without the other views of its pages;
 /// block by block if they span views, leaving out any that fail, and
 /// noting those not committed (unmapped) absent.
-fn protect(g: &mut Guards, from: usize, to: usize) {
+fn protect_here(g: &mut Guards, from: usize, to: usize) {
     use windows_sys::Win32::System::Memory::{PAGE_READONLY, VirtualProtect};
     let set = |from: usize, to: usize| {
         let mut old = 0;
@@ -634,8 +704,30 @@ fn uncommitted_end(block: usize) -> usize {
 }
 
 /// Gives write access back to the guarded blocks of `[start, end)` and
-/// notes them written; true if any was guarded.
+/// notes them written; true if any was guarded. With [`view_guard`] the same
+/// physical pages at every other view of them are opened too: the write that
+/// faulted goes through one view, and every guard over the pages must copy
+/// them again.
 fn open(g: &mut Guards, start: usize, end: usize) -> bool {
+    let any = open_here(g, start, end);
+    if start >= end || g.aliased.is_empty() {
+        return any;
+    }
+    let aliased: Vec<usize> = g.aliased.range(start / BLOCK..end.div_ceil(BLOCK)).copied().collect();
+    for block in aliased {
+        g.aliased.remove(&block);
+        for alias in crate::inplace::pages_of(block * BLOCK) {
+            if alias / BLOCK != block && open_here(g, alias, alias.saturating_add(BLOCK)) {
+                ALIASES[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            g.aliased.remove(&(alias / BLOCK));
+        }
+    }
+    any
+}
+
+/// [`open`] for one range, without the other views of its pages.
+fn open_here(g: &mut Guards, start: usize, end: usize) -> bool {
     use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
     let blocks: Vec<usize> = g
         .protected
@@ -900,10 +992,15 @@ pub fn title_memory_remapped(at: usize, len: usize) {
     for block in absent {
         g.absent.remove(&block);
     }
-    let blocks: Vec<usize> = g.protected.range(range).copied().collect();
+    let blocks: Vec<usize> = g.protected.range(range.clone()).copied().collect();
     for block in blocks {
         g.protected.remove(&block);
         g.clean.remove(&block);
+    }
+    // (PROJECT ONE) What it shows now is not the pages it was guarded with.
+    let aliased: Vec<usize> = g.aliased.range(range).copied().collect();
+    for block in aliased {
+        g.aliased.remove(&block);
     }
 }
 
@@ -1058,6 +1155,51 @@ mod tests {
             )
         };
         title_memory_remapped(view, 2 * BLOCK);
+    }
+
+    /// (PROJECT ONE) One section shown at two addresses: a write through the
+    /// second is reported at the first, where a copy was guarded.
+    #[test]
+    fn a_write_through_another_view_of_a_page_is_reported_at_the_guarded_one() {
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, FILE_MAP_WRITE, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, UnmapViewOfFile,
+        };
+        // SAFETY: a pagefile section of two blocks, mapped read-write twice.
+        let (section, a, b) = unsafe {
+            let section = CreateFileMappingW(
+                -1isize as _,
+                std::ptr::null(),
+                PAGE_READWRITE,
+                0,
+                (2 * BLOCK) as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            let a = MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 2 * BLOCK).Value as usize;
+            let b = MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 2 * BLOCK).Value as usize;
+            (section as usize, a, b)
+        };
+        assert!(a != 0 && b != 0 && a != b);
+        crate::inplace::title_memory_view(a, 2 * BLOCK, section, 0);
+        crate::inplace::title_memory_view(b, 2 * BLOCK, section, 0);
+        assert_eq!(crate::inplace::pages_of(a + BLOCK).len(), 2);
+        // A copy takes the first view: guarded, then clean.
+        assert!(guard(a, a + 2 * BLOCK).is_some());
+        assert_eq!(guard(a, a + 2 * BLOCK), Some(Vec::new()));
+        // The title writes the second block through the other view.
+        // SAFETY: our own mapping (read-only for a moment: the handler opens it).
+        unsafe { ((b + BLOCK + 8) as *mut u8).write(7) };
+        // SAFETY: the same physical byte, through the first view.
+        assert_eq!(unsafe { ((a + BLOCK + 8) as *const u8).read() }, 7);
+        assert_eq!(guard(a, a + 2 * BLOCK), Some((a / PAGE + 1..a / PAGE + 2).collect()));
+        // SAFETY: our views.
+        unsafe {
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: a as *mut _ });
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: b as *mut _ });
+        }
+        title_memory_remapped(a, 2 * BLOCK);
+        title_memory_remapped(b, 2 * BLOCK);
+        assert!(crate::inplace::pages_of(a).is_empty());
     }
 
     #[test]

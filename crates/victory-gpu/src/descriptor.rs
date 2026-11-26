@@ -61,6 +61,14 @@ pub(crate) struct Heap {
     host: std::sync::OnceLock<Option<host::HostHeap>>,
     #[cfg(windows)]
     pending: std::sync::Mutex<Vec<u32>>,
+    /// (PROJECT ONE) A shader-visible heap in the title's memory: the records
+    /// it copies in as bytes are looked for ([`sync_heaps`]).
+    #[cfg(windows)]
+    placed_visible: bool,
+    /// (PROJECT ONE) The write watch's asking [`sync_heaps`] last took this
+    /// heap's written pages from (0: never).
+    #[cfg(windows)]
+    asked: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) fn heap<'a>(this: This) -> &'a Heap {
@@ -635,6 +643,74 @@ pub(crate) fn texture_replaced(old: &windows::Win32::Graphics::Direct3D12::ID3D1
         .push(windows::core::Interface::as_raw(old) as usize);
 }
 
+/// (PROJECT ONE) Since the start: changed heap pages read, records looked
+/// at, records made again, and the microseconds of [`sync_heaps`].
+#[cfg(windows)]
+pub(crate) static SYNCED: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+
+/// (PROJECT ONE, after fxceless/victory-fork a26859f) Makes the host slots
+/// of the records the title copied into its shader-visible heaps as plain
+/// bytes since the last call: calls to `Create*View` are mirrored as they
+/// come ([`mirror`]), raw CPU copies leave only the pages they wrote
+/// (`crate::watch::writes`, guarding a heap that is view memory). Each
+/// record of a written page whose bytes changed is made again
+/// (`HostHeap::mirror_copied_page`). Before every submission, by the thread
+/// that submits. `VICTORY_HEAP_SYNC=0`: not done, as before.
+#[cfg(windows)]
+pub(crate) fn sync_heaps() {
+    use std::sync::atomic::Ordering::Relaxed;
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_SYNC").is_none_or(|v| v != "0")) {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let (mut pages, mut looked, mut made) = (0u64, 0u64, 0u64);
+    let heaps: Vec<(u64, u64, usize)> = SHADER_HEAPS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut bytes: Vec<u8> = Vec::new();
+    for (start, end, at) in heaps {
+        // SAFETY: registered heaps are live (removed when dropped); the
+        // title drops none while it submits (as `remake_replaced`).
+        let heap = unsafe { &*(at as *const Heap) };
+        let (true, Some(Some(host)), Some(step)) = (heap.placed_visible, heap.host.get(), increment(heap.desc.kind))
+        else {
+            continue;
+        };
+        let step = u64::from(step);
+        let Some((now, written)) = crate::watch::writes(start as usize, end as usize, true) else {
+            continue;
+        };
+        let last = heap.asked.swap(now, Relaxed);
+        // Title slots with host counterparts (a capped host heap has none
+        // for the ones past it).
+        let slots_end = u64::from(heap.desc.count.min(host.count()));
+        for (page, asked) in written {
+            if asked <= last {
+                continue;
+            }
+            let from = (page * crate::watch::PAGE).max(start as usize);
+            let to = ((page + 1) * crate::watch::PAGE).min(end as usize);
+            if from >= to {
+                continue;
+            }
+            // Read through the kernel into a copy: a page the title unmaps
+            // meanwhile fails the read where a read in place would fault.
+            bytes.resize(to - from, 0);
+            if !crate::host::read_into(from as *const u8, &mut bytes) {
+                continue;
+            }
+            pages += 1;
+            let first = (from as u64 - start) / step;
+            let last_slot = ((to as u64 - start).div_ceil(step)).min(slots_end);
+            let (seen, n) = host.mirror_copied_page(first.min(last_slot)..last_slot, (start, step), from, &bytes);
+            looked += seen;
+            made += n;
+        }
+    }
+    for (count, n) in SYNCED.iter().zip([pages, looked, made, started.elapsed().as_micros() as u64]) {
+        count.fetch_add(n, Relaxed);
+    }
+}
+
 /// Makes again the host slots that show a host texture replaced since the
 /// last call. Called before a submission runs, by the thread that submits.
 #[cfg(windows)]
@@ -992,6 +1068,10 @@ pub(crate) extern "system" fn create_heap(
         host: std::sync::OnceLock::new(),
         #[cfg(windows)]
         pending: Default::default(),
+        #[cfg(windows)]
+        placed_visible: placed && visible,
+        #[cfg(windows)]
+        asked: std::sync::atomic::AtomicU64::new(0),
     });
     #[cfg(windows)]
     if visible {
