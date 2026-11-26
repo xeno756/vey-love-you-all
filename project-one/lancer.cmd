@@ -82,14 +82,18 @@ rem                                         sur la carte sont jointes (jamais la
 rem   lancer.cmd series-x rapide relais     les commandes partent vers la carte sans
 rem                                         attendre les precedentes : 54 ms de moins
 rem                                         par image le 26/11, image propre
-rem   lancer.cmd series-x performance       tout ce qui est mesure plus rapide, la
-rem                                         qualite d'image passant apres : maximum
-rem                                         sans son groupe transparence (il fait
-rem                                         disparaitre des parties de personnages),
-rem                                         plus les cartes d'ombres non dessinees
-rem                                         (sans-ombres), le relais et qualite-s.
-rem                                         Mesure le 26/11 : 4,5 images par seconde
-rem                                         contre 3 avec rapide
+rem   lancer.cmd series-x performance       LA version a essayer : tout ce qui est
+rem                                         mesure plus rapide, la qualite d'image
+rem                                         passant apres. maximum sans son groupe
+rem                                         transparence, les cartes d'ombres non
+rem                                         dessinees, qualite-s, et depuis le 26/11
+rem                                         a 9 h : precis, relais:2, vitesse:3,
+rem                                         fenetres, le brouillard collecte en
+rem                                         moins, les textures creees 80 ms par
+rem                                         image au plus. 8 images par seconde sur
+rem                                         les plans ou rapide en donne 3
+rem   lancer.cmd series-x performance-sur   le reglage qui a tenu tous ses
+rem                                         lancements : 5 images par seconde
 rem   lancer.cmd series-x sans-ombres       les cartes d'ombres ne sont plus dessinees
 rem                                         (sans-dessins:<groupe> pour un groupe de
 rem                                         ..\victory-profils\dessins-<groupe>.txt)
@@ -133,6 +137,7 @@ if "%~2"=="" goto args_done
 if /i "%~2"=="rapide" call :rapide
 if /i "%~2"=="maximum" call :maximum
 if /i "%~2"=="performance" call :performance
+if /i "%~2"=="performance-sur" call :performance_sure
 if /i "%~2"=="sans-ombres" call :without_draws "ombres"
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
@@ -281,6 +286,7 @@ if defined PRECIS echo   attentes: precises, une texture n'attend que la soumiss
 if defined FENETRES echo   bornage : les dessins indirects qui se suivent sont bornes par fenetres, en une passe
 if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
 if "%VICTORY_TEXTURE_GATE_S%"=="0" echo   arrivee : textures a l'allure ordinaire, sans rattrapage
+if defined VICTORY_TEXTURE_SPAN_MS echo   chargement : au plus %VICTORY_TEXTURE_SPAN_MS% ms par image passes a creer des textures
 if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
@@ -393,7 +399,36 @@ rem Le groupe transparence n'y est plus depuis ce jour : sans la passe qui
 rem compose les matieres transparentes, ce qui passe par elle n'arrive pas a
 rem l'image, et un personnage proche de la camera y passe (haut du corps absent
 rem sur une capture d'ecran du 26/11 ; cause probable, a confirmer en jeu).
+rem Depuis le 26/11 a 9 h, performance reunit TOUT ce qui a ete mesure plus
+rem rapide ce jour-la (une seule version a essayer) : en plus, les attentes
+rem precises et le relais au niveau 2, la recopie limitee a ce que le jeu
+rem relit et les passes de controle jointes (vitesse:3), le bornage par
+rem fenetres, la collecte du brouillard laissee de cote, et la creation des
+rem textures bornee a 80 ms par image. Mesure a 8 h 25 sur les memes plans :
+rem 7,8 a 8,6 images par seconde contre 4,2 avec le profil du matin. Ce
+rem lancement a perdu la carte apres 90 s (un objet libere encore lu) : le
+rem runtime garde depuis les objets liberes une seconde de plus
+rem (VICTORY_RETIRE_MS). Ni cette correction ni l'image ne sont verifiees.
+rem performance-sur : le reglage qui a tenu ses lancements (profil du matin,
+rem attentes precises, relais au niveau 2 : 5 images par seconde).
 :performance
+call :performance_base
+call :relay 2
+call :precise
+call :vitesse 3
+call :windows
+call :without "volumetrie-collecte"
+if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=80"
+goto :eof
+
+:performance_sure
+call :performance_base
+set "PROFIL=performance-sur"
+call :relay 2
+call :precise
+goto :eof
+
+:performance_base
 set "PROFIL=performance"
 call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
@@ -401,7 +436,6 @@ call :card_copies
 call :steady_textures
 call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+eclairage-indirect"
 call :without_draws "ombres"
-call :relay
 call :quality_s
 goto :eof
 
