@@ -3,6 +3,13 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 13 h** : le monde s'affiche (lancement de l'utilisateur à 11 h 12, 5,6 images
+par seconde). Fait depuis, non vérifié en jeu : visages noirs (`84fe251`), ombres du soleil
+proches (`b3dd536`), essai `attentes-textures` (`3018756`). Tout est dans
+[docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md). Point
+de restauration : `project-one/avant-moteur-26-11`. Suite : les lancements de l'utilisateur,
+puis la fusion de l'amont fxceless (98 commits).
+
 **Au 26/11 à 11 h 15** : la version à essayer est `meilleure.cmd series-x performance`
 (branche fusionnée, `2cf979c`), avec le brouillard rendu de nouveau : sans lui le monde
 était noir de 8 h 25 à 10 h 38, et les vitesses mesurées alors ne comptent pas. Le monde

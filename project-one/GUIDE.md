@@ -16,7 +16,7 @@ protection.** You need your own copy of the game. Do not ask for game files here
 Measured on that PC on 2026-11-25 (profile `rapide`, opening scene, 300 s runs):
 
 - The world loads in about a minute, and its textures in about two more.
-- About **3 frames per second** (median frame 320 to 330 ms). Not playable yet.
+- About **3 frames per second** (median frame 320 to 330 ms). Not playable yet. On 26/11 with `performance`: 5.6 frames a second, median 175 ms, the world visible.
 - The card is sometimes lost (`device removed`): 2 runs out of 8 that evening.
 - Parts of the picture show blue mosaics, which vary from run to run.
 
@@ -62,7 +62,10 @@ The launcher speaks French. Its main options:
 | `sans:<group>` | leaves out a group of compute effects (never a draw) |
 | `sans-dessins:<group>` | leaves out the DRAWS of a group of passes (`..\victory-profils\dessins-<group>.txt`): it takes geometry away, so keep it for passes the picture can do without |
 | `sans-ombres` | `sans-dessins:ombres`: the shadow maps are no longer drawn; the world stays lit, without cast shadows |
-| `performance` | everything measured faster that also held, picture quality second: `maximum` without its `transparence` group, `sans-ombres`, `relais`, the title's own low settings, `fenetres`, 256 lists in flight. The fog is rendered: leaving its gather out turned the world black (26/11, 8 h 25 to 10 h 38), so the 6 frames a second measured then do not count. Not yet measured with the fog back |
+| `performance` | everything measured faster that also held, picture quality second: `maximum` without its `transparence` group, the sun's nearest shadow cascade only, `relais`, the title's own low settings, `fenetres`, 256 lists in flight. The fog is rendered: leaving its gather out turned the world black (26/11, 8 h 25 to 10 h 38). Measured on 26/11 at 11 h 12 with no shadow map at all: 5.6 frames a second, median 175 ms, world visible |
+| `ultra-bas`, `equilibre` | profile A: `performance` with no shadow map (the sun goes through the walls); profile C: two shadow cascades and `textures:2` (not measured) |
+| `ombres-soleil:N` | the sun's shadows for its N nearest cascades only |
+| `attentes-textures` | trial: a texture's upload buffer waits only for the submission still reading it (half of `precis`, never run alone) |
 | `prereglage:bas`, `extreme`, `diagnostic`, `safemode` | the title takes its SafeMode preset, then some settings are lowered before it applies them (qualities at Low, no motion blur, lower detail and grass; `extreme` also fewer pedestrians and vehicles). `prereglage-base:jeu` keeps the title's own preset. Off by default, never run yet: the log says what was changed |
 | `precis relais:2`, `vitesse:2`, `vitesse:3` | faster (up to 8 frames a second) but they lose the card: 10 runs of 15 on 26/11. Do not use them to play |
 | `traces` | diagnostics build: on a card loss, the log names the last commands |

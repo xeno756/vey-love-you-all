@@ -282,6 +282,14 @@ pas un monde visible. Les derniers lancements avec le monde visible sont ceux de
 brouillard coûtait 18,7 ms de carte par image le 25/11 ; ajouté aux 166 ms de la série H, cela
 donnerait de l'ordre de 5,4 images par seconde. C'est un calcul, pas une mesure.
 
+**Mesuré (11 h 12, lancement de l'utilisateur, brouillard rendu, monde visible)** :
+`performance`, 1 102 images après 120 s de monde : **5,64 images par seconde**, médiane
+175 ms, 95 % sous 217 ms, 99 % sous 239 ms ; préparation 58 ms, carte 109 ms, recopie 27 ms ;
+13,8 attentes de la carte par image (119,6 ms), dont 11,8 pour un tampon d'envoi de texture
+encore lu ; carte sans travail 80 ms par image. Aucune perte de carte en 300 s. Le
+brouillard coûte donc environ 9 ms de médiane (175 contre 166 ms en série H). Détail :
+[docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md).
+
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |

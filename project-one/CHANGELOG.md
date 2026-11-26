@@ -4,6 +4,27 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (13 h) — le monde s'affiche ; visages noirs, soleil à travers les murs, attentes de la carte
+
+Détail : [docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md).
+
+- **Le monde est visible** depuis que le brouillard est rendu : lancement de l'utilisateur
+  à 11 h 12, 5,6 images par seconde, médiane 175 ms, 300 s sans perte de carte.
+- **Visages noirs** (déjà vus le 25/11) : deux défauts du chargement des données, corrigés par
+  notre amont fxceless et repris ici (`84fe251`). Les lectures DirectStorage vers des pages
+  physiques ne partent plus avant que le jeu n'ait rempli leur liste de pages, et les textures
+  sous une lecture terminée sont réexaminées. **Non vérifié en jeu.**
+- **Le soleil traversait les murs** (aucune carte d'ombres) : `performance` dessine de nouveau
+  la cascade d'ombres la plus proche (`b3dd536`). Profils A `ultra-bas`, B `performance`,
+  C `equilibre`. Non mesuré.
+- **Essai** `attentes-textures` (`3018756`, éteint par défaut) : 11,8 des 13,8 attentes de la
+  carte par image venaient du tampon d'envoi d'une texture ; il n'attend plus que la
+  soumission qui le lit. À mesurer en deux lancements.
+- Piste `ifeyz/champion4` : introuvable en public ; ses variables viennent des forks
+  7900XTX et Belobug ; aucune reprise telle quelle.
+- Notre amont fxceless a 98 commits d'avance (images justes dans la première pièce, visages,
+  plusieurs gains mesurés) : fusion à faire en phase à part.
+
 ## 26/11/2026 (11 h 15) — le monde noir : le brouillard rendu de nouveau ; préréglage SafeMode
 
 Détail : [FINDINGS.md](FINDINGS.md), « Le monde noir ».
