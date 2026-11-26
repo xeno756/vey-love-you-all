@@ -2838,6 +2838,7 @@ fn blocked_by(
                     if touches_other(written, by_copy, copy, from, to) || touches(immed, from, to) {
                         if count {
                             LATE_STATS[18].fetch_add(1, Ordering::Relaxed);
+                            note_held_refresh(shadow, (from, to), by_copy, immed);
                         }
                         return Some(WHY_READ);
                     }
@@ -2861,6 +2862,80 @@ fn blocked_by(
         }
     }
     None
+}
+
+/// (PROJECT ONE) The refreshes a flight's shader writes held back (the
+/// frame line's "another copy"), by what was refreshed and what it waited
+/// for: the copy (start, bytes with its kind in the top bits), the bytes
+/// refreshed, the writer's kind, start and bytes. With every other wait
+/// gone these were what the submitting thread still stood for (run of
+/// 26/11, 8:25: 2 to 3 a frame, 44 to 71 ms), and nothing named them.
+type HeldRefreshes = std::collections::HashMap<[u64; 6], u64>;
+static HELD_REFRESHES: Mutex<Option<HeldRefreshes>> = Mutex::new(None);
+
+fn note_held_refresh(
+    shadow: &crate::shadow::Shadow,
+    (from, to): (usize, usize),
+    by_copy: &[(usize, usize, usize)],
+    immed: &[(usize, usize)],
+) {
+    let copy = std::ptr::from_ref(shadow) as usize;
+    let (start, len, window, card) = shadow.what();
+    // What it waits for: another copy's shader writes (1), a read-back
+    // (0), or a bottom-of-pipe write (2).
+    let writer = by_copy
+        .iter()
+        .find(|&&(owner, a, b)| owner != copy && a < to && b > from)
+        .map(|&(owner, a, b)| (u64::from(owner != 0), a, b))
+        .or_else(|| immed.iter().find(|r| r.0 < to && r.1 > from).map(|&(a, b)| (2, a, b)));
+    let Some((kind, a, b)) = writer else {
+        return;
+    };
+    let key = [
+        start,
+        len | (u64::from(window) << 62) | (u64::from(card) << 63),
+        (to - from) as u64,
+        kind,
+        a as u64,
+        (b - a) as u64,
+    ];
+    let mut held = HELD_REFRESHES.lock().unwrap_or_else(|e| e.into_inner());
+    let held = held.get_or_insert_with(Default::default);
+    if held.len() < 512 || held.contains_key(&key) {
+        *held.entry(key).or_insert(0) += 1;
+    }
+}
+
+/// [`HELD_REFRESHES`]' most frequent, for the log.
+fn held_refreshes_line() -> Option<String> {
+    let held = HELD_REFRESHES.lock().unwrap_or_else(|e| e.into_inner());
+    let held = held.as_ref().filter(|h| !h.is_empty())?;
+    let mut all: Vec<(&[u64; 6], &u64)> = held.iter().collect();
+    all.sort_unstable_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let total: u64 = all.iter().map(|e| *e.1).sum();
+    let parts: Vec<String> = all
+        .iter()
+        .take(8)
+        .map(|(k, n)| {
+            let (len, window, card) = (k[1] & ((1 << 62) - 1), k[1] >> 62 & 1 == 1, k[1] >> 63 == 1);
+            format!(
+                "{n}x {} bytes of the {} {:#x}+{:#x}{} behind {} {:#x}+{:#x}",
+                k[2],
+                if window { "window" } else { "buffer copy" },
+                k[0],
+                len,
+                if card { " (in the card's memory)" } else { "" },
+                ["a read-back of", "another copy's shader writes to", "a bottom-of-pipe write to"][k[3].min(2) as usize],
+                k[4],
+                k[5],
+            )
+        })
+        .collect();
+    Some(format!(
+        "refreshes held back by writes in the air, since the start: {total} in {} kinds; the most frequent: {}",
+        all.len(),
+        parts.join("; ")
+    ))
 }
 
 /// `VICTORY_SYNC_PRECISE`, after a submission's waits: nothing `runs`
@@ -3373,6 +3448,14 @@ fn late_line(frames: f64) {
             .map(|&(why, name)| format!("{name} {:.1} long, longest {:.1} ms", long[why], most[why]))
             .collect();
         tracing::info!("settles of 8 ms or more per frame, by what settled: {}", parts.join("; "));
+        // (PROJECT ONE) Every sixth line (about half a minute): what the
+        // refreshes held back waited for.
+        static LINES: AtomicU32 = AtomicU32::new(0);
+        if LINES.fetch_add(1, Ordering::Relaxed) % 6 == 5
+            && let Some(text) = held_refreshes_line()
+        {
+            tracing::info!("{text}");
+        }
     }
     if relay() {
         let r: Vec<f64> = RELAY_STATS.iter().map(|r| r.swap(0, Ordering::Relaxed) as f64 / frames).collect();

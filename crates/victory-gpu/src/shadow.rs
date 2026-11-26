@@ -1800,6 +1800,13 @@ impl Shadow {
         self.id
     }
 
+    /// (PROJECT ONE) For a log line: the title memory the copy is of (start,
+    /// bytes), whether it is a window outside buffers, and whether it is
+    /// kept in the card's memory.
+    pub(crate) fn what(&self) -> (u64, u64, bool, bool) {
+        (self.start, self.len, self.window, self.card.is_some())
+    }
+
     /// Offset of a title address from the buffer's start.
     pub(crate) fn offset(&self, address: u64) -> u64 {
         address - self.start + self.place.as_ref().map_or(0, |place| place.1)
