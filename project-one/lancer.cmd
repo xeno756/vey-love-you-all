@@ -87,11 +87,9 @@ rem                                         mesure plus rapide, la qualite d'ima
 rem                                         passant apres. maximum sans son groupe
 rem                                         transparence, les cartes d'ombres non
 rem                                         dessinees, qualite-s, relais, 256 listes
-rem                                         en vol, fenetres, le brouillard collecte
-rem                                         en moins, les textures creees 80 ms par
-rem                                         image au plus. 6 images par seconde le
-rem                                         26/11, 300 s sans perte deux fois, la
-rem                                         ou rapide en donne 3
+rem                                         en vol, fenetres, les textures creees 80
+rem                                         ms par image au plus. Le brouillard est
+rem                                         rendu (sans lui le monde est noir)
 rem   lancer.cmd series-x performance-sur   le profil du matin seul : 4,5 images
 rem                                         par seconde
 rem   lancer.cmd series-x sans-ombres       les cartes d'ombres ne sont plus dessinees
@@ -403,10 +401,16 @@ rem performance reunit ce qui a ete mesure plus rapide ET a tenu (une seule
 rem version a essayer) : en plus du profil du matin (relais au niveau 1), 256
 rem listes en vol, les fenetres de memoire qui n'attendent plus les ecritures
 rem des tampons qu'elles recouvrent, la comparaison des copies par la carte en
-rem groupes, le bornage par fenetres, la collecte du brouillard laissee de
-rem cote, et la creation des textures bornee a 80 ms par image. Mesure le
-rem 26/11 a 10 h 31 et 10 h 38 (Discord ouvert) : 6,1 et 6,0 images par
+rem groupes, le bornage par fenetres et la creation des textures bornee a 80
+rem ms par image. Mesure le 26/11 a 10 h 31 et 10 h 38 (Discord ouvert), avec
+rem en plus la collecte du brouillard laissee de cote : 6,1 et 6,0 images par
 rem seconde, 95 %% des images sous 190 et 194 ms, 300 s sans perte deux fois.
+rem Le brouillard est rendu depuis le 26/11 a 11 h : sans sa collecte, la
+rem passe qui l'applique lit des textures que rien n'ecrit et le monde
+rem devient noir (quelques couleurs seulement), ce que l'utilisateur a vu
+rem depuis le lancement de 8 h 25. Cout attendu : jusqu'a 18,7 ms de carte
+rem par image (mesure du 25/11), alors que la carte n'etait occupee qu'a
+rem 45 a 59 %% avec performance.
 rem PAS le relais au niveau 2 ni les attentes precises (precis) : 10 pertes de
 rem carte sur 15 lancements avec eux le 26/11, plus vite (8 images par
 rem seconde) mais pas jouable. PAS vitesse:2 ni vitesse:3 non plus : ce que les
@@ -416,7 +420,6 @@ rem performance-sur : le profil du matin seul (4,5 images par seconde).
 call :performance_base
 call :relay
 call :windows
-call :without "volumetrie-collecte"
 if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=80"
 if not defined VICTORY_LATE_WAIT_LISTS set "VICTORY_LATE_WAIT_LISTS=256"
 if not defined VICTORY_WINDOW_PAST_BUFFER_WRITES set "VICTORY_WINDOW_PAST_BUFFER_WRITES=1"
