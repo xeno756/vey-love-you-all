@@ -220,6 +220,14 @@ Tests ajoutés (5) :
 En jeu, par mes propres lancements du banc : voir [PERF_JOURNAL.md](PERF_JOURNAL.md),
 « Mes lancements ».
 
+### Personnages, écritures du noyau, cadence (26/11, 15 h, `0b3af3b`)
+
+235 tests de `victory-gpu` (3 ignorés), 116 de `victory-hle`, 45 du chargeur, 2 de l'application ;
+Clippy sans avertissement. Nouveau : `resource::tests::a_characters_texture_keeps_more_of_its_levels`
+(sur la carte : une texture de 2048 × 1024 lue par un personnage passe de 256 × 128 à 1024 × 512,
+une seule fois). Non couverts : la course des écritures du noyau (il faudrait deux fils et deux
+vues en même temps), la cadence (lue une fois par processus).
+
 ### Murs : descripteurs copiés, vues multiples d'une page (26/11, 14 h, `a5b2dd3`)
 
 234 tests de `victory-gpu` réussis (3 ignorés), 116 de `victory-hle`, 45 du chargeur ; Clippy

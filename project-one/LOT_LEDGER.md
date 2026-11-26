@@ -25,6 +25,9 @@ lancements étaient ceux de l'utilisateur. La version à lui donner est une seul
 | 10 soleil à travers les murs | FAIT, NON MESURÉ | `b3dd536` : cascade proche dans `performance`, profils A/B/C. |
 | 11 attentes de la carte (tampons d'envoi) | FAIT, MESURÉ (un lancement) | `3018756`, dans `performance` depuis `bb988d4` : 6,43 images par seconde contre 5,25, médiane 153 contre 188 ms, 300 s sans perte. |
 | 13 murs manquants | FAIT, VÉRIFIÉ (une capture, 13 h 47) | `a5b2dd3`. Prix : 3,8 contre 6,7 images par seconde au même moment du monde (BLOCKERS 39). |
+| 15 plantage title+0x4dbd74d | FAIT, NON VÉRIFIÉ | `0b3af3b` (écritures du noyau gardes ouvertes). |
+| 16 personnages plus nets | FAIT, NON VÉRIFIÉ | `0b3af3b`, mot `personnages`. |
+| 17 limiteurs d'images, lancer de rayons | ÉTUDIÉ | Doc 13 : aucun plafond ne joue dans le monde ; rayons déjà éteints. |
 | 14 coût du miroir des descripteurs | EN COURS | `762c7b8` compte les sortes d'enregistrements refaits ; à traiter après le prochain lancement. |
 | 12 fusion de l'amont fxceless | À FAIRE | 98 commits, 35 blocs en conflit sur la branche stable (BLOCKERS 37). |
 | 8 préréglage SafeMode abaissé | FAIT, JAMAIS LANCÉ | `2cf979c`, option `prereglage:bas|extreme|diagnostic|safemode`. 11 tests hors jeu. Positions des champs non vérifiées en jeu (BLOCKERS 35). |
