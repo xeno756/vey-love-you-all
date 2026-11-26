@@ -488,6 +488,22 @@ pub(crate) fn remapped(at: usize, len: usize) {
 /// since the start.
 pub(crate) static COPIED_TABLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// (PROJECT ONE) Records the title copied in as bytes and made again, by
+/// kind: constant buffer views, other buffer views, views of placed memory,
+/// other views, no view of ours (since the start).
+pub(crate) static COPIED_KINDS: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+
+/// (PROJECT ONE) Slots written with a view equal to the one they show, kept
+/// as they are ([`HostHeap::mirror`]), since the start.
+pub(crate) static SAME_VIEWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) `VICTORY_SAME_VIEWS=0`: a slot written with a view equal to
+/// the one it shows is made again all the same.
+fn same_views() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SAME_VIEWS").is_none_or(|v| v != "0"))
+}
+
 /// (PROJECT ONE) `VICTORY_HEAP_SYNC_TABLES=1`: records copied into slots
 /// draws read through tables lately are made too.
 fn sync_tables() -> bool {
@@ -2011,7 +2027,16 @@ impl HostHeap {
             }
         }
         for &(index, handle) in &due {
-            self.mirror(index, handle, false);
+            // By kind, for the log: constant buffer views, other buffer
+            // views, views of placed memory, other views, nothing.
+            let kind = match self.mirror(index, handle, false) {
+                Some(super::View::Constant(..)) => 0,
+                Some(super::View::Placed(..)) => 2,
+                Some(ref v) if v.is_buffer() => 1,
+                Some(_) => 3,
+                None => 4,
+            };
+            COPIED_KINDS[kind].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         (looked, due.len() as u64)
     }
@@ -2417,6 +2442,27 @@ impl HostHeap {
             return Some(view);
         };
         if taken || made.keys[host as usize] != key {
+            // (PROJECT ONE) The same view under a new record: the title makes
+            // its views again (a new number and generation each time) and
+            // copies the records into its heap as bytes (`super::sync_heaps`).
+            // Where the slot was made from a view equal to this one it
+            // already shows what this one says: it keeps it, under the new
+            // key. Made null and noted written instead, a buffer view's slot
+            // waited for the pass over buffer views to make it and bring its
+            // copy up to date again: 58,000 records a frame in the run of
+            // 26/11 13:47, the pass 19-28 ms a frame before and 118-262
+            // after. `VICTORY_SAME_VIEWS=0`: as before.
+            let old = made.keys[host as usize];
+            if !taken
+                && !for_draw
+                && old != 0
+                && same_views()
+                && view_at(old as u32, (old >> 32) as u32).is_some_and(|old| old == view)
+            {
+                made.keys[host as usize] = key;
+                SAME_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Some(view);
+            }
             // Views of other textures in the memory this one describes
             // are stale: their host slots read nothing from here on, and
             // let go of the host copies they held.

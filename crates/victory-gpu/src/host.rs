@@ -3671,11 +3671,14 @@ fn late_line(frames: f64) {
     }
     {
         // (PROJECT ONE) VICTORY_HEAP_SYNC.
-        static SEEN: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+        static SEEN: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
         let now: Vec<u64> = crate::descriptor::SYNCED
             .iter()
             .map(|c| c.load(Ordering::Relaxed))
-            .chain([crate::descriptor::host::COPIED_TABLED.load(Ordering::Relaxed)])
+            .chain([
+                crate::descriptor::host::COPIED_TABLED.load(Ordering::Relaxed),
+                crate::descriptor::host::SAME_VIEWS.load(Ordering::Relaxed),
+            ])
             .collect();
         let d: Vec<f64> =
             now.iter().zip(SEEN.iter()).map(|(&n, s)| (n - s.swap(n, Ordering::Relaxed)) as f64 / frames).collect();
@@ -3683,12 +3686,28 @@ fn late_line(frames: f64) {
             tracing::info!(
                 "descriptor records the title copied into its heaps as bytes, per frame (VICTORY_HEAP_SYNC): \
                  {:.1} changed heap pages read, {:.0} records looked at, {:.1} made again (empty or stale before), \
-                 {:.0} left to the draws reading them through tables; {:.1} ms",
+                 {:.0} left to the draws reading them through tables; {:.1} ms; slots written with the view they \
+                 show already, kept (VICTORY_SAME_VIEWS): {:.0}; made again by kind: {}",
                 d[0],
                 d[1],
                 d[2],
                 d[4],
-                d[3] / 1000.0
+                d[3] / 1000.0,
+                d[5],
+                {
+                    static KINDS: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+                    let names = ["constant buffer views", "buffer views", "placed memory views", "texture views", "nothing"];
+                    crate::descriptor::host::COPIED_KINDS
+                        .iter()
+                        .zip(KINDS.iter())
+                        .zip(names)
+                        .map(|((c, s), name)| {
+                            let n = c.load(Ordering::Relaxed);
+                            format!("{:.0} {name}", (n - s.swap(n, Ordering::Relaxed)) as f64 / frames)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
             );
         }
     }
