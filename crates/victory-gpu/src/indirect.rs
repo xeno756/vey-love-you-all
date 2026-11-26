@@ -28,7 +28,7 @@ use windows::core::s;
 use crate::host::{HostList, host, transition};
 
 const SOURCE: &str = r#"
-#define RS "RootConstants(num32BitConstants=8, b0), SRV(t0), SRV(t1), UAV(u0), UAV(u1)"
+#define RS "RootConstants(num32BitConstants=6, b0), SRV(t0), SRV(t1), UAV(u0), UAV(u1)"
 cbuffer Record : register(b0) {
     uint kind;
     uint stride;
@@ -37,16 +37,9 @@ cbuffer Record : register(b0) {
     // Bit 0: a count buffer bounds the records. Bit 1: the records are a
     // window clamped ahead of their draws: one that asks for more than can
     // run is left empty and costs nothing. Bit 2: one dispatch, written as
-    // SPLIT records of at most 65,535 groups in x each. Bit 3 (PROJECT
-    // ONE): mesh records for a mesh pipeline run as compute, each written
-    // as the arguments of its compute dispatch (at 0) and of its draw (at
-    // 16), as MESH_SOURCE writes them for one record.
+    // SPLIT records of at most 65,535 groups in x each.
     uint has_count;
     uint count_offset;
-    // With bit 3: the groups whose records fit the record buffer, and the
-    // vertices the vertex shader draws for a group.
-    uint most;
-    uint group_vertices;
 };
 ByteAddressBuffer src_args : register(t0);
 ByteAddressBuffer count_buf : register(t1);
@@ -147,12 +140,6 @@ void main(uint3 id : SV_DispatchThreadID) {
                 uint x = groups.x > before ? min(groups.x - before, 65535u) : 0u;
                 dst_args.Store3(dst_at + part * 12u, uint3(x, groups.yz));
             }
-            return;
-        }
-        if ((has_count & 8u) != 0) {
-            uint n = (groups.y == 0 || groups.z == 0) ? 0 : min(groups.x, most);
-            dst_args.Store4(dst_at, uint4(n, 1, 1, 0));
-            dst_args.Store4(dst_at + 16, uint4(n * group_vertices, n == 0 ? 0 : 1, 0, 0));
             return;
         }
         dst_args.Store3(dst_at, groups);
@@ -286,7 +273,7 @@ pub(crate) fn bound(
     let bytes = validate_layout(spec, src.1, count.map(|(_, off)| off))?;
     let (c, budget, dst) = (clamp()?, list.budget()?, list.indirect_scratch(bytes)?);
     let waits = clamp_waits(list, own);
-    let recorded = record_clamp_waits(c, &list.list, &dst, budget, src, count, spec, 0, (0, 0), waits);
+    let recorded = record_clamp_waits(c, &list.list, &dst, budget, src, count, spec, 0, waits);
     clamp_recorded(list, waits, recorded);
     recorded.then_some(dst)
 }
@@ -371,30 +358,16 @@ fn clamp_recorded(list: &HostList, Waits { before, scoped, .. }: Waits, recorded
 /// 4294967295", 43 to 153 such records a frame). Here a record that asks
 /// for more than can run is left empty and charges nothing; a record
 /// clamped alone is clamped and charged as before.
-///
-/// (PROJECT ONE) `mesh`: for mesh records drawn by a mesh pipeline run as
-/// compute whose record buffer holds that many groups and whose vertex
-/// shader draws that many vertices a group, each record is written as the
-/// arguments of its compute dispatch (at 0) and of its draw (at
-/// [`MESH_DRAW_ARGS`]), as [`mesh_args`] makes them for one record: the
-/// draws of the window then need no pass of their own. The records must
-/// be [`MESH_WINDOW_STEP`] bytes apart at least.
 pub(crate) fn bound_ahead(
     list: &HostList,
     src: (&ID3D12Resource, u64),
     spec: (u32, u32, u32),
     own: bool,
-    mesh: Option<(u32, u32)>,
 ) -> Option<ID3D12Resource> {
     let bytes = validate_layout(spec, src.1, None)?;
-    if mesh.is_some() && (spec.0 != 10 || u64::from(spec.1) < MESH_WINDOW_STEP) {
-        return None;
-    }
     let (c, budget, dst) = (clamp()?, list.budget()?, list.indirect_scratch(bytes)?);
     let waits = clamp_waits(list, own);
-    let how = AHEAD | if mesh.is_some() { WITH_ARGUMENTS } else { 0 };
-    let recorded =
-        record_clamp_waits(c, &list.list, &dst, budget, src, None, spec, how, mesh.unwrap_or((0, 0)), waits);
+    let recorded = record_clamp_waits(c, &list.list, &dst, budget, src, None, spec, AHEAD, waits);
     clamp_recorded(list, waits, recorded);
     recorded.then_some(dst)
 }
@@ -419,7 +392,7 @@ pub(crate) fn bound_split(list: &HostList, src: (&ID3D12Resource, u64), own: boo
     let (c, budget) = (clamp()?, list.budget()?);
     let dst = list.indirect_scratch(u64::from(SPLIT) * PART_BYTES)?;
     let waits = clamp_waits(list, own);
-    let recorded = record_clamp_waits(c, &list.list, &dst, budget, src, None, spec, IN_PARTS, (0, 0), waits);
+    let recorded = record_clamp_waits(c, &list.list, &dst, budget, src, None, spec, IN_PARTS, waits);
     clamp_recorded(list, waits, recorded);
     recorded.then_some(dst)
 }
@@ -427,12 +400,6 @@ pub(crate) fn bound_split(list: &HostList, src: (&ID3D12Resource, u64), own: boo
 /// Bits of the clamp's `has_count`.
 const AHEAD: u32 = 2;
 const IN_PARTS: u32 = 4;
-const WITH_ARGUMENTS: u32 = 8;
-
-/// (PROJECT ONE) The least bytes between the records of a window clamped
-/// with the arguments of a mesh pipeline run as compute ([`bound_ahead`]):
-/// a dispatch's three words at 0 and a draw's four at [`MESH_DRAW_ARGS`].
-pub(crate) const MESH_WINDOW_STEP: u64 = MESH_DRAW_ARGS + 16;
 
 #[cfg(test)]
 fn record_clamp(
@@ -462,7 +429,7 @@ fn record_clamp_as(
     spec: (u32, u32, u32),
     how: u32,
 ) -> bool {
-    record_clamp_waits(c, l, dst, budget, src, count, spec, how, (0, 0), Waits::ALL)
+    record_clamp_waits(c, l, dst, budget, src, count, spec, how, Waits::ALL)
 }
 
 /// [`record_clamp_as`], with the waits for every earlier shader write
@@ -477,7 +444,6 @@ fn record_clamp_waits(
     count: Option<(&ID3D12Resource, u64)>,
     (kind, stride, records): (u32, u32, u32),
     how: u32,
-    (most, group_vertices): (u32, u32),
     Waits { before, after, scoped }: Waits,
 ) -> bool {
     let Some(bytes) = validate_layout(
@@ -523,7 +489,7 @@ fn record_clamp_waits(
         }
         None => (src_gpu, 0u32, 0u32),
     };
-    let constants = [kind, stride, records, args_offset, has_count | how, count_offset, most, group_vertices];
+    let constants = [kind, stride, records, args_offset, has_count | how, count_offset];
     // SAFETY: an open list; our root signature and pipeline; live source,
     // count, scratch destination, and budget buffers. `src` and `count` stay
     // in `COMMON` / `GENERIC_READ` via implicit buffer promotion while `dst`
@@ -569,7 +535,7 @@ fn record_clamp_waits(
         if records > 0 {
             l.SetComputeRootSignature(&c.root);
             l.SetPipelineState(&c.pso);
-            l.SetComputeRoot32BitConstants(0, 8, constants.as_ptr().cast(), 0);
+            l.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
             l.SetComputeRootShaderResourceView(1, src_gpu);
             l.SetComputeRootShaderResourceView(2, count_gpu);
             l.SetComputeRootUnorderedAccessView(3, dst_gpu);
@@ -1446,96 +1412,6 @@ void main() {
                 assert_eq!(largest, u32::MAX);
             }
         }
-    }
-
-    /// (PROJECT ONE) A window of mesh records clamped for a mesh pipeline
-    /// run as compute: each record comes out as the arguments of its
-    /// compute dispatch and of its draw, as [`MESH_SOURCE`] makes them for
-    /// one record: the groups asked, those the record buffer holds if more
-    /// are asked, none for an empty record or a slot the title has not
-    /// filled; and the filled ones are charged as in any window.
-    #[test]
-    fn warp_window_for_a_mesh_pipeline_run_as_compute_holds_its_arguments() {
-        let Some(mut warp) = WarpHarness::new() else {
-            return;
-        };
-        const KIND_MESH: u32 = 10;
-        const STRIDE: u32 = MESH_WINDOW_STEP as u32;
-        const RECORDS: u32 = 16;
-        const MOST: u32 = 100;
-        const GROUP_VERTICES: u32 = 384;
-        // Groups asked, with y and z: 5, none, more than fit, an empty one.
-        let filled = [[5u32, 1, 1], [0, 1, 1], [519, 1, 1], [7, 0, 1]];
-        let total = (STRIDE * RECORDS) as usize;
-        let mut src = vec![0xffu8; total];
-        for (i, record) in filled.into_iter().enumerate() {
-            for (w, word) in record.into_iter().enumerate() {
-                let at = i * STRIDE as usize + w * 4;
-                src[at..at + 4].copy_from_slice(&word.to_le_bytes());
-            }
-        }
-        let (src_buf, src_ptr, _) = warp.shared_buffer(total as u64);
-        let (_budget_buf, budget_ptr, budget_gpu) = warp.shared_buffer(256);
-        let (readback_buf, readback_ptr, _) = warp.shared_buffer(total as u64);
-        let dst_buf = warp.default_uav(total as u64);
-        // SAFETY: mapped buffers of these sizes.
-        unsafe {
-            std::ptr::copy_nonoverlapping(src.as_ptr(), src_ptr, total);
-            std::ptr::write_bytes(budget_ptr, 0, 256);
-            std::ptr::write_bytes(readback_ptr, 0xee, total);
-        }
-        assert!(record_clamp_waits(
-            &warp.clamp,
-            &warp.list,
-            &dst_buf,
-            budget_gpu,
-            (&src_buf, 0),
-            None,
-            (KIND_MESH, STRIDE, RECORDS),
-            AHEAD | WITH_ARGUMENTS,
-            (MOST, GROUP_VERTICES),
-            Waits::ALL,
-        ));
-        done_on(&warp.list, &dst_buf);
-        // SAFETY: an open list; the scratch buffer is copied for the check.
-        unsafe {
-            warp.list.ResourceBarrier(&[transition(
-                &dst_buf,
-                D3D12_RESOURCE_STATE_COMMON,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-            )]);
-            warp.list.CopyBufferRegion(&readback_buf, 0, &dst_buf, 0, total as u64);
-            warp.list.ResourceBarrier(&[transition(
-                &dst_buf,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                D3D12_RESOURCE_STATE_COMMON,
-            )]);
-        }
-        warp.submit_and_wait();
-        // SAFETY: the work is done; mapped buffers.
-        let (spent, out) = unsafe {
-            (
-                (budget_ptr as *const u32).read_volatile(),
-                std::slice::from_raw_parts(readback_ptr.cast::<u32>().cast_const(), total / 4).to_vec(),
-            )
-        };
-        let words = (STRIDE / 4) as usize;
-        for (i, groups) in [5u32, 0, MOST, 0].into_iter().enumerate() {
-            assert_eq!(
-                out[i * words..i * words + 8],
-                [groups, 1, 1, 0, groups * GROUP_VERTICES, u32::from(groups > 0), 0, 0],
-                "record {i}: a dispatch at 0 and a draw at {MESH_DRAW_ARGS}"
-            );
-        }
-        for i in filled.len()..RECORDS as usize {
-            assert_eq!(out[i * words..i * words + 8], [0, 1, 1, 0, 0, 0, 0, 0], "unfilled slot {i} runs nothing");
-        }
-        // Charged as the records ask (5 and 519 groups; the empty one and
-        // the unfilled slots nothing), not as they are cut to fit.
-        assert_eq!(spent, (5 + 519) * 128);
-        // Records less than a dispatch's and a draw's arguments apart, or
-        // of another kind, are not clamped so.
-        assert_eq!(MESH_WINDOW_STEP, 32);
     }
 
     #[test]

@@ -158,42 +158,7 @@ struct Window {
     base: u64,
     records: u32,
     scratch: ID3D12Resource,
-    /// (PROJECT ONE) The records are mesh records written as the arguments
-    /// of a mesh pipeline run as compute ([`mesh_window_args`]): the groups
-    /// its record buffer holds and the vertices it draws a group.
-    mesh: Option<(u32, u32)>,
 }
-
-/// (PROJECT ONE) `VICTORY_MESH_WINDOW_ARGS=1` (off by default; needs
-/// [`windows`]): the mesh records of a window drawn by a mesh pipeline run
-/// as compute are clamped as the arguments of their compute dispatch and of
-/// their draw at once (`crate::indirect::bound_ahead`), where each draw of
-/// the window ran a compute pass of its own to make them
-/// (`crate::indirect::mesh_args`): a dispatch, three state changes of two
-/// buffers and the pass's own root signature and pipeline, for every one of
-/// the 2,400 mesh draws of a frame (run of 26/11, 8:54: the card busy 67 %
-/// of a frame of 110 ms). A draw whose pipeline holds other groups or draws
-/// other vertices a group than the window was clamped for runs the pass as
-/// before, as does a record clamped alone or less than 32 bytes from the
-/// next.
-fn mesh_window_args() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        let asked = std::env::var_os("VICTORY_MESH_WINDOW_ARGS").is_some_and(|v| v == "1");
-        let on = asked && windows();
-        if on {
-            tracing::info!("mesh draws run as compute read their arguments from their window (VICTORY_MESH_WINDOW_ARGS=1)");
-        } else if asked {
-            tracing::warn!("VICTORY_MESH_WINDOW_ARGS=1 needs VICTORY_INDIRECT_WINDOW=1: each draw makes its own");
-        }
-        on
-    })
-}
-
-/// (PROJECT ONE) Indirect mesh draws run as compute since the last line:
-/// those that read their arguments from their window, and those that ran a
-/// pass of their own for them.
-static MESH_ARGUMENTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
 /// The most records clamped in one pass ([`windows`]):
 /// `VICTORY_INDIRECT_WINDOW_MOST` (16 to 65,536; 4,096 by default, which
@@ -259,17 +224,13 @@ pub(crate) fn batch_line(frames: f64) {
         .collect();
     tracing::info!(
         "indirect per frame: {:.0} ops in, {:.0} ExecuteIndirect calls out (merge {}, window {} most {}); \
-         calls by ops joined: {}; mesh draws run as compute: {:.0} with their window's arguments, {:.0} with a pass \
-         of their own (VICTORY_MESH_WINDOW_ARGS={})",
+         calls by ops joined: {}",
         ops as f64 / frames,
         calls as f64 / frames,
         u8::from(merge()),
         u8::from(windows()),
         window_most(),
         runs.join(" "),
-        MESH_ARGUMENTS[0].swap(0, Ordering::Relaxed) as f64 / frames,
-        MESH_ARGUMENTS[1].swap(0, Ordering::Relaxed) as f64 / frames,
-        u8::from(mesh_window_args()),
     );
 }
 
@@ -2567,7 +2528,7 @@ impl State {
         p: &HostPipeline,
         a: &AsCompute,
         (record, at): (&ID3D12Resource, u64),
-        (fresh, ready): (bool, bool),
+        fresh: bool,
         dispatch: &ID3D12CommandSignature,
     ) -> bool {
         if fresh {
@@ -2585,31 +2546,17 @@ impl State {
             once!("the mesh record buffer does not hold one group of a mesh program: its draws are dropped");
             return false;
         }
-        // (PROJECT ONE) The arguments of the dispatch and of the draw: the
-        // record itself where its window was clamped as this pipeline's
-        // arguments (`ready`: the scratch buffer, in the common state, which
-        // the executions promote and the end brings back), else those a
-        // pass of our own makes of it.
-        MESH_ARGUMENTS[usize::from(!ready)].fetch_add(1, Ordering::Relaxed);
-        let (arguments, dispatch_at, draw_at): (&ID3D12Resource, u64, u64) = if ready {
-            (record, at, at + crate::indirect::MESH_DRAW_ARGS)
-        } else {
-            let Some(arguments) = crate::indirect::mesh_args(list, (record, at), most, layout.draw_vertices(1)) else {
-                return false;
-            };
-            // That pass set a compute root signature and pipeline of its own.
-            self.host_pipeline = 0;
-            self.host_roots[1] = 0;
-            (arguments, 0, crate::indirect::MESH_DRAW_ARGS)
+        let Some(arguments) = crate::indirect::mesh_args(list, (record, at), most, layout.draw_vertices(1)) else {
+            return false;
         };
+        // That pass set a compute root signature and pipeline of its own.
+        self.host_pipeline = 0;
+        self.host_roots[1] = 0;
         self.mesh_roots = true;
         let bound = self.bind(list, &a.pipeline, true);
         self.mesh_roots = false;
         if !bound {
-            // (`ready`: nothing has read the scratch buffer yet.)
-            if !ready {
-                crate::indirect::mesh_args_done(list, arguments);
-            }
+            crate::indirect::mesh_args_done(list, arguments);
             return false;
         }
         // SAFETY: a live buffer.
@@ -2624,34 +2571,18 @@ impl State {
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         )];
-        // (PROJECT ONE) `ready`: the scratch buffer the executions promoted
-        // from the common state goes back to it with the records' change,
-        // in one call (`crate::indirect::done`'s change).
-        let back = [
-            crate::host::transition(
-                records,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            ),
-            crate::host::transition(arguments, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_COMMON),
-        ];
         let l = &list.list;
         // SAFETY: an open list with everything set; the arguments hold at
         // most the groups the record buffer has room for.
         unsafe {
             l.SetComputeRootUnorderedAccessView(uav, gpu);
-            l.ExecuteIndirect(dispatch, 1, arguments, dispatch_at, None::<&ID3D12Resource>, 0);
+            l.ExecuteIndirect(dispatch, 1, arguments, 0, None::<&ID3D12Resource>, 0);
             l.ResourceBarrier(&to_read);
         }
         if !self.prepare_for(list, false, true) {
-            if ready {
-                // SAFETY: an open list.
-                unsafe { l.ResourceBarrier(&back) };
-            } else {
-                // SAFETY: an open list.
-                unsafe { l.ResourceBarrier(&to_write) };
-                crate::indirect::mesh_args_done(list, arguments);
-            }
+            // SAFETY: an open list.
+            unsafe { l.ResourceBarrier(&to_write) };
+            crate::indirect::mesh_args_done(list, arguments);
             return false;
         }
         #[cfg(feature = "diagnostics")]
@@ -2662,13 +2593,11 @@ impl State {
         unsafe {
             l.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY(4));
             l.SetGraphicsRootShaderResourceView(srv, gpu);
-            l.ExecuteIndirect(&draw, 1, arguments, draw_at, None::<&ID3D12Resource>, 0);
-            l.ResourceBarrier(if ready { &back[..] } else { &to_write[..] });
+            l.ExecuteIndirect(&draw, 1, arguments, crate::indirect::MESH_DRAW_ARGS, None::<&ID3D12Resource>, 0);
+            l.ResourceBarrier(&to_write);
         }
         self.mesh_scissor(list, false);
-        if !ready {
-            crate::indirect::mesh_args_done(list, arguments);
-        }
+        crate::indirect::mesh_args_done(list, arguments);
         // The title's own topology for its next draws.
         if self.topology_set {
             self.set_topology(list, self.topology);
@@ -3321,17 +3250,10 @@ impl State {
             .as_ref()
             .filter(|w| same(w) && offset >= w.base)
             .filter(|w| (offset - w.base) % u64::from(w.step) == 0 && (offset - w.base) / u64::from(w.step) < u64::from(w.records))
-            .map(|w| (w.scratch.clone(), offset - w.base, w.mesh));
+            .map(|w| (w.scratch.clone(), offset - w.base));
         // A clamp that has just run leaves its buffer an indirect argument.
         let fresh = hit.is_none();
-        // (PROJECT ONE) What a window clamped for this pipeline run as
-        // compute would hold: the groups its record buffer has room for and
-        // the vertices its vertex shader draws a group.
-        let mesh_layout = as_compute.map(|a| {
-            let most = (crate::host::mesh_records_bytes() / u64::from(a.layout.group_bytes())).min(65_535) as u32;
-            (most, a.layout.draw_vertices(1))
-        });
-        let (bounded, at, mesh_ready) = match hit {
+        let (bounded, at) = match hit {
             Some(hit) => hit,
             None => {
                 // A record a short step after the last window's last one
@@ -3368,15 +3290,10 @@ impl State {
                 let own = !args.in_place() && counter.as_ref().is_none_or(|(s, _)| !s.in_place());
                 // More than the record asked for: a window clamped ahead,
                 // whose unfilled slots must not spend the list's budget.
-                // (PROJECT ONE) A window of mesh records for a pipeline run
-                // as compute holds the arguments of its dispatch and draw.
-                let with_arguments = mesh_layout
-                    .filter(|&(most, _)| most > 0 && mesh_window_args())
-                    .filter(|_| windowed && records > 1 && u64::from(step) >= crate::indirect::MESH_WINDOW_STEP);
                 let bounded = if parts.is_some() {
                     crate::indirect::bound_split(list, (&args.buffer, offset), own)
                 } else if windowed && records > 1 {
-                    crate::indirect::bound_ahead(list, (&args.buffer, offset), (kind, step, records), own, with_arguments)
+                    crate::indirect::bound_ahead(list, (&args.buffer, offset), (kind, step, records), own)
                 } else {
                     crate::indirect::bound(list, (&args.buffer, offset), count_arg, (kind, step, records), own)
                 };
@@ -3404,15 +3321,12 @@ impl State {
                     base: offset,
                     records,
                     scratch: bounded.clone(),
-                    mesh: with_arguments,
                 });
-                (bounded, 0, with_arguments)
+                (bounded, 0)
             }
         };
         if let Some(a) = as_compute {
-            // The window's records are this pipeline's arguments already.
-            let ready = mesh_ready.is_some() && mesh_ready == mesh_layout;
-            let ran = self.indirect_mesh_as_compute(list, p, a, (&bounded, at), (fresh, ready), &signature);
+            let ran = self.indirect_mesh_as_compute(list, p, a, (&bounded, at), fresh, &signature);
             if ran {
                 self.drew();
             } else {
