@@ -684,6 +684,21 @@ pub(crate) fn making() -> u64 {
     make::waiting()
 }
 
+/// (PROJECT ONE) For the frame log: microseconds frames waited for
+/// pipelines, pipelines made and microseconds spent making them (since the
+/// start), and the age in milliseconds of the oldest pipeline a draw waits
+/// for (now).
+#[cfg(windows)]
+pub(crate) fn make_stats() -> [u64; 4] {
+    use std::sync::atomic::Ordering::Relaxed;
+    [
+        make::FRAME_WAIT_US.load(Relaxed),
+        make::MADE_COUNT.load(Relaxed),
+        make::MAKE_US.load(Relaxed),
+        make::oldest_requested_ms(),
+    ]
+}
+
 /// Draws and dispatches dropped since the last [`take_drops`], by reason
 /// (diagnostics).
 #[cfg(all(windows, feature = "diagnostics"))]

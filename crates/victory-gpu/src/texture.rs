@@ -1387,6 +1387,11 @@ pub(crate) static STALE_STAGING: std::sync::atomic::AtomicU64 = std::sync::atomi
 /// The staging state of a title texture from mip `first` on, made on first
 /// use (and made anew for larger mips than the one there holds, or for
 /// another host copy than the one there is of).
+/// (PROJECT ONE) Staging buffers made, and the microseconds their creation
+/// (footprints and upload buffer) took (for the log's texture pass line).
+pub(crate) static STAGING_MADE: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
 fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<Staging>> {
     let mut map = STAGING.lock().unwrap_or_else(|e| e.into_inner());
     let map = map.get_or_insert_with(HashMap::new);
@@ -1445,6 +1450,7 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
     } else {
         u32::from(d.MipLevels) * u32::from(d.DepthOrArraySize) - first
     };
+    let began = std::time::Instant::now();
     let mut footprints = vec![D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(); count as usize];
     let mut rows = vec![0u32; count as usize];
     let mut total = 0;
@@ -1461,7 +1467,10 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
             Some(&mut total),
         );
     }
-    let (buffer, data) = host.upload_buffer(total)?;
+    let made = host.upload_buffer(total);
+    STAGING_MADE[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    STAGING_MADE[1].fetch_add(began.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+    let (buffer, data) = made?;
     crate::host::name(&buffer, || {
         format!(
             "staging of {resource:?} {}x{}x{} f{}",

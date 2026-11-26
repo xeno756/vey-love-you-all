@@ -22,7 +22,8 @@ pub(crate) const WINDOW: usize = 300;
 /// The columns of the CSV file.
 pub(crate) const HEADER: &str = "frame,t_ms,frame_ms,cpu_ms,gpu_ms,back_ms,draws,dropped,indirect_dropped,pipelines_making,\
 tex_uploaded,tex_uploaded_mb,tex_waiting,no_upload_run,no_upload_longest,stream_stalls,tex_past_pool,pool_mb,pool_held_mb,\
-tex_levels_left_out,card_mb,card_budget_mb,shared_mb";
+tex_levels_left_out,card_mb,card_budget_mb,shared_mb,\
+pipe_wait_ms,pipes_made,pipe_make_ms,shaders_translated,shader_cache_hits,pipe_oldest_ms";
 
 /// What the meter counts, as read at a frame: microseconds preparing
 /// submissions, waiting for the card and copying back; draws run; draws
@@ -39,6 +40,17 @@ struct Log {
     times: std::collections::VecDeque<f32>,
     file: Option<std::io::BufWriter<std::fs::File>>,
     memory: Option<[u64; 4]>,
+    /// (PROJECT ONE) Pipeline and translation totals at the last frame:
+    /// waited µs, made, making µs, translated, found in the cache.
+    pipes_before: [u64; 5],
+}
+
+/// (PROJECT ONE) Pipeline and translation totals as they stand.
+#[cfg(windows)]
+fn pipe_totals() -> ([u64; 5], u64) {
+    let [waited, made, making, oldest] = crate::pipeline::make_stats();
+    let (hits, misses) = crate::shader_cache::counts();
+    ([waited, made, making, misses, hits], oldest)
 }
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
@@ -73,6 +85,7 @@ pub(crate) fn frame(now: Counters, making: u64) {
         times: std::collections::VecDeque::with_capacity(WINDOW),
         file: open(),
         memory: None,
+        pipes_before: pipe_totals().0,
     });
     log.frame += 1;
     let ms = at.duration_since(log.last).as_secs_f64() * 1000.0;
@@ -96,9 +109,12 @@ pub(crate) fn frame(now: Counters, making: u64) {
     let stream = crate::draw::stream_stats();
     let [budget, used, _, shared] = log.memory.unwrap_or_default();
     let mb = |bytes: u64| bytes >> 20;
+    let (pipes, oldest) = pipe_totals();
+    let p: Vec<u64> = pipes.iter().zip(log.pipes_before).map(|(now, was)| now.saturating_sub(was)).collect();
+    log.pipes_before = pipes;
     let _ = writeln!(
         file,
-        "{},{:.1},{ms:.2},{:.2},{:.2},{:.2},{},{},{},{making},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{},{:.1},{ms:.2},{:.2},{:.2},{:.2},{},{},{},{making},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.2},{},{:.2},{},{},{oldest}",
         log.frame,
         at.duration_since(log.began).as_secs_f64() * 1000.0,
         spent[0] as f64 / 1000.0,
@@ -120,6 +136,11 @@ pub(crate) fn frame(now: Counters, making: u64) {
         mb(used),
         mb(budget),
         mb(shared),
+        p[0] as f64 / 1000.0,
+        p[1],
+        p[2] as f64 / 1000.0,
+        p[3],
+        p[4],
     );
     // A run ended by the window's close writes no last line of its own.
     if log.frame.is_multiple_of(30) || ms > 250.0 {
@@ -243,7 +264,7 @@ mod tests {
 
     #[test]
     fn the_file_has_a_column_for_every_value_written() {
-        // 23 columns: the line `frame` writes has as many values.
-        assert_eq!(HEADER.split(',').count(), 23);
+        // 29 columns: the line `frame` writes has as many values.
+        assert_eq!(HEADER.split(',').count(), 29);
     }
 }

@@ -40,6 +40,31 @@ pub(crate) struct Pending {
     left_out: Option<&'static str>,
     /// When a worker began it ([`slow`]).
     begun: OnceLock<Instant>,
+    /// (PROJECT ONE) When a draw or dispatch first queued it, in
+    /// [`crate::host::now_ms`] (0: not yet; [`oldest_requested_ms`]).
+    requested_at: AtomicU64,
+}
+
+/// (PROJECT ONE) For the frame log, since the start: microseconds the
+/// threads recording frames waited for pipelines being made, pipelines
+/// made, and microseconds the workers spent making them.
+pub(crate) static FRAME_WAIT_US: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MADE_COUNT: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MAKE_US: AtomicU64 = AtomicU64::new(0);
+
+/// (PROJECT ONE) How long the oldest pipeline a draw asked for has been in
+/// the queue, in milliseconds (0 when none waits).
+pub(crate) fn oldest_requested_ms() -> u64 {
+    let now = crate::host::now_ms();
+    let queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+    queue
+        .requested
+        .iter()
+        .map(|p| p.requested_at.load(Ordering::Relaxed))
+        .filter(|&at| at != 0)
+        .map(|at| now.saturating_sub(at))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Why a pipeline with these shaders is not made, if it is not.
@@ -142,6 +167,7 @@ impl Pending {
             graphics,
             left_out,
             begun: OnceLock::new(),
+            requested_at: AtomicU64::new(0),
             queue_state: AtomicU8::new(NOT_QUEUED),
             made: OnceLock::new(),
             key: key.finalize().to_hex()[..32].to_owned(),
@@ -151,9 +177,17 @@ impl Pending {
     }
 
     fn make(&self) {
-        let _ = self.begun.set(Instant::now());
-        self.made
-            .get_or_init(|| HostPipeline::new(&self.shaders, self.graphics.as_deref()));
+        let began = Instant::now();
+        let _ = self.begun.set(began);
+        let mut made_here = false;
+        self.made.get_or_init(|| {
+            made_here = true;
+            HostPipeline::new(&self.shaders, self.graphics.as_deref())
+        });
+        if made_here {
+            MADE_COUNT.fetch_add(1, Ordering::Relaxed);
+            MAKE_US.fetch_add(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
         let (lock, done) = &DONE;
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         done.notify_all();
@@ -363,6 +397,7 @@ fn wait(p: &Pending, frame: u64) {
     }
     drop(held);
     let waited = started.elapsed().min(left);
+    FRAME_WAIT_US.fetch_add(waited.as_micros() as u64, Ordering::Relaxed);
     let past = waited.saturating_sub(wait_budget());
     past_total.fetch_add(past.as_millis() as u64, Ordering::Relaxed);
     {
@@ -410,6 +445,7 @@ impl Queue {
         }
         p.queue_state.store(priority, Ordering::Relaxed);
         if priority == REQUESTED {
+            p.requested_at.store(crate::host::now_ms().max(1), Ordering::Relaxed);
             self.requested.push_back(p.clone());
         } else {
             self.early.push_back(p.clone());

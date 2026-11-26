@@ -1936,6 +1936,11 @@ pub(crate) fn host_copy(this: This) -> Option<std::sync::Arc<HostTexture>> {
     hosted(this, true).map(|made| made.0)
 }
 
+/// (PROJECT ONE) Host textures made for title textures, and the
+/// microseconds their creation took (for the log's texture pass line).
+pub(crate) static HOST_TEXTURES_MADE: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
 /// A host texture like the title's: same description, in GPU memory,
 /// without the console's layout and flags.
 #[cfg(windows)]
@@ -1998,6 +2003,7 @@ fn host_texture(
         ..Default::default()
     };
     let mut texture: Option<ID3D12Resource> = None;
+    let began = std::time::Instant::now();
     // SAFETY: the description has the host layout (checked size, same
     // fields); the out pointer is ours.
     let made = unsafe {
@@ -2013,6 +2019,8 @@ fn host_texture(
             &mut texture,
         )
     };
+    HOST_TEXTURES_MADE[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    HOST_TEXTURES_MADE[1].fetch_add(began.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
     if let Err(e) = made {
         tracing::warn!(error = %e, desc = ?d, "no host texture");
     }

@@ -7110,6 +7110,17 @@ impl Meter {
                 crate::descriptor::host::KEPT_VIEWS.load(Ordering::Relaxed)
             );
             {
+                // (PROJECT ONE) Where the texture pass's time goes, over
+                // the last 5 s: the pass, the host copies it made, and the
+                // staging buffers made (by it and by the draws).
+                let take = |c: &[std::sync::atomic::AtomicU64; 2]| [c[0].swap(0, Ordering::Relaxed), c[1].swap(0, Ordering::Relaxed) / 1000];
+                let [passes, pass_ms] = take(&crate::draw::HEAP_TEXTURE_PASSES);
+                let [copies, copies_ms] = take(&crate::resource::HOST_TEXTURES_MADE);
+                let [stagings, stagings_ms] = take(&crate::texture::STAGING_MADE);
+                tracing::info!(
+                    "texture pass, last 5 s: {passes} passes took {pass_ms} ms; {copies} host textures made in {copies_ms} ms; \
+                     {stagings} staging buffers made in {stagings_ms} ms"
+                );
                 let [queued, due, away, partly, oldest] =
                     [0, 1, 2, 3, 4].map(|i| crate::draw::HEAP_TEXTURES_QUEUE[i].load(Ordering::Relaxed));
                 let [same, parts, tails] =

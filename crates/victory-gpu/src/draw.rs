@@ -626,6 +626,9 @@ pub(crate) static HEAP_TEXTURES_AWAY: AtomicU64 = AtomicU64::new(0);
 /// Slots the pass found up to date already: their texture is uploaded by
 /// the draws that read it through a table (it has a staging buffer).
 pub(crate) static HEAP_TEXTURES_TABLED: AtomicU64 = AtomicU64::new(0);
+/// (PROJECT ONE) Passes over the textures picked by index, and the
+/// microseconds they took (for the log's texture pass line).
+pub(crate) static HEAP_TEXTURE_PASSES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 /// The queue of textures picked by index at the last pass
 /// (`TextureQueue::census`): slots in it, due, waiting for their memory,
 /// uploaded in part, and the frames the oldest due one has waited.
@@ -1804,6 +1807,15 @@ impl State {
         if !*ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_TEXTURES").is_none_or(|v| v != "0")) {
             return;
         }
+        // (PROJECT ONE) The pass's own time, for the log's texture pass line.
+        struct Timed(std::time::Instant);
+        impl Drop for Timed {
+            fn drop(&mut self) {
+                HEAP_TEXTURE_PASSES[0].fetch_add(1, Ordering::Relaxed);
+                HEAP_TEXTURE_PASSES[1].fetch_add(self.0.elapsed().as_micros() as u64, Ordering::Relaxed);
+            }
+        }
+        let _timed = Timed(std::time::Instant::now());
         let memory = crate::host::host().and_then(|h| h.video_memory());
         // Bytes of texture memory staged per frame, by the card's budget, and
         // while the queue is long (the world's first minutes: over 20,000
@@ -1875,9 +1887,17 @@ impl State {
         // 1.6-2.2 s of each of the world's first twenty frames (run 20).
         // The rest waits for the next frames, as it does past the bytes.
         const SPAN: std::time::Duration = std::time::Duration::from_millis(250);
-        const SPAN_CATCHING_UP: std::time::Duration = std::time::Duration::from_millis(1500);
+        // (PROJECT ONE) `VICTORY_TEXTURE_CATCHUP_MS` (1500 by default): a pass
+        // catching up took up to that, and frames of 1.5 to 1.9 s with it
+        // (runs of 25/11: 72 % of it making a host texture and a staging
+        // buffer for each texture).
+        static SPAN_CATCHING_UP: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+        let span_catching_up = *SPAN_CATCHING_UP.get_or_init(|| {
+            let ms = std::env::var("VICTORY_TEXTURE_CATCHUP_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1500);
+            std::time::Duration::from_millis(ms)
+        });
         let (per_frame, span) = if census[0] > LONG && catching_up(std::time::Duration::ZERO) {
-            (budget_per_frame.max(PER_FRAME_CATCHING_UP), SPAN_CATCHING_UP)
+            (budget_per_frame.max(PER_FRAME_CATCHING_UP), span_catching_up)
         } else {
             (budget_per_frame, SPAN)
         };
