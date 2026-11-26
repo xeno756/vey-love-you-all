@@ -857,3 +857,18 @@ ma reconstruction des positions à partir de ces métadonnées n'a retrouvé que
 `decorationResolutionShift`, `vehicleHDCount`, `waterReflectionSSR`. Les 93 réglages du
 schéma ne sont donc pas tous cartographiés : 9 le sont, par l'extraction, et aucun n'est
 vérifié en jeu.
+
+## Le monde s'affiche ; ce qui coûte encore (26/11, 13 h)
+
+Lancement de l'utilisateur à 11 h 12 (`performance`, brouillard rendu) : le monde 3D est
+visible, 5,64 images par seconde, médiane 175 ms. Le détail, les captures analysées, la piste
+communautaire et l'amont sont dans
+[docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md). En bref :
+
+- 11,8 des 13,8 attentes de la carte par image viennent d'un tampon d'envoi de texture encore
+  lu par une soumission en vol ; le fil qui soumet attend alors tout (119,6 ms par image) et
+  la carte reste sans travail 60,6 ms par image derrière lui. Essai : `attentes-textures`.
+- Le soleil traverse les murs parce qu'aucune carte d'ombres n'est dessinée ; la cascade
+  proche (370 des 1 621 dessins des cascades) est rendue dans `performance`.
+- Les visages noirs viennent, d'après notre amont, de textures envoyées avant l'arrivée de
+  leurs octets ; deux correctifs repris (`84fe251`).

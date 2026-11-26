@@ -220,6 +220,21 @@ Tests ajoutés (5) :
 En jeu, par mes propres lancements du banc : voir [PERF_JOURNAL.md](PERF_JOURNAL.md),
 « Mes lancements ».
 
+### Données streamées, attentes des textures, cascades (26/11, 13 h, branche fusionnée)
+
+`cargo test --release -p victory-gpu -p victory-loader -- --test-threads=4` : 232 réussis,
+3 ignorés ; 42 + 2 + 1 pour le chargeur. `cargo test --release -p victory-hle` : 116 réussis.
+Clippy sans avertissement sur `victory-gpu`, `victory-hle`, `victory-loader`.
+
+| Test | Ce qu'il vérifie |
+|---|---|
+| `dstorage::tests::a_self_submit_holds_reads_into_pages_for_the_titles_submit` | une file qui se soumet seule lance ses lectures ordinaires, retient la lecture vers des pages et l'entrée d'état derrière elle ; le Submit du jeu les libère dans l'ordre |
+| `draw::tests::only_the_far_cascades_of_a_stacked_atlas_are_left_out` | seules les cascades lointaines d'une cible empilée sont laissées de côté ; la pré-passe de profondeur, une carte carrée de lampe, une zone qui n'est pas une cascade entière sont dessinées |
+
+Non couverts par un test : l'attente précise des tampons d'envoi (elle demande la carte et
+des soumissions en vol ; le code est celui de `VICTORY_SYNC_PRECISE`, repris tel quel) et
+l'appel après une lecture terminée (une ligne, au même endroit que l'appel d'avant).
+
 ### Préréglage du jeu (26/11, 11 h, branche fusionnée, `2cf979c`)
 
 `cargo test --release -p victory-loader` : 45 tests réussis, dont 11 nouveaux dans

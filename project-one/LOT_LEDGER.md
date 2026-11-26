@@ -4,7 +4,7 @@ Un lot est FAIT, EN COURS, À FAIRE ou REFUSÉ (avec la raison). Mis à jour à 
 Les preuves sont dans [FINDINGS.md](FINDINGS.md), ce qui bloque dans [BLOCKERS.md](BLOCKERS.md),
 les choix dans [DECISIONS.md](DECISIONS.md).
 
-Dernière mise à jour : 26/11/2026 à 11 h 15 : le monde était noir depuis 8 h 25 (collecte du brouillard laissée de côté) ; le brouillard est rendu de nouveau, les 6 images par seconde mesurées sans lui ne comptent pas. Préréglage SafeMode écrit, jamais lancé. Je ne lance plus le jeu.
+Dernière mise à jour : 26/11/2026 à 13 h : le monde s'affiche (lancement de 11 h 12, 5,6 images par seconde) ; visages noirs, ombres du soleil et attentes des textures traités, non vérifiés en jeu ([docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md)). Avant, à 11 h 15 : le monde était noir depuis 8 h 25 (collecte du brouillard laissée de côté) ; le brouillard est rendu de nouveau, les 6 images par seconde mesurées sans lui ne comptent pas. Préréglage SafeMode écrit, jamais lancé. Je ne lance plus le jeu.
 
 ## Mission 10 à 15 images par seconde
 
@@ -20,7 +20,11 @@ lancements étaient ceux de l'utilisateur. La version à lui donner est une seul
 | 2 attentes de la carte | FAIT, MESURÉ (un lancement) | `19f3e56`. `performance precis relais:2` : 4,97 images par seconde, médiane 187 ms ; attentes 13 → 4 par image, mais 119 ms encore ; 0 alerte. Gain de 7 à 14 % : l'attente s'est déplacée vers la relecture. `fenetres` reste non mesuré. |
 | 3 relecture de ce que les shaders écrivent | REFUSÉ | `vitesse:2` et `vitesse:3` la suppriment (8,8 images par seconde) mais perdent la carte : 6 lancements sur 7 (BLOCKERS 31). Retirés de `performance`. |
 | 2 bis brouillard volumétrique | REFUSÉ | Sans sa collecte, le monde est noir (lancements de 8 h 25 à 10 h 38). Retiré de `performance` (`2273cfe`). Pour un brouillard moins cher : `volumetricsQuality` du jeu, par le préréglage. |
-| 7 monde visible | FAIT, NON VÉRIFIÉ | Brouillard rendu (`2273cfe`). Manque : un lancement de l'utilisateur et une capture du monde en 3D. |
+| 7 monde visible | FAIT, VÉRIFIÉ | Brouillard rendu (`2273cfe`). Lancement de l'utilisateur, 26/11 11 h 12 : le monde 3D s'affiche (deux captures), 5,64 images par seconde, médiane 175 ms. |
+| 9 visages noirs (données streamées) | FAIT, NON VÉRIFIÉ | `84fe251`, deux correctifs de l'amont fxceless. Manque : une capture d'un PNJ de face. |
+| 10 soleil à travers les murs | FAIT, NON MESURÉ | `b3dd536` : cascade proche dans `performance`, profils A/B/C. |
+| 11 attentes de la carte (tampons d'envoi) | PRÉPARÉ, NON MESURÉ | `3018756`, mot `attentes-textures` : 11,8 des 13,8 attentes par image visées. Deux lancements à faire. |
+| 12 fusion de l'amont fxceless | À FAIRE | 98 commits, 35 blocs en conflit sur la branche stable (BLOCKERS 37). |
 | 8 préréglage SafeMode abaissé | FAIT, JAMAIS LANCÉ | `2cf979c`, option `prereglage:bas|extreme|diagnostic|safemode`. 11 tests hors jeu. Positions des champs non vérifiées en jeu (BLOCKERS 35). |
 | 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |
 | 3 manque de RAM | À FAIRE | 18 700 à 19 200 défauts de page par image avec `performance` (53 000 avec `rapide`), RAM libre au plus bas 10 à 24 Mo. Lot R2 (fenêtres page par page). |
