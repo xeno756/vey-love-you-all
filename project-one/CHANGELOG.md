@@ -4,6 +4,24 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (1 h 30) — banc propre, relais remesuré, veille installée
+
+Détail : [FINDINGS.md](FINDINGS.md), itération 4. État de chaque lot : [LOT_LEDGER.md](LOT_LEDGER.md).
+
+- **Banc.** `banc.ps1 -Propre` refuse de mesurer quand un autre programme tient plus de 100 Mo
+  de la carte ; `-Series N` donne une ligne par lancement ; chaque lancement laisse un fichier
+  `.env.json` (pilote, horloge, température et activité de la carte). La carte n'est ni bridée
+  ni saturée : elle n'est active qu'à moitié, elle attend le processeur.
+- **Relais.** Remesuré maintenant que la pâte bleue est corrigée : image propre, 54 ms de
+  moins par image (environ 14 %). Il reste une option (`relais`), pas le défaut.
+- **Un défaut nouveau à l'image.** Les murs de la cellule manquent dans 3 captures sur 7,
+  avec ou sans relais. Pas encore expliqué.
+- **Pool de tampons d'envoi.** Un défaut trouvé à la lecture est corrigé (une texture pas
+  encore chargée pouvait montrer les texels d'une autre au lieu de noir).
+- **Veille des dépôts.** `veille.ps1`, une passe par heure : un résumé de ce qui change dans
+  les dépôts suivis et de ce qui touche nos blocages. Elle ne télécharge ni ne fusionne rien
+  et se met en pause quand le jeu tourne. `veille.ps1 -Desinstaller` la retire.
+
 ## 25/11/2026 (23 h 45) — pertes de carte contournées, pool de tampons d'envoi
 
 Détail : [FINDINGS.md](FINDINGS.md), chantier P0. Inventaire des fichiers reçus :

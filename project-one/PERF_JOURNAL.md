@@ -194,6 +194,13 @@ programmes sur la carte (310 à 330 ms de carte par image au lieu de 200) : ses 
 comparent qu'entre eux. Médiane inchangée (437 à 457 ms ce soir-là) : ces correctifs visent
 les pertes de carte et les images longues, pas le temps de carte.
 
+### Itération 4 : banc propre, mise bout à bout, relais (26/11, 0 h à 1 h 30)
+
+Mesures par lancement : [FINDINGS.md](FINDINGS.md), itération 4. État des lots :
+[LOT_LEDGER.md](LOT_LEDGER.md). Série faite avec Discord ouvert (banc propre refusé) : ses
+chiffres ne se comparent qu'entre eux. Le banc écrit maintenant un fichier `.env.json` par
+lancement (programmes sur la carte, pilote, horloge, température et activité de la carte).
+
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
@@ -212,6 +219,8 @@ premier `rapide`, 335 ms maintenant.
 | 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
 | 25/11 | `2d8ba5a` | 5, recopie | ne pas donner `vitesse:2` | image noire avec `VICTORY_COPY_BACK_ONLY_READBACK` | image présente avec `VICTORY_COPY_BACK_SMALL_KB=1024`, environ 250 ms contre 400 | carte perdue une fois après 72 s : expérimental |
 | 25/11 | `12e7c2b` | 3, pipelines | `VICTORY_BARYCENTRIC_GS=0` | 3 à 8 pipelines refusés, 42 dessins par image perdus | 0 refusé, aucun dessin perdu pour refus ; même temps d'image | cheveux dessinés mais mal rendus |
+| 26/11 | `7ee9224` | L, pool | `VICTORY_STAGING_POOL=0`, `VICTORY_RETIRE_FRAMES=0` | une plage du pool rendue avec les texels d'avant ; un tampon à part détruit sans attendre (1 perte de carte sur 1 lancement) | plage rendue à zéro ; 0 perte sur 1 ; poison : 35 144 baux réemployés, 0 écriture tardive | un essai de chaque côté pour la perte de carte |
+| 26/11 | option `relais` (existante) | G0, mise bout à bout | ne pas la passer | médiane 361, 376, 380 ms | 312, 322, 325 ms ; série « Discord ouvert » | pas par défaut : murs absents une fois sur deux, avec ou sans (BLOCKERS 21) |
 | 25/11 | `c4cd932` | P0, pertes de carte | `VICTORY_RETIRE_FRAMES=0` | 2 pertes sur 2 lancements (objets libérés encore lus) | 0 sur 10 | les objets vivent 2 images de plus (mémoire négligeable) |
 | 25/11 | `c4cd932` | P0.2, pool | `VICTORY_STAGING_POOL=0` | 52 785 tampons d'envoi créés en 23,8 s par lancement | 58 922 en 1,6 s ; 26 à 34 images > 0,8 s contre 35 à 43 | une lecture trop tardive corromprait une texture : filet `VICTORY_UPLOAD_POISON=1`, rien trouvé |
 | 25/11 | `3628498` | P0.6, arrivée | `VICTORY_TEXTURE_GATE_S=60` | 26 à 34 images > 0,8 s (avec pool) | 15 à 17 ; 99 % sous 699 et 906 ms | 28 % de textures en moins à 45 s de monde, 8 % à 90 s |
