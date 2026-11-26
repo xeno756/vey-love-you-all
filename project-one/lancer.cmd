@@ -233,6 +233,7 @@ if defined VICTORY_AMBIENT_FILL if /i not "%VICTORY_AMBIENT_FILL%"=="off" echo  
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
 if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
+if "%VICTORY_TEXTURE_GATE_S%"=="0" echo   arrivee : textures a l'allure ordinaire, sans rattrapage
 if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
 if defined CAPTURE (
     for %%d in ("%ROOT%\..\victory-captures") do set "VICTORY_CAPTURE=%%~fd"
@@ -297,6 +298,17 @@ rem bleues (captures du 25/11, 14 h 31). Laisse de cote, les taches partent, les
 rem murs restent, les interieurs sont plus sombres, et la carte gagne 90 ms.
 call :without "eclairage-indirect"
 call :card_copies
+call :steady_textures
+goto :eof
+
+rem Les textures du monde arrivent a l'allure ordinaire, sans le rattrapage qui
+rem prenait jusqu'a 1,5 s par image pendant la premiere minute. Mesure le 25/11
+rem (22 h 30 a 23 h 24, deux lancements par reglage) : 15 a 17 images de plus de
+rem 0,8 s au lieu de 26 a 34 ; en echange 28 %% de textures en moins a 45 s de
+rem monde, 8 %% a 90 s, autant ensuite. VICTORY_TEXTURE_GATE_S=60 avant le
+rem lancement : le rattrapage d'avant.
+:steady_textures
+if not defined VICTORY_TEXTURE_GATE_S set "VICTORY_TEXTURE_GATE_S=0"
 goto :eof
 
 rem Les copies des tampons du jeu de 1 Mio et plus dans la memoire de la carte,
@@ -317,6 +329,7 @@ set "PROFIL=maximum"
 call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
 call :card_copies
+call :steady_textures
 call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
 goto :eof
 
