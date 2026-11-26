@@ -257,3 +257,123 @@ Retenu : pool par défaut ; `rapide` et `maximum` sans rattrapage (`VICTORY_TEXT
 dans le lanceur, `=60` pour revenir). Reste le vrai correctif des images longues : sortir la
 création des copies de textures (0,5 ms chacune, 21 à 25 s par lancement) du fil qui
 enregistre l'image.
+
+## Itération 4 (25/11 à 23 h 50 – 26/11 à 1 h 30) : métrologie, sérialisation, pool, fenêtres
+
+**Conditions.** Le banc propre a refusé de mesurer : Discord tenait 433 à 473 Mo de la carte,
+avec des connexions UDP ouvertes (un appel en cours, probablement). Je ne l'ai pas quitté.
+Toute cette itération est donc une **série à part, « Discord ouvert »** (1,3 à 1,5 Go de carte
+tenus par d'autres programmes) : ses chiffres ne se comparent qu'entre eux, pas avec ceux
+d'hier.
+
+### Lot E — ce que l'empreinte d'environnement tranche
+
+| Mesure (capteurs AMD, toutes les 5 s) | Au repos | Pendant le monde |
+|---|---|---|
+| Horloge graphique | 78 MHz | médiane 1 430 à 1 550 MHz, pointes à 1 750 |
+| Horloge mémoire | 1 744 MHz | 1 746 MHz |
+| Température (point chaud) | 53 °C (55) | 61 à 64 °C (62 à 65) |
+| Activité | 1 % | **41 à 57 %** |
+| Puissance | 37 W | 55 W |
+
+Pilote 32.0.21045.29003 du 16/11/2026, alimentation « Performances élevées », fichier
+d'échange de 34 Go, PCIe 16 voies. La carte n'expose pas d'état de bridage.
+
+- **Pas de bridage** : ni la température ni les horloges ne limitent la carte.
+- **La carte n'est occupée qu'à moitié.** Elle attend le processeur : c'est la mise bout à
+  bout, vue du côté de la carte.
+- Le temps de carte plus long qu'en banc propre (257–269 ms contre 197–200) vient donc de la
+  concurrence des autres programmes, pas des horloges.
+
+### G0 — la mise bout à bout, mesurée puis essayée
+
+Mesure : processeur + carte + recopie font **91 à 92 %** du temps d'image sur les deux
+lancements propres d'hier (20 h 46, 21 h 18), 98 % ce soir. L'image est la somme des trois.
+Cause lue dans le code : `Host::submit` tient un seul verrou de la préparation à la recopie et
+attend la carte à chaque soumission (une quarantaine par image d'après un commentaire du
+code ; pas mesuré).
+
+Le relais (`VICTORY_RELAY=1`, option `relais`) envoie les soumissions sans attendre chacune :
+ce sont des « images en vol », déjà dans le code. Série alternée, version normale, 300 s :
+
+| Heure | Réglage | Médiane | 95 % | 99 % | Max | > 0,8 s | Vivantes 60 / 120 / 240 s | Proc. + carte + recopie | Somme / image |
+|---|---|---|---|---|---|---|---|---|---|
+| 23 h 59 | défaut | 376 ms | 515 | 735 | 1 084 | 15 | 23 542 / 20 963 / 20 804 | 85 + 269 + 31 | 98 % |
+| 0 h 12 | défaut | — | — | — | — | — | — | — | arrêt : manque de mémoire partagée |
+| 0 h 21 | défaut | 380 ms | 458 | 710 | 897 | 13 | 26 658 / 21 021 / 20 971 | 85 + 268 + 30 | 98 % |
+| 1 h 00 | défaut | 361 ms | 418 | 740 | 1 358 | 5 | 25 839 / 20 639 / 20 570 | 80 + 257 + 28 | 98 % |
+| 0 h 05 | relais | 325 ms | 408 | 768 | 2 420 | 8 | 26 505 / 20 648 / 20 597 | 84 + 247 + 50 | 111 % |
+| 0 h 14 | relais | 322 ms | 395 | 763 | 1 515 | 14 | 26 418 / 20 529 / 20 475 | 85 + 240 + 50 | 111 % |
+| 0 h 27 | relais | 312 ms | 369 | 644 | 816 | 9 | 25 676 / 20 949 / 20 916 | 80 + 233 + 48 | 112 % |
+
+- **Médiane : 312, 322, 325 ms contre 361, 376, 380 ms.** Les deux groupes ne se recouvrent
+  pas : environ −54 ms (−14 %).
+- Le 99e centile et les images de plus de 0,8 s se recouvrent : aucun gain annoncé là-dessus.
+- Le recouvrement obtenu n'est que de 11 à 12 % : les soumissions en vol sont encore réglées
+  à beaucoup d'endroits. Les −130 ms visés demandent plus que ce réglage.
+- **Image** (deux captures, `g0-relais` et `g0-relais-2`) : ni pâte bleue, ni magenta, cheveux
+  justes. Le verdict « le relais abîme l'image » du 25/11 à 17 h venait de la pâte bleue,
+  corrigée depuis.
+- **Pas adopté par défaut** : voir le défaut des murs ci-dessous, qui touche les deux réglages
+  et qu'il faut comprendre d'abord. `meilleure.cmd series-x rapide relais` le donne.
+
+### Un défaut qui n'était pas vu : les murs de la cellule, une fois sur deux
+
+Sur trois captures de sept, les murs de la cellule manquent en fin de scène (on voit le ciel) :
+20 h 37 et 0 h 48 **sans** relais, 1 h 07 avec. Ils sont là à 20 h 21, 22 h 52, 23 h 26 (sans
+relais) et 0 h 39 (avec). Le relais n'en est donc pas la cause. Dans d'autres lancements l'uniforme
+du personnage est noir au lieu de rouge. Cause non trouvée : BLOCKERS 21.
+
+### Le pool de tampons d'envoi : un défaut corrigé, la couverture mesurée
+
+- **Défaut trouvé par lecture du code** (pas vu en capture) : quand le jeu n'a pas encore
+  chargé une texture, son envoi ne réécrit pas le tampon et le copie tel quel. Un tampon neuf
+  contient des zéros ; une plage du pool contenait les texels de la texture d'avant. Chaque
+  plage est maintenant remise à zéro à sa remise (`7ee9224`). Sur le lancement en mode
+  poison qui suit, le magenta des images du monde est à 0,00 % (0,01 % hier).
+- **Couverture du poison**, pool réduit à 24 Mo, 300 s : **35 144 baux (713 Mo) servis depuis
+  des morceaux réemployés, 3 morceaux sur 3 réemployés, 0 octet écrit après un bail.**
+- **Une perte de carte** sur ce réglage (0 h 43, après 82 s) : défaut de page à une adresse
+  qui n'est dans aucun objet. Avec le pool réduit, 55 tampons d'envoi avaient été créés à
+  part et détruits immédiatement à la remise à zéro de leur liste, comme lors des pertes
+  d'hier matin. Ils passent maintenant par la règle d'attente. Le même lancement, refait, a
+  tenu ses 300 s. Un essai de chaque côté : un indice.
+
+### R1 — de quoi sont faites les fenêtres (recensement à 150 s de monde)
+
+877 fenêtres, 3 604 Mo :
+
+| Mémoire du jeu sous la fenêtre | Fenêtres | Mo |
+|---|---|---|
+| Pages vues en partie non chargées | 444 | 1 816 |
+| Mémoire privée en partie non réservée, ou gardée | 346 | 1 384 |
+| Mémoire privée entièrement réservée | 78 | 364 |
+| Autres | 8 | 36 |
+
+**88 % des octets des fenêtres couvrent de la mémoire que le jeu n'a qu'en partie chargée** :
+c'est de là que vient « la moitié des pages ne sert pas ». Le réglage `VICTORY_INPLACE`
+(poser le tampon sur la mémoire du jeu, sans copie) ne peut prendre que les 364 Mo de la
+troisième ligne, et l'essai du pilote montre qu'une telle mémoire compte quand même comme
+partagée avec la carte : pas essayé plus loin. Le gain est dans une copie page par page
+(lot R2). Le runtime tient déjà une table par page de 64 Kio.
+
+Le manque de mémoire partagée a encore arrêté un lancement sur huit ce soir (0 h 12). RAM
+libre au plus bas : 2 à 30 Mo. La machine a 15,8 Go, un fichier d'échange de 34 Go et une
+limite d'engagement de 49 Go : le jeu tient en mémoire virtuelle, mais il pagine en
+permanence, et c'est la mémoire partagée avec la carte (7,4 Go de budget) qui déborde.
+
+### Ce que la lecture du code a établi pour la suite
+
+Quatre cartes de lecture (fenêtres, copies de textures, durée de vie, sérialisation), gardées
+hors du dépôt (`..\victory-logs\outils\cartes-lots-20261126.json`). L'essentiel :
+
+- **Durée de vie.** Une liste coupée à une attente est mise de côté et exécutée plus tard ;
+  rien ne numérote ces parts. Chemin établi pour la panne du tampon de travail : une table de
+  constantes gardée en cache nomme le tampon d'une part déjà exécutée et recyclée. Le bon
+  compteur est à prendre à l'appel du jeu (`queue::execute`) : c'est le lot L1.
+- **Copies de textures.** La création se fait sur le fil du jeu, trois verrous tenus. Rien
+  n'efface une texture neuve : « noir tant que rien n'est envoyé » repose sur les zéros de
+  D3D12, ce que des ressources placées ne garantissent que dans un tas neuf.
+- **Dessins mesh indirects.** Chacun enregistre 8 barrières (dont 2 sur toutes les
+  ressources), 3 passes de calcul et 1 dessin ; le tampon de conversion et le tampon
+  d'enregistrements sont uniques, ce qui empêche de les regrouper sans les découper.
