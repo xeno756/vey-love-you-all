@@ -4,6 +4,17 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (14 h) — les murs ; 6,4 images par seconde
+
+Détail : [docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md), section 9.
+
+- Mesuré (lancement de l'utilisateur à 13 h 14) : **6,43 images par seconde**, médiane 153 ms,
+  avec `attentes-textures`, que `performance` prend désormais. Le visage de l'héroïne est texturé.
+- **Les murs du dortoir manquaient** (défaut connu depuis le 25/11) : les deux correctifs de
+  notre amont qui lui ont rendu ses murs sont repris (`a5b2dd3`) : les descripteurs que le jeu
+  copie en octets dans ses tas sont recopiés, et une écriture par une vue d'une page est vue par
+  ses autres vues. **Non vérifié en jeu.**
+
 ## 26/11/2026 (13 h) — le monde s'affiche ; visages noirs, soleil à travers les murs, attentes de la carte
 
 Détail : [docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md).

@@ -23,7 +23,8 @@ lancements étaient ceux de l'utilisateur. La version à lui donner est une seul
 | 7 monde visible | FAIT, VÉRIFIÉ | Brouillard rendu (`2273cfe`). Lancement de l'utilisateur, 26/11 11 h 12 : le monde 3D s'affiche (deux captures), 5,64 images par seconde, médiane 175 ms. |
 | 9 visages noirs (données streamées) | FAIT, NON VÉRIFIÉ | `84fe251`, deux correctifs de l'amont fxceless. Manque : une capture d'un PNJ de face. |
 | 10 soleil à travers les murs | FAIT, NON MESURÉ | `b3dd536` : cascade proche dans `performance`, profils A/B/C. |
-| 11 attentes de la carte (tampons d'envoi) | PRÉPARÉ, NON MESURÉ | `3018756`, mot `attentes-textures` : 11,8 des 13,8 attentes par image visées. Deux lancements à faire. |
+| 11 attentes de la carte (tampons d'envoi) | FAIT, MESURÉ (un lancement) | `3018756`, dans `performance` depuis `bb988d4` : 6,43 images par seconde contre 5,25, médiane 153 contre 188 ms, 300 s sans perte. |
+| 13 murs manquants | FAIT, NON VÉRIFIÉ | `a5b2dd3` : descripteurs copiés en octets, vues multiples d'une page (correctifs de l'amont). |
 | 12 fusion de l'amont fxceless | À FAIRE | 98 commits, 35 blocs en conflit sur la branche stable (BLOCKERS 37). |
 | 8 préréglage SafeMode abaissé | FAIT, JAMAIS LANCÉ | `2cf979c`, option `prereglage:bas|extreme|diagnostic|safemode`. 11 tests hors jeu. Positions des champs non vérifiées en jeu (BLOCKERS 35). |
 | 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |
