@@ -1489,6 +1489,26 @@ mod merge_tests {
 /// snapshot still holds) and the bytes of title memory they copy.
 static LIVE: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 
+/// (PROJECT ONE) For the frame log: host copies of title memory alive, and
+/// their bytes.
+pub(crate) fn live() -> [u64; 2] {
+    [LIVE[0].load(Ordering::Relaxed), LIVE[1].load(Ordering::Relaxed)]
+}
+
+/// (PROJECT ONE) For the frame log: of those, the windows of title memory
+/// outside buffers alive, and their bytes (each once: a window may stand
+/// under several keys).
+pub(crate) fn windows_live() -> [u64; 2] {
+    let loose = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut seen = std::collections::HashSet::new();
+    let bytes: u64 = loose
+        .values()
+        .filter(|s| seen.insert(Arc::as_ptr(s) as usize))
+        .map(|s| s.len)
+        .sum();
+    [seen.len() as u64, bytes]
+}
+
 impl Drop for Shadow {
     fn drop(&mut self) {
         if self.place.is_some() {

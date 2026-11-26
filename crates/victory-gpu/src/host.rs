@@ -71,7 +71,21 @@ unsafe impl Sync for Host {}
 /// releases reach the host at once, from its own threads, while the host
 /// runs a submission: freeing there is a GPU page fault on the freed
 /// texture (a device hang).
-static RETIRED: Mutex<Vec<(u64, Retired)>> = Mutex::new(Vec::new());
+static RETIRED: Mutex<Vec<(u64, u64, Retired)>> = Mutex::new(Vec::new());
+
+/// (PROJECT ONE) Frames an object [`retire`] was given outlives the
+/// submissions running then: 2, or `VICTORY_RETIRE_FRAMES` (0: dropped as
+/// soon as those have finished, at once if none runs, as before).
+///
+/// A list the title has submitted is not always running yet (it may be
+/// held and run with the next ones), and nothing counts it: an object the
+/// title let go of in between was freed at once and read afterwards. Runs
+/// of 25/11 lost the card so, the page fault inside a freed "list scratch"
+/// (19:07, 22:21) and inside a freed 1920x1088 render target (22:23).
+fn retire_frames() -> u64 {
+    static FRAMES: OnceLock<u64> = OnceLock::new();
+    *FRAMES.get_or_init(|| std::env::var("VICTORY_RETIRE_FRAMES").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(2))
+}
 /// Submissions started and finished (waited for).
 static STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static FINISHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -208,7 +222,8 @@ fn sweep() {
 /// if none is.
 pub(crate) fn retire<T: 'static>(object: T) {
     let started = STARTED.load(Ordering::Acquire);
-    if started <= FINISHED.load(Ordering::Acquire) {
+    let frames = retire_frames();
+    if frames == 0 && started <= FINISHED.load(Ordering::Acquire) {
         RETIREMENTS[0].fetch_add(1, Ordering::Relaxed);
         drop(object);
         return;
@@ -217,7 +232,7 @@ pub(crate) fn retire<T: 'static>(object: T) {
     RETIRED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push((started, Retired(Box::new(object))));
+        .push((started, crate::frame::current() + frames, Retired(Box::new(object))));
 }
 
 /// Submissions started and finished so far ([`STARTED`], [`FINISHED`]): a
@@ -230,14 +245,15 @@ pub(crate) fn submissions() -> (u64, u64) {
 
 /// Drops what waited for submissions up to `finished`.
 fn bury(finished: u64) {
-    let done: Vec<(u64, Retired)> = {
+    let done: Vec<(u64, u64, Retired)> = {
         let mut retired = RETIRED.lock().unwrap_or_else(|e| e.into_inner());
         if retired.is_empty() {
             return;
         }
+        let frame = crate::frame::current();
         let (done, keep) = std::mem::take(&mut *retired)
             .into_iter()
-            .partition(|(at, _)| *at <= finished);
+            .partition(|(at, due, _)| *at <= finished && *due <= frame);
         *retired = keep;
         done
     };
@@ -1817,8 +1833,11 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
             }
         }
     }
-    // Freed outside the lock.
-    drop(freed);
+    // Freed outside the lock, and not before what may still read them has
+    // run ([`retire_frames`]).
+    if !freed.is_empty() {
+        retire(freed);
+    }
     given_back();
 }
 
@@ -7117,9 +7136,17 @@ impl Meter {
                 let [passes, pass_ms] = take(&crate::draw::HEAP_TEXTURE_PASSES);
                 let [copies, copies_ms] = take(&crate::resource::HOST_TEXTURES_MADE);
                 let [stagings, stagings_ms] = take(&crate::texture::STAGING_MADE);
+                let (pool, pool_bytes) = crate::staging_pool::stats();
                 tracing::info!(
                     "texture pass, last 5 s: {passes} passes took {pass_ms} ms; {copies} host textures made in {copies_ms} ms; \
-                     {stagings} staging buffers made in {stagings_ms} ms"
+                     {stagings} staging buffers made in {stagings_ms} ms; staging pool since the start: {} leases, {} chunks \
+                     ({} MB), {} chunks handed out again, {} asks refused (pool full), {} bytes written after a lease's end",
+                    pool.leases,
+                    pool.chunks,
+                    pool_bytes >> 20,
+                    pool.reuses,
+                    pool.refused,
+                    pool.broken
                 );
                 let [queued, due, away, partly, oldest] =
                     [0, 1, 2, 3, 4].map(|i| crate::draw::HEAP_TEXTURES_QUEUE[i].load(Ordering::Relaxed));

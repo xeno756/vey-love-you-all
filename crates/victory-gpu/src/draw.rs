@@ -2030,7 +2030,9 @@ impl State {
                 crate::texture::upload_again(resource);
             }
             if let Some(view) = &view {
-                readable(list, sampled.kind, view);
+                // (PROJECT ONE) A staging buffer made here is let go below
+                // (`unstage`): its bytes come from the staging pool.
+                crate::staging_pool::transient(|| readable(list, sampled.kind, view));
             }
             // A texture view the host refuses removes the device: name it.
             static GONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

@@ -67,6 +67,8 @@ pub mod shader_cache;
 mod memory;
 #[cfg(windows)]
 mod shadow;
+#[cfg(windows)]
+mod staging_pool;
 pub mod signature;
 #[cfg(windows)]
 pub mod splash;

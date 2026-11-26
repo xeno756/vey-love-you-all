@@ -69,6 +69,12 @@ pub(crate) struct Staging {
     /// Highest late-submission number (`crate::host::STARTED`) that may
     /// still be reading this staging buffer on the GPU (`0` if none).
     in_flight: std::sync::atomic::AtomicU64,
+    /// (PROJECT ONE) Where its bytes begin in `buffer`: 0 in a buffer of
+    /// its own, the lease's place in a chunk of `crate::staging_pool`
+    /// (`data` points there already; footprints count from it).
+    base: u64,
+    /// The lease, held for as long as anything may read the bytes.
+    _lease: Option<crate::staging_pool::Lease>,
 }
 
 /// What a texture's staging buffer holds: the hash of the memory detiled
@@ -476,6 +482,12 @@ fn with_title<R>(memory: *const u8, size: usize, f: impl FnOnce(&[u8]) -> R) -> 
 /// bytes.
 static STAGED: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 
+/// (PROJECT ONE) For the frame log: staging buffers alive, and their bytes.
+pub(crate) fn staged_now() -> [u64; 2] {
+    use std::sync::atomic::Ordering::Relaxed;
+    [STAGED[0].load(Relaxed), STAGED[1].load(Relaxed)]
+}
+
 impl Drop for Staging {
     fn drop(&mut self) {
         use std::sync::atomic::Ordering::Relaxed;
@@ -660,7 +672,7 @@ pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resou
         {
             let f = footprint.Footprint;
             // SAFETY: live resources.
-            let (gpu, d) = unsafe { (staging.buffer.GetGPUVirtualAddress(), texture.GetDesc()) };
+            let (gpu, d) = unsafe { (staging.buffer.GetGPUVirtualAddress() + staging.base, texture.GetDesc()) };
             let len = u64::from(f.RowPitch) * u64::from(staging.rows[i]) * u64::from(f.Depth);
             list.note_read(
                 || {
@@ -696,7 +708,10 @@ pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resou
             pResource: unsafe { std::mem::transmute_copy(&staging.buffer) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: *footprint,
+                PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                    Offset: footprint.Offset + staging.base,
+                    ..*footprint
+                },
             },
         };
         // SAFETY: an open list; both locations name live resources.
@@ -1467,16 +1482,27 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
             Some(&mut total),
         );
     }
-    let made = host.upload_buffer(total);
+    // (PROJECT ONE) From the pool where this is a staging buffer let go at
+    // its list's reset and the pool has room (`crate::staging_pool`), else
+    // a buffer of its own.
+    let lease = crate::staging_pool::lease(host, total);
+    let made = match lease.as_ref().and_then(|l| l.buffer().map(|b| (b.clone(), l.data(), l.base()))) {
+        Some((buffer, data, base)) => Some((buffer, data, base)),
+        None => host.upload_buffer(total).map(|(buffer, data)| {
+            crate::host::name(&buffer, || {
+                format!(
+                    "staging of {resource:?} {}x{}x{} f{}",
+                    d.Width, d.Height, d.DepthOrArraySize, d.Format.0
+                )
+            });
+            (buffer, data, 0)
+        }),
+    };
     STAGING_MADE[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     STAGING_MADE[1].fetch_add(began.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
-    let (buffer, data) = made?;
-    crate::host::name(&buffer, || {
-        format!(
-            "staging of {resource:?} {}x{}x{} f{}",
-            d.Width, d.Height, d.DepthOrArraySize, d.Format.0
-        )
-    });
+    let (buffer, data, base) = made?;
+    // The lease only where its buffer is the one used.
+    let lease = lease.filter(|l| l.data() == data);
     tracing::debug!(?desc, total, "texture contents uploaded from title memory");
     STAGED[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     STAGED[1].fetch_add(total, std::sync::atomic::Ordering::Relaxed);
@@ -1500,6 +1526,8 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
         uploaded: std::sync::atomic::AtomicBool::new(false),
         used: std::sync::atomic::AtomicU64::new(crate::host::moment()),
         in_flight: std::sync::atomic::AtomicU64::new(0),
+        base,
+        _lease: lease,
     });
     map.insert(resource as usize, s.clone());
     Some(s)

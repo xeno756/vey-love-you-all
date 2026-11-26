@@ -23,7 +23,9 @@ pub(crate) const WINDOW: usize = 300;
 pub(crate) const HEADER: &str = "frame,t_ms,frame_ms,cpu_ms,gpu_ms,back_ms,draws,dropped,indirect_dropped,pipelines_making,\
 tex_uploaded,tex_uploaded_mb,tex_waiting,no_upload_run,no_upload_longest,stream_stalls,tex_past_pool,pool_mb,pool_held_mb,\
 tex_levels_left_out,card_mb,card_budget_mb,shared_mb,\
-pipe_wait_ms,pipes_made,pipe_make_ms,shaders_translated,shader_cache_hits,pipe_oldest_ms";
+pipe_wait_ms,pipes_made,pipe_make_ms,shaders_translated,shader_cache_hits,pipe_oldest_ms,\
+shared_budget_mb,tex_due,tex_away,host_tex_alive,host_tex_mb,staging_alive,staging_mb,title_copies_mb,\
+windows_alive,windows_mb,ram_free_mb,commit_left_mb";
 
 /// What the meter counts, as read at a frame: microseconds preparing
 /// submissions, waiting for the card and copying back; draws run; draws
@@ -43,6 +45,22 @@ struct Log {
     /// (PROJECT ONE) Pipeline and translation totals at the last frame:
     /// waited µs, made, making µs, translated, found in the cache.
     pipes_before: [u64; 5],
+    /// (PROJECT ONE) Windows of title memory outside buffers alive and
+    /// their bytes, read now and then (a walk under their lock).
+    windows: [u64; 2],
+}
+
+/// (PROJECT ONE) The PC's physical memory free and what is left to commit,
+/// in bytes.
+#[cfg(windows)]
+fn system_memory() -> [u64; 2] {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: plain data the call fills in.
+    let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    m.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: a sized structure.
+    unsafe { GlobalMemoryStatusEx(&mut m) };
+    [m.ullAvailPhys, m.ullAvailPageFile]
 }
 
 /// (PROJECT ONE) Pipeline and translation totals as they stand.
@@ -86,6 +104,7 @@ pub(crate) fn frame(now: Counters, making: u64) {
         file: open(),
         memory: None,
         pipes_before: pipe_totals().0,
+        windows: [0; 2],
     });
     log.frame += 1;
     let ms = at.duration_since(log.last).as_secs_f64() * 1000.0;
@@ -107,14 +126,23 @@ pub(crate) fn frame(now: Counters, making: u64) {
     }
     let Some(file) = log.file.as_mut() else { return };
     let stream = crate::draw::stream_stats();
-    let [budget, used, _, shared] = log.memory.unwrap_or_default();
+    let [budget, used, shared_budget, shared] = log.memory.unwrap_or_default();
+    if log.frame % 16 == 2 {
+        log.windows = crate::shadow::windows_live();
+    }
+    let [windows, window_bytes] = log.windows;
+    let queue = [1, 2].map(|i| crate::draw::HEAP_TEXTURES_QUEUE[i].load(std::sync::atomic::Ordering::Relaxed));
+    let host_textures = [0, 1].map(|i| crate::resource::HOST_TEXTURES[i].load(std::sync::atomic::Ordering::Relaxed));
+    let staged = crate::texture::staged_now();
+    let [_, copies_bytes] = crate::shadow::live();
+    let [ram_free, commit_left] = system_memory();
     let mb = |bytes: u64| bytes >> 20;
     let (pipes, oldest) = pipe_totals();
     let p: Vec<u64> = pipes.iter().zip(log.pipes_before).map(|(now, was)| now.saturating_sub(was)).collect();
     log.pipes_before = pipes;
     let _ = writeln!(
         file,
-        "{},{:.1},{ms:.2},{:.2},{:.2},{:.2},{},{},{},{making},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.2},{},{:.2},{},{},{oldest}",
+        "{},{:.1},{ms:.2},{:.2},{:.2},{:.2},{},{},{},{making},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.2},{},{:.2},{},{},{oldest},{},{},{},{},{},{},{},{},{windows},{},{},{}",
         log.frame,
         at.duration_since(log.began).as_secs_f64() * 1000.0,
         spent[0] as f64 / 1000.0,
@@ -141,6 +169,17 @@ pub(crate) fn frame(now: Counters, making: u64) {
         p[2] as f64 / 1000.0,
         p[3],
         p[4],
+        mb(shared_budget),
+        queue[0],
+        queue[1],
+        host_textures[0],
+        mb(host_textures[1]),
+        staged[0],
+        mb(staged[1]),
+        mb(copies_bytes),
+        mb(window_bytes),
+        mb(ram_free),
+        mb(commit_left),
     );
     // A run ended by the window's close writes no last line of its own.
     if log.frame.is_multiple_of(30) || ms > 250.0 {
@@ -264,7 +303,9 @@ mod tests {
 
     #[test]
     fn the_file_has_a_column_for_every_value_written() {
-        // 29 columns: the line `frame` writes has as many values.
-        assert_eq!(HEADER.split(',').count(), 29);
+        // 41 columns: the line `frame` writes has as many values.
+        assert_eq!(HEADER.split(',').count(), 41);
+        // One line: a line break in it made three header lines (25/11).
+        assert!(!HEADER.contains('\n') && !HEADER.contains(' '));
     }
 }
