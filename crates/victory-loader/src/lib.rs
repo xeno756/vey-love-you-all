@@ -25,6 +25,8 @@ mod crash;
 #[cfg(windows)]
 mod hooks;
 pub mod prepare;
+#[cfg(windows)]
+mod preset;
 pub mod resolve;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;

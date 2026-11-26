@@ -9,7 +9,7 @@ use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect}
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 /// First 16 hex digits of the BLAKE3 of the Series X 1.0.2.1 executable.
-const BUILD_1_0_2_1: &str = "b99f876b74d4a77f";
+pub(crate) const BUILD_1_0_2_1: &str = "b99f876b74d4a77f";
 
 /// Environment variable that turns the watchdog hook on.
 pub(crate) const NO_WATCHDOG_ENV: &str = "VICTORY_NO_WATCHDOG";

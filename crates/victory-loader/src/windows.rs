@@ -108,6 +108,9 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
             crate::hooks::SERIES_S_QUALITY_ENV
         );
     }
+    let is_1_0_2_1 = prepared.original_hash.to_hex().starts_with(crate::hooks::BUILD_1_0_2_1);
+    // SAFETY: just mapped, and no title code has run.
+    unsafe { crate::preset::install(loaded.base(), is_1_0_2_1) };
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),
         preferred = format_args!("{:#x}", loaded.info.image_base),

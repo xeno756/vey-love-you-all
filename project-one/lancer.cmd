@@ -104,6 +104,9 @@ rem                                         seconde, mais 10 pertes de carte sur
 rem                                         lancements le 26/11
 rem   ... performance fenetres              les dessins indirects qui se suivent sont
 rem                                         bornes en une passe, pas un par un
+rem   ... performance prereglage:bas        le prereglage SafeMode du jeu, abaisse
+rem                                         (bas, extreme, diagnostic, safemode ; voir
+rem                                         :preset plus bas). Jamais lance ici
 rem
 rem Le dossier du jeu vient de victory.toml, a la racine du depot (non suivi
 rem par git), ou du fichier que VICTORY_CONFIG designe. Chaque lancement garde
@@ -130,6 +133,7 @@ set "PRECIS="
 set "FENETRES="
 set "PROFIL="
 set "SANS_DESSINS="
+set "PREREGLAGE="
 :args
 if "%~2"=="" goto args_done
 if /i "%~2"=="rapide" call :rapide
@@ -163,6 +167,8 @@ for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="echelle" set "ECHELLE=%%b"
     if /i "%%a"=="vitesse" call :vitesse %%b
     if /i "%%a"=="relais" call :relay %%b
+    if /i "%%a"=="prereglage" call :preset "%%b"
+    if /i "%%a"=="prereglage-base" set "VICTORY_PRESET_BASE=%%b"
 )
 shift /2
 goto args
@@ -256,6 +262,7 @@ if "%RELAIS%"=="1" set "TAG=%TAG%-relais"
 if "%RELAIS%"=="2" set "TAG=%TAG%-relais2"
 if defined PRECIS set "TAG=%TAG%-precis"
 if defined FENETRES set "TAG=%TAG%-fenetres"
+if defined PREREGLAGE set "TAG=%TAG%-prereglage-%PREREGLAGE%"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -278,6 +285,7 @@ if defined SANS_DESSINS echo   dessins : laisses de cote pour %SANS_DESSINS% (ce
 if defined VICTORY_AMBIENT_FILL if /i not "%VICTORY_AMBIENT_FILL%"=="off" echo   lumiere : rebondie remplie a %VICTORY_AMBIENT_FILL% (rien ne l'ecrit)
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
+if defined PREREGLAGE echo   prereglage : %PREREGLAGE% sur la base %VICTORY_PRESET_BASE% (le journal dit ce qui a ete change)
 if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune
 if "%RELAIS%"=="2" echo   relais  : niveau 2, une lecture n'attend que les soumissions qui ecrivent ce qu'elle lit
 if defined PRECIS if "%VICTORY_SYNC_PRECISE%"=="1" echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
@@ -536,6 +544,24 @@ rem tiers de la taille demandee.
 set "VICTORY_SERIES_S_QUALITY=1"
 set "VICTORY_OWN_UPSCALER=1"
 set "QUALITE=s"
+goto :eof
+
+rem Le prereglage graphique du jeu choisi et abaisse avant que le jeu ne
+rem l'applique (VICTORY_PRESET) : sa base est SafeMode, sauf
+rem prereglage-base:jeu (celle que le jeu choisit), lockhart ou anaconda.
+rem   prereglage:safemode   la base seule
+rem   prereglage:bas        A : qualites au plus bas, sans flou de mouvement,
+rem                         niveau de detail 0,6, herbe 0,5
+rem   prereglage:extreme    B : A, detail 0,5, herbe 0,25, moins de pietons et
+rem                         de vehicules
+rem   prereglage:diagnostic C : detail 0,3, herbe 0,1 ; pour mesurer, pas pour jouer
+rem Les champs viennent du schema des reglages, leurs positions ne sont pas
+rem reverifiees dans le jeu : un champ dont la valeur n'a pas la forme attendue
+rem est laisse tel quel, et le journal le dit. Jamais lance ici.
+:preset
+set "PREREGLAGE=%~1"
+set "VICTORY_PRESET=%~1"
+if not defined VICTORY_PRESET_BASE set "VICTORY_PRESET_BASE=safemode"
 goto :eof
 
 rem Ajoute des groupes d'effets (separes par +) a ceux a laisser de cote.
