@@ -1886,7 +1886,16 @@ impl State {
         // records the frame, and making and staging 192 MB of textures took
         // 1.6-2.2 s of each of the world's first twenty frames (run 20).
         // The rest waits for the next frames, as it does past the bytes.
-        const SPAN: std::time::Duration = std::time::Duration::from_millis(250);
+        // (PROJECT ONE) `VICTORY_TEXTURE_SPAN_MS` (250 by default, as it was):
+        // at nine frames a second a pass of 250 ms is more than two frames.
+        // The world's first minute made 3,000 to 9,000 host textures every
+        // 5 s so, 1.1 to 3.3 s of them, at 2 to 3 frames a second (run of
+        // 26/11, 8:25). A shorter span keeps the frames and loads later.
+        static SPAN_ORDINARY: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+        let span_ordinary = *SPAN_ORDINARY.get_or_init(|| {
+            let ms = std::env::var("VICTORY_TEXTURE_SPAN_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(250);
+            std::time::Duration::from_millis(ms)
+        });
         // (PROJECT ONE) `VICTORY_TEXTURE_CATCHUP_MS` (1500 by default): a pass
         // catching up took up to that, and frames of 1.5 to 1.9 s with it
         // (runs of 25/11: 72 % of it making a host texture and a staging
@@ -1899,7 +1908,7 @@ impl State {
         let (per_frame, span) = if census[0] > LONG && catching_up(std::time::Duration::ZERO) {
             (budget_per_frame.max(PER_FRAME_CATCHING_UP), span_catching_up)
         } else {
-            (budget_per_frame, SPAN)
+            (budget_per_frame, span_ordinary)
         };
         let began = std::time::Instant::now();
         for (index, write) in due {
@@ -2094,7 +2103,7 @@ impl State {
                 None => host.texture_slot_done(index, write, again),
             }
         }
-        catching_up(began.elapsed().saturating_sub(SPAN));
+        catching_up(began.elapsed().saturating_sub(span_ordinary));
     }
 
     /// For the frame listing, after a dropped dispatch's line: its group
