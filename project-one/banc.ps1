@@ -79,7 +79,7 @@ while ($true) {
     $now = Get-Date
     if (-not $worldAt) {
         if ($draws -ge 300) { $worldAt = $now }
-        elseif (($now - $lastPress).TotalSeconds -ge 2) { Set-Content -Path $press -Value "A" -NoNewline; $lastPress = $now }
+        elseif (($now - $lastPress).TotalSeconds -ge 2) { try { Set-Content -Path $press -Value "A" -NoNewline -ErrorAction Stop } catch {}; $lastPress = $now }
     } elseif (($now - $worldAt).TotalSeconds -ge $Monde) { break }
     if (($now - $began).TotalSeconds -ge $Plafond) { $ended = "ferme par le banc a sa limite de temps"; break }
 }
