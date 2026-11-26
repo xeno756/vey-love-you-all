@@ -239,6 +239,7 @@ lancement à l'autre.
 | 9 h 42 | C : `performance-sur fenetres sans:volumetrie-collecte` + textures 80 ms + fenêtres qui passent les tampons, **sans `vitesse:3`**, Discord et OBS ouverts | 5,33 | 181 / 210 / 403 ms | 78 + 96 + 100 | 4,3 par image, 95 ms | **240 s, carte tenue** : `vitesse:3` est la cause |
 | 9 h 48 | D : C + 256 listes en vol (`VICTORY_LATE_WAIT_LISTS=256`), Discord et OBS ouverts | 5,99 | 164 / 236 / 396 ms | 76 + 67 + 112 | 1,7 par image, 67 ms | 240 s, carte tenue ; aucun dessin refusé faute d'emplacements ; la carte est occupée 81 % du temps |
 | 10 h 02 | E : D + la comparaison de la carte par groupe (`a191a66`), Discord et OBS ouverts | **6,31** | 151 / 223 / 397 ms | 82 + 52 + 88 | 1,1 par image, 55 ms | 240 s, carte tenue ; carte occupée 73 % (81 % avant), et pourtant 3 160 dessins par image au lieu de 2 590 : devenu `performance` (`532831c`) |
+| 10 h 09 | `performance` (`532831c`), **version diagnostic** avec captures, Discord (720 Mo) ouvert | — | — | — | — | **carte perdue avant le monde** (même signature) : la panne n'est donc pas seulement celle de `vitesse:3` ; les captures n'ont montré que le noir du début |
 
 À comparer : le même réglage sans la correction des objets libérés avait perdu la carte à
 90 s (8 h 25). Un lancement ne prouve pas la stabilité : il en faut d'autres.
