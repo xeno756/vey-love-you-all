@@ -386,6 +386,8 @@ struct Lane {
     /// queue submitted itself, until the title's Submit: reads into physical
     /// pages and the status entries behind them ([`Lanes::submit_as`]).
     held: Vec<Command>,
+    /// When the first of `held` was left out.
+    held_since: Option<std::time::Instant>,
     /// Submitted, by sequence number: reads not started, status entries
     /// not written, reads running, and failures not yet reported.
     reads: VecDeque<(u64, Request)>,
@@ -603,6 +605,24 @@ impl Lanes {
         if lane.reads.is_empty() {
             lane.clock = lane.clock.max(self.lane_now[class]);
         }
+        // What the title's Submit releases, and how long it waited (logged:
+        // a held batch is streamed data the world waits for).
+        if explicit
+            && !lane.held.is_empty()
+            && let Some(since) = lane.held_since.take()
+        {
+            static RELEASES: AtomicU64 = AtomicU64::new(0);
+            let n = RELEASES.fetch_add(1, Ordering::Relaxed) + 1;
+            let ms = since.elapsed().as_millis() as u64;
+            if n.is_power_of_two() || ms >= 250 {
+                tracing::info!(
+                    n,
+                    entries = lane.held.len(),
+                    ms,
+                    "dstorage: reads held for the title's Submit are released"
+                );
+            }
+        }
         let mut commands = if explicit { std::mem::take(&mut lane.held) } else { Vec::new() };
         commands.append(&mut lane.unsubmitted);
         for command in commands {
@@ -622,6 +642,9 @@ impl Lanes {
                 Command::Status(status) => lane.statuses.push_back((seq, status)),
             }
         }
+        if !lane.held.is_empty() && lane.held_since.is_none() {
+            lane.held_since = Some(std::time::Instant::now());
+        }
         lane.flush();
     }
 }
@@ -634,6 +657,7 @@ impl Lane {
             clock: 0,
             unsubmitted: Vec::new(),
             held: Vec::new(),
+            held_since: None,
             reads: VecDeque::new(),
             statuses: VecDeque::new(),
             running: BTreeSet::new(),

@@ -308,7 +308,7 @@ if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
 if defined PREREGLAGE echo   prereglage : %PREREGLAGE% sur la base %VICTORY_PRESET_BASE% (le journal dit ce qui a ete change)
 if defined OMBRES_SOLEIL echo   soleil  : ombres des %VICTORY_SHADOW_CASCADES% cascades les plus proches, pas plus loin
-if defined ATTENTES_TEXTURES echo   attentes: ESSAI, une texture n'attend que la soumission qui lit encore son tampon d'envoi
+if defined ATTENTES_TEXTURES echo   attentes: une texture n'attend que la soumission qui lit encore son tampon d'envoi (mesure une fois : +22 %%)
 if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune
 if "%RELAIS%"=="2" echo   relais  : niveau 2, une lecture n'attend que les soumissions qui ecrivent ce qu'elle lit
 if defined PRECIS if "%VICTORY_SYNC_PRECISE%"=="1" echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
@@ -453,10 +453,15 @@ rem Depuis 12 h : la cascade la plus proche des ombres du soleil est dessinee
 rem (ombres-soleil:1). Sans aucune carte d'ombres, le soleil traversait les
 rem murs : rectangles orange a l'interieur et brouillard eclaire dans les
 rem pieces (captures de l'utilisateur, 11 h 15). Cette cascade fait 370 des
-rem 1 621 dessins des cascades (image du 25/11) ; non mesure en jeu.
+rem 1 621 dessins des cascades (image du 25/11). Mesure de 13 h 05 : 5,25
+rem images par seconde, mediane 188 ms (13 ms de plus que sans ombres).
+rem Depuis 14 h : attentes-textures aussi. Mesure de 13 h 14 (un lancement,
+rem 300 s sans perte) : 6,43 images par seconde, mediane 153 ms au lieu de
+rem 188. VICTORY_STAGING_PRECISE=0 avant le lancement le retire.
 :performance
 call :performance_core
 call :sun_shadows 1
+call :staging_precise
 goto :eof
 
 rem Profil A : performance sans aucune carte d'ombres (le soleil traverse les
@@ -503,7 +508,7 @@ rem la soumission qui lit son tampon. La moitie dangereuse de precis (les
 rem lectures de memoire du jeu, comme relais:2) n'est PAS prise.
 :staging_precise
 if not defined VICTORY_STAGING_PRECISE set "VICTORY_STAGING_PRECISE=1"
-set "ATTENTES_TEXTURES=1"
+if "%VICTORY_STAGING_PRECISE%"=="1" set "ATTENTES_TEXTURES=1"
 goto :eof
 
 :performance_sure
