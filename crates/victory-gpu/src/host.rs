@@ -7136,17 +7136,20 @@ impl Meter {
                 let [passes, pass_ms] = take(&crate::draw::HEAP_TEXTURE_PASSES);
                 let [copies, copies_ms] = take(&crate::resource::HOST_TEXTURES_MADE);
                 let [stagings, stagings_ms] = take(&crate::texture::STAGING_MADE);
-                let (pool, pool_bytes) = crate::staging_pool::stats();
+                let (pool, pool_bytes, (pool_again, pool_chunks)) = crate::staging_pool::stats();
                 tracing::info!(
                     "texture pass, last 5 s: {passes} passes took {pass_ms} ms; {copies} host textures made in {copies_ms} ms; \
                      {stagings} staging buffers made in {stagings_ms} ms; staging pool since the start: {} leases, {} chunks \
-                     ({} MB), {} chunks handed out again, {} asks refused (pool full), {} bytes written after a lease's end",
+                     ({} MB), {} chunks handed out again, {} asks refused (pool full), {} bytes written after a lease's end; \
+                     {} leases ({} MB) from chunks handed out again, {pool_again} of {pool_chunks} chunks handed out again at least once",
                     pool.leases,
                     pool.chunks,
                     pool_bytes >> 20,
                     pool.reuses,
                     pool.refused,
-                    pool.broken
+                    pool.broken,
+                    pool.reused_leases,
+                    pool.reused_bytes >> 20
                 );
                 let [queued, due, away, partly, oldest] =
                     [0, 1, 2, 3, 4].map(|i| crate::draw::HEAP_TEXTURES_QUEUE[i].load(Ordering::Relaxed));

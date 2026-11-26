@@ -15,6 +15,9 @@
 //! by): never by a count of frames. While the pool is full, an ask gets a
 //! buffer of its own, as before.
 //!
+//! A range is handed out as zeros, like a new upload buffer: a staging the
+//! upload does not write (a texture not mapped yet) must stay black.
+//!
 //! - `VICTORY_STAGING_POOL=0`: off (a buffer per texture, as before). On by
 //!   default since the runs of 25/11, 22:30 to 23:24: a staging buffer made
 //!   in 0.026 ms against 0.450, no range written after its lease in 197
@@ -56,6 +59,8 @@ pub(crate) struct Chunk {
     live: AtomicU64,
     /// Submissions started when a lease last ended.
     ended: AtomicU64,
+    /// Times it was handed out again from its start.
+    reuses: AtomicU64,
 }
 
 // SAFETY: the buffer is free-threaded; the memory is written through
@@ -137,6 +142,10 @@ pub(crate) struct Stats {
     pub(crate) reuses: u64,
     pub(crate) refused: u64,
     pub(crate) broken: u64,
+    /// Leases given from a chunk handed out again (memory an earlier lease
+    /// had), and their bytes: what the poison check covers.
+    pub(crate) reused_leases: u64,
+    pub(crate) reused_bytes: u64,
 }
 
 pub(crate) struct Pool {
@@ -164,6 +173,12 @@ impl Pool {
 
     pub(crate) fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// Chunks handed out again at least once, and chunks in all.
+    pub(crate) fn exercised(&self) -> (u64, u64) {
+        let again = self.chunks.iter().filter(|c| c.reuses.load(Ordering::Relaxed) > 0).count();
+        (again as u64, self.chunks.len() as u64)
     }
 
     /// Bytes of the chunks made.
@@ -206,6 +221,7 @@ impl Pool {
                 }
             }
             chunk.used.store(0, Ordering::Relaxed);
+            chunk.reuses.fetch_add(1, Ordering::Relaxed);
             self.stats.reuses += 1;
             self.current = Some(i);
             return Some(self.take(i, 0, aligned, len));
@@ -228,6 +244,7 @@ impl Pool {
             used: AtomicU64::new(0),
             live: AtomicU64::new(0),
             ended: AtomicU64::new(0),
+            reuses: AtomicU64::new(0),
         }));
         self.stats.chunks += 1;
         let i = self.chunks.len() - 1;
@@ -237,9 +254,21 @@ impl Pool {
 
     fn take(&mut self, i: usize, at: u64, aligned: u64, len: u64) -> Lease {
         let chunk = &self.chunks[i];
+        // A range begins as zeros, as a new upload buffer does: the staging
+        // of a texture whose memory the title has not mapped yet is not
+        // written at all (`texture.rs`, the partly mapped and all-zero
+        // cases) and is copied as it is. Without this it held the bytes of
+        // the lease before it, and such a texture showed another's texels
+        // instead of black (found on 26/11 by reading; the pool of 25/11).
+        // SAFETY: the range `at..at + len` of the chunk, which no lease has.
+        unsafe { chunk.data.add(at as usize).write_bytes(0, len as usize) };
         chunk.used.store(at + aligned, Ordering::Relaxed);
         chunk.live.fetch_add(1, Ordering::AcqRel);
         self.stats.leases += 1;
+        if chunk.reuses.load(Ordering::Relaxed) > 0 {
+            self.stats.reused_leases += 1;
+            self.stats.reused_bytes += len;
+        }
         Lease {
             chunk: chunk.clone(),
             base: at,
@@ -299,9 +328,9 @@ pub(crate) fn lease(host: &crate::host::Host, len: u64) -> Option<Lease> {
 
 /// For the log: the pool's counts and its bytes (zeros while it is off or
 /// unused).
-pub(crate) fn stats() -> (Stats, u64) {
+pub(crate) fn stats() -> (Stats, u64, (u64, u64)) {
     let pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    pool.as_ref().map_or((Stats::default(), 0), |p| (p.stats(), p.bytes()))
+    pool.as_ref().map_or((Stats::default(), 0, (0, 0)), |p| (p.stats(), p.bytes(), p.exercised()))
 }
 
 #[cfg(test)]
@@ -369,6 +398,27 @@ mod tests {
         CLOCK.set((7, 7));
         let again = pool.lease(LARGEST, memory).unwrap();
         assert_eq!((again.base(), pool.stats().reuses, pool.stats().chunks), (0, 1, 1));
+        assert_eq!((pool.stats().reused_leases, pool.stats().reused_bytes, pool.exercised()), (1, LARGEST, (1, 1)));
+    }
+
+    #[test]
+    fn a_lease_begins_as_zeros_whatever_the_one_before_wrote() {
+        CLOCK.set((0, 0));
+        for poison in [false, true] {
+            let mut pool = Pool::new(CHUNK, clock, poison);
+            let all: Vec<Lease> = (0..4).map(|_| pool.lease(LARGEST, memory).unwrap()).collect();
+            for lease in &all {
+                // SAFETY: the lease's range.
+                unsafe { lease.data().write_bytes(0xee, LARGEST as usize) };
+            }
+            drop(all);
+            // The chunk again, from its start: nothing of the texels before.
+            let again = pool.lease(4096, memory).unwrap();
+            assert_eq!((again.base(), pool.stats().reuses), (0, 1));
+            // SAFETY: the lease's range.
+            let bytes = unsafe { std::slice::from_raw_parts(again.data(), 4096) };
+            assert!(bytes.iter().all(|&b| b == 0), "poison {poison}");
+        }
     }
 
     #[test]

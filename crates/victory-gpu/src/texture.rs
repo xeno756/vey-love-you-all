@@ -33,7 +33,9 @@ macro_rules! once {
 /// A texture's upload state: the staging buffer laid out as the host
 /// texture's subresources, and what was last detiled.
 pub(crate) struct Staging {
-    buffer: ID3D12Resource,
+    /// (PROJECT ONE) Let go through `crate::host::retire` where it is a
+    /// buffer of its own ([`Drop`]).
+    buffer: std::mem::ManuallyDrop<ID3D12Resource>,
     /// Its bytes.
     #[cfg(feature = "diagnostics")]
     total: u64,
@@ -493,6 +495,17 @@ impl Drop for Staging {
         use std::sync::atomic::Ordering::Relaxed;
         STAGED[0].fetch_sub(1, Relaxed);
         STAGED[1].fetch_sub(self.bytes, Relaxed);
+        // (PROJECT ONE) A buffer of its own was released here, at once: its
+        // list's reset, while a part of a list the title had submitted and
+        // the host held could still copy from it. It now waits as every
+        // retired object does (`VICTORY_RETIRE_FRAMES`). A range of the
+        // staging pool has the pool's own rule; its buffer is only a
+        // reference to the chunk's.
+        // SAFETY: taken once, in drop; the field is not used after.
+        let buffer = unsafe { std::mem::ManuallyDrop::take(&mut self.buffer) };
+        if self._lease.is_none() {
+            crate::host::retire(buffer);
+        }
     }
 }
 
@@ -705,7 +718,7 @@ pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resou
         };
         let from = D3D12_TEXTURE_COPY_LOCATION {
             // SAFETY: as above.
-            pResource: unsafe { std::mem::transmute_copy(&staging.buffer) },
+            pResource: unsafe { std::mem::transmute_copy(&*staging.buffer) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
@@ -1507,7 +1520,7 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
     STAGED[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     STAGED[1].fetch_add(total, std::sync::atomic::Ordering::Relaxed);
     let s = Arc::new(Staging {
-        buffer,
+        buffer: std::mem::ManuallyDrop::new(buffer),
         #[cfg(feature = "diagnostics")]
         total,
         data,
