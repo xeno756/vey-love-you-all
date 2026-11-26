@@ -229,6 +229,7 @@ if defined SORTIE echo   sortie  : image du jeu en %SORTIE%
 if defined ECHELLE echo   echelle : rendu 3D a %ECHELLE% de l'image du jeu
 if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
 if defined SANS echo   sans    : %SANS%
+if defined VICTORY_AMBIENT_FILL if /i not "%VICTORY_AMBIENT_FILL%"=="off" echo   lumiere : rebondie remplie a %VICTORY_AMBIENT_FILL% (rien ne l'ecrit)
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
 if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
@@ -370,4 +371,11 @@ if defined VICTORY_SKIP_SHADERS (
     set "VICTORY_SKIP_SHADERS=%PROFILS%\%~1.txt"
 )
 set "TAG=%TAG%-sans-%~1"
+rem Sans l'eclairage indirect, rien n'ecrit les textures de lumiere rebondie
+rem (R9G9B9E5 de la taille de l'image) que l'eclairage par tuiles lit : elles
+rem gardaient ce que la memoire du jeu contenait, la pate bleue des murs et des
+rem visages (captures du 25/11, 18 h 48, 19 h 25, 20 h 26). Remplies d'une
+rem lumiere faible et constante, elle ne revient plus (20 h 34, 20 h 37).
+rem VICTORY_AMBIENT_FILL=off avant le lancement : sans.
+if "%~1"=="eclairage-indirect" if not defined VICTORY_AMBIENT_FILL set "VICTORY_AMBIENT_FILL=0.02"
 goto :eof
