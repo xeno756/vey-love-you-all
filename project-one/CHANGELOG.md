@@ -4,6 +4,13 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (14 h 30) — les murs sont revenus ; la vitesse a baissé
+
+- Capture de l'utilisateur à 13 h 47 : **le dortoir a ses murs**.
+- Mais 3,8 images par seconde à 90-130 s de monde (6,7 avant) : le jeu copie 58 000
+  enregistrements de descripteurs par image, que nous refaisons maintenant, et la passe des
+  vues de tampons en paie le prix. Compteurs ajoutés pour savoir lesquels (`762c7b8`).
+
 ## 26/11/2026 (14 h) — les murs ; 6,4 images par seconde
 
 Détail : [docs/technical/12-audit-moteur-26-11.md](docs/technical/12-audit-moteur-26-11.md), section 9.

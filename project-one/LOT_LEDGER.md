@@ -24,7 +24,8 @@ lancements étaient ceux de l'utilisateur. La version à lui donner est une seul
 | 9 visages noirs (données streamées) | FAIT, NON VÉRIFIÉ | `84fe251`, deux correctifs de l'amont fxceless. Manque : une capture d'un PNJ de face. |
 | 10 soleil à travers les murs | FAIT, NON MESURÉ | `b3dd536` : cascade proche dans `performance`, profils A/B/C. |
 | 11 attentes de la carte (tampons d'envoi) | FAIT, MESURÉ (un lancement) | `3018756`, dans `performance` depuis `bb988d4` : 6,43 images par seconde contre 5,25, médiane 153 contre 188 ms, 300 s sans perte. |
-| 13 murs manquants | FAIT, NON VÉRIFIÉ | `a5b2dd3` : descripteurs copiés en octets, vues multiples d'une page (correctifs de l'amont). |
+| 13 murs manquants | FAIT, VÉRIFIÉ (une capture, 13 h 47) | `a5b2dd3`. Prix : 3,8 contre 6,7 images par seconde au même moment du monde (BLOCKERS 39). |
+| 14 coût du miroir des descripteurs | EN COURS | `762c7b8` compte les sortes d'enregistrements refaits ; à traiter après le prochain lancement. |
 | 12 fusion de l'amont fxceless | À FAIRE | 98 commits, 35 blocs en conflit sur la branche stable (BLOCKERS 37). |
 | 8 préréglage SafeMode abaissé | FAIT, JAMAIS LANCÉ | `2cf979c`, option `prereglage:bas|extreme|diagnostic|safemode`. 11 tests hors jeu. Positions des champs non vérifiées en jeu (BLOCKERS 35). |
 | 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |
