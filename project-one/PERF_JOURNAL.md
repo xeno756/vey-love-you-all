@@ -187,6 +187,13 @@ lancer de rayons) : elles gardaient ce que la mémoire du jeu contenait. Remplie
 constante, la pâte disparaît (0,0 % de pixels bleus sur deux lancements, contre jusqu'à
 23,7 % avant), sans coût mesurable.
 
+### P0 : pertes de carte, pool de tampons d'envoi, arrivée des textures (25/11, 22 h à 23 h 45)
+
+Mesures et preuves : [FINDINGS.md](FINDINGS.md), chantier P0. Série faite avec d'autres
+programmes sur la carte (310 à 330 ms de carte par image au lieu de 200) : ses chiffres ne se
+comparent qu'entre eux. Médiane inchangée (437 à 457 ms ce soir-là) : ces correctifs visent
+les pertes de carte et les images longues, pas le temps de carte.
+
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
@@ -205,6 +212,9 @@ premier `rapide`, 335 ms maintenant.
 | 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
 | 25/11 | `2d8ba5a` | 5, recopie | ne pas donner `vitesse:2` | image noire avec `VICTORY_COPY_BACK_ONLY_READBACK` | image présente avec `VICTORY_COPY_BACK_SMALL_KB=1024`, environ 250 ms contre 400 | carte perdue une fois après 72 s : expérimental |
 | 25/11 | `12e7c2b` | 3, pipelines | `VICTORY_BARYCENTRIC_GS=0` | 3 à 8 pipelines refusés, 42 dessins par image perdus | 0 refusé, aucun dessin perdu pour refus ; même temps d'image | cheveux dessinés mais mal rendus |
+| 25/11 | `c4cd932` | P0, pertes de carte | `VICTORY_RETIRE_FRAMES=0` | 2 pertes sur 2 lancements (objets libérés encore lus) | 0 sur 10 | les objets vivent 2 images de plus (mémoire négligeable) |
+| 25/11 | `c4cd932` | P0.2, pool | `VICTORY_STAGING_POOL=0` | 52 785 tampons d'envoi créés en 23,8 s par lancement | 58 922 en 1,6 s ; 26 à 34 images > 0,8 s contre 35 à 43 | une lecture trop tardive corromprait une texture : filet `VICTORY_UPLOAD_POISON=1`, rien trouvé |
+| 25/11 | `3628498` | P0.6, arrivée | `VICTORY_TEXTURE_GATE_S=60` | 26 à 34 images > 0,8 s (avec pool) | 15 à 17 ; 99 % sous 699 et 906 ms | 28 % de textures en moins à 45 s de monde, 8 % à 90 s |
 | 25/11 | `181cba5` | B1, mesure | — (compteurs) ; `VICTORY_TEXTURE_CATCHUP_MS` (1500) | aucune mesure du débit des pipelines ; grappe du 99e centile sans cause | pipelines : 0 ms d'attente, 0 traduction en jeu ; grappe : rattrapage des textures, 72 % en création de ressources | aucun : compteurs et réglage, défaut inchangé |
 | 25/11 | lanceur (`rapide`, `maximum`) | A, image | `VICTORY_AMBIENT_FILL=off` | pâte bleue sur 4 lancements de 5 (jusqu'à 23,7 % des pixels) | 0,0 % sur 2 lancements ; médiane 327 ms contre 325 | intérieurs éclairés d'une lumière rebondie constante, pas la vraie |
 | 25/11 | `83c3e60` | 3, pipelines | `VICTORY_QUAD_READS=lane` ou `op` (les rallume) | `preparer-graphiques` plante à l'enregistrement 12 363 (compilateur du pilote) | 25 204 pipelines faits, 0 échec | aucun : même traduction qu'avant la reprise `08058ad` |

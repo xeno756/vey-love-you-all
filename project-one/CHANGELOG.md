@@ -4,6 +4,25 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (23 h 45) — pertes de carte contournées, pool de tampons d'envoi
+
+Détail : [FINDINGS.md](FINDINGS.md), chantier P0. Inventaire des fichiers reçus :
+[SDK_INVENTORY.md](SDK_INVENTORY.md).
+
+- **Pertes de carte.** Deux lancements de suite ont perdu la carte ; les rapports nomment des
+  objets détruits que la carte lisait encore. Toute destruction attend maintenant 2 images de
+  plus : aucune perte sur les 10 lancements suivants, dans les mêmes conditions.
+- **Tampons d'envoi des textures.** Découpés dans quelques grands tampons gardés au lieu d'un
+  par texture : 17 fois moins cher à obtenir, vérifié par un mode « poison » qui rendrait
+  toute lecture trop tardive visible en magenta.
+- **Arrivée des textures.** `rapide` et `maximum` n'utilisent plus le rattrapage : deux fois
+  moins d'images de plus de 0,8 s, au prix d'un monde habillé un peu plus tard pendant sa
+  première minute et demie.
+- **Mémoire partagée.** Elle est faite de copies de mémoire du jeu par fenêtres de 4 Mio
+  (3,5 à 4,9 Go), pas de tampons d'envoi (0,1 Go). Le manque reste ouvert.
+- **Le « SDK » reçu** décrit les structures des fichiers de données du jeu ; ce n'est pas un
+  SDK de shaders et rien n'en est repris.
+
 ## 25/11/2026 (21 h 40) — pipelines mesurés, cause des images longues trouvée
 
 Détail : [FINDINGS.md](FINDINGS.md).
