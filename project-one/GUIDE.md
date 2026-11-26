@@ -60,6 +60,9 @@ The launcher speaks French. Its main options:
 | `textures:N` | textures without their first N levels of detail (1 to 6) |
 | `rapide` | `720p`, `textures:2`, the title's buffer copies kept on the card, and the effect group `eclairage-indirect` left out (see below) |
 | `sans:<group>` | leaves out a group of compute effects (never a draw) |
+| `sans-dessins:<group>` | leaves out the DRAWS of a group of passes (`..\victory-profils\dessins-<group>.txt`): it takes geometry away, so keep it for passes the picture can do without |
+| `sans-ombres` | `sans-dessins:ombres`: the shadow maps are no longer drawn; the world stays lit, without cast shadows |
+| `performance` | everything measured or expected to be faster, picture quality second: `maximum`, plus `sans-ombres`, `relais` and the title's own low settings. Not measured yet |
 | `traces` | diagnostics build: on a card loss, the log names the last commands |
 | `capture` | diagnostics build: saves frames |
 | `test` | prints what would run, runs nothing |
@@ -79,6 +82,11 @@ These lists come from the title, so they are not in the repository.
 lighting and indirect light probes. Without the ray tracing they rely on, they paint the
 picture pink and blue. Until you have written that file, run
 `series-x 720p textures:2` instead.
+
+`sans-ombres` and `performance` need a group of draws named `ombres`
+(`..\victory-profils\dessins-ombres.txt`): parts of the names of the shaders that draw the
+world into the shadow maps (the sun's cascades and the local lights). Leave the depth
+pre-pass of the picture itself out of that list: without it nothing is drawn.
 
 ## Credits and license
 

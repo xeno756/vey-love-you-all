@@ -148,7 +148,9 @@ git merge project-one/scarlettport
 
 ## Règles à garder
 
-- Ne jamais lancer PROJECT GAME : l'utilisateur fait tous les lancements.
+- Ne jamais lancer PROJECT GAME : l'utilisateur fait tous les lancements (règle rétablie le
+  26/11 avec la mission 10 à 15 images par seconde ; `banc.ps1` lance le jeu, c'est donc lui
+  qui l'exécute). Travailler seul : aucun sous-agent, aucune délégation.
 - Ne jamais fermer un processus par son nom : le jeu tourne sous le nom `victory.exe`.
 - Aucune ligne de `runtime/xcl` (GPL-2.0 seule) dans ce dépôt.
 - Rien qui vienne du jeu dans le dépôt : journaux, captures, listes de noms de shaders et

@@ -377,3 +377,95 @@ hors du dépôt (`..\victory-logs\outils\cartes-lots-20261126.json`). L'essentie
 - **Dessins mesh indirects.** Chacun enregistre 8 barrières (dont 2 sur toutes les
   ressources), 3 passes de calcul et 1 dessin ; le tampon de conversion et le tampon
   d'enregistrements sont uniques, ce qui empêche de les regrouper sans les découper.
+
+## Mission 10 à 15 images par seconde, cycle 1 (26/11, matin) : audit, cartes d'ombres
+
+**Règle de la mission.** Je ne lance plus le jeu : tout ce qui suit vient des journaux des
+lancements déjà faits, de la lecture du code et de tests hors jeu. Rien de ce cycle n'est
+mesuré en jeu. Les deux objectifs (moyenne ≥ 10 images par seconde et 95 % des images sous
+100 ms ; ≥ 15 et 95 % sous 66,7 ms) sont donc **non vérifiés**.
+
+### D'où l'on part
+
+| Mesure (`rapide`, 1280 × 720) | Valeur | Source |
+|---|---|---|
+| Images par seconde | 2,68 | lancement du 26/11 à 1 h 00 (649 images, série « Discord ouvert ») |
+| Médiane / 95 % | 361 ms / 418 ms | même lancement |
+| Banc propre | 327 à 337 ms de médiane | itération 4 |
+| Par image | processeur 93–101 ms + carte 197–200 + recopie 36–38 | itération 4 |
+
+Il faut passer de 330 ms à 100 ms par image pour le premier objectif : −230 ms.
+
+### Où part le temps
+
+**La carte (197–200 ms).** Journal « temps par commande » du 25/11 : 189 ms par image, dont
+136 ms dans 4 549 dessins indirects de programmes mesh et 32 ms dans 3 860 calculs. La carte
+n'a pas de mesh shaders : chaque dessin mesh coûte 3 passes de calcul, 8 barrières et 1 dessin.
+Par passe, depuis les noms de shaders :
+
+| Passe | Dessins ou calculs par image | Temps de carte |
+|---|---|---|
+| Cartes d'ombres (cascades du soleil 2048 × 8192, lumières locales 1024 × 1024) | au moins 1 300 dessins indirects | au moins 25 à 30 ms |
+| G-buffer, plus sa pré-passe de profondeur | le reste des dessins mesh | environ 37 ms, plus la pré-passe |
+| Brouillard volumétrique (collecte et lumières locales) | 4 calculs | 18,7 ms |
+
+**Le processeur (93–101 ms, plus 36–38 de recopie).** Version diagnostic du 25/11 à 23 h 26 :
+
+- le fil qui soumet passe autant de temps dans le noyau que dans son code : 110 ms et 110 ms
+  par image ;
+- **53 021 défauts de page par image**, avec 2 à 58 Mo de RAM libre : la machine (15,8 Go)
+  manque de mémoire, et le système reprend puis rend des pages à chaque image ;
+- 2 814 appels de surveillance d'écriture par image (18,8 ms) ;
+- cinq fils du jeu passent chacun environ 180 ms par image dans les appels de listes
+  (environ 8 500 appels) : un plancher à surveiller quand le reste aura baissé.
+
+### Le goulot, et le premier levier
+
+Le premier poste est le nombre de dessins mesh indirects : 136 ms de carte, et une part du
+processeur qui les prépare. Les regrouper (BLOCKERS 14) est un gros changement du chemin de
+dessin. Le premier levier retenu est plus court : **ne plus dessiner les cartes d'ombres**,
+soit au moins 1 300 de ces 4 549 dessins. Le monde reste éclairé, sans ombres portées, ce
+que la mission accepte.
+
+Fait dans la branche fusionnée (`6eaf67c`, `aad682c`, `a409572`) :
+
+- `VICTORY_SKIP_DRAW_SHADERS` : une seconde liste, à part de celle des effets. Les pipelines
+  de dessin faits avec un shader qu'elle nomme ne dessinent plus (dessins directs, indexés,
+  mesh et indirects), et chaque dessin écarté est compté. Sans la variable, rien ne change.
+- Lanceur : `sans-ombres`, `sans-dessins:<groupe>` (un fichier
+  `..\victory-profils\dessins-<groupe>.txt`), et le profil `performance` : `maximum` plus les
+  ombres écartées, le relais et les réglages bas du jeu.
+- Fichier par image : quatre colonnes en fin (`draws_left_out`, `page_faults`, `kernel_ms`,
+  `user_ms`), 45 en tout.
+- Banc : images par seconde, dessins écartés et défauts de page par image, et le verdict
+  des deux objectifs sur chaque lancement.
+
+La liste `dessins-ombres.txt` (hors dépôt) nomme douze morceaux de noms. Vérifié contre les
+noms du cache : 3 124 correspondances en tout, dont 1 044 `VS_CascadeShadows_` (les
+programmes mesh des cascades portent ce nom, précédé de `MS_`, `MSNC_` ou `MSR_`) et 729
+`PS_CascadeShadows_` ; aucun shader `PositionOnly` (la pré-passe de profondeur de l'image
+reste dessinée).
+
+### Ce que ce levier peut donner, et ce qu'il ne donnera pas
+
+Estimations, pas des mesures :
+
+| Levier | Gain attendu par image | Fondé sur |
+|---|---|---|
+| Cartes d'ombres écartées | −25 à −30 ms de carte, plus la préparation de 1 300 dessins côté processeur (non chiffrée) | temps par commande du 25/11 |
+| Relais | −54 ms | mesuré le 26/11 (312–325 ms contre 361–380) |
+| Réglages bas du jeu (`qualite-s`) | −13 % | une mesure du 25/11 (440 ms contre 506), image non vérifiée |
+
+Même additionnés, ces gains mènent autour de 220 à 250 ms par image, soit 4 à 4,5 images par
+seconde. **Ce cycle ne suffit pas pour 10 images par seconde.** Les postes qui restent après
+lui : les quelque 3 250 dessins mesh restants (environ 100 ms de carte), la préparation côté
+processeur, et le manque de RAM.
+
+### Ce qui n'est pas vérifié
+
+- L'effet à l'image : je m'attends à un monde sans ombres portées. Si le jeu n'efface pas
+  ses cartes d'ombres à chaque image, ou si une passe relit une carte jamais écrite, l'image
+  peut être fausse (trop sombre, ou des ombres figées). Une capture de contrôle le dira.
+- Le gain réel : aucun lancement.
+- `qualite-s` avait été écarté pour des murs absents (BLOCKERS 10), que BLOCKERS 21 a
+  retrouvés sans lui : le profil `performance` le reprend, à juger sur capture.
