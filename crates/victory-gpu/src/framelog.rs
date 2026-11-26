@@ -25,7 +25,8 @@ tex_uploaded,tex_uploaded_mb,tex_waiting,no_upload_run,no_upload_longest,stream_
 tex_levels_left_out,card_mb,card_budget_mb,shared_mb,\
 pipe_wait_ms,pipes_made,pipe_make_ms,shaders_translated,shader_cache_hits,pipe_oldest_ms,\
 shared_budget_mb,tex_due,tex_away,host_tex_alive,host_tex_mb,staging_alive,staging_mb,title_copies_mb,\
-windows_alive,windows_mb,ram_free_mb,commit_left_mb";
+windows_alive,windows_mb,ram_free_mb,commit_left_mb,\
+draws_left_out,page_faults,kernel_ms,user_ms";
 
 /// What the meter counts, as read at a frame: microseconds preparing
 /// submissions, waiting for the card and copying back; draws run; draws
@@ -48,6 +49,40 @@ struct Log {
     /// (PROJECT ONE) Windows of title memory outside buffers alive and
     /// their bytes, read now and then (a walk under their lock).
     windows: [u64; 2],
+    /// (PROJECT ONE) At the last frame: draws left out, the process's page
+    /// faults (a 32-bit count that wraps), and its processor time in the
+    /// kernel and in its own code, in microseconds.
+    process_before: [u64; 4],
+}
+
+/// (PROJECT ONE) Draws left out, page faults, kernel and user microseconds
+/// of the whole process so far. Page faults say what a PC short of memory
+/// costs: 53,000 a frame and as much kernel as user time on the submitting
+/// thread with 3 MB of RAM free (diagnostics run of 25/11, 23:26).
+#[cfg(windows)]
+fn process_totals() -> [u64; 4] {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let mut c = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: our own process, a sized structure and four valid out pointers.
+    unsafe {
+        K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb);
+        GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user);
+    }
+    // 100 ns units.
+    let micros = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32 | u64::from(t.dwLowDateTime)) / 10;
+    [
+        crate::pipeline::DRAWS_LEFT_OUT.load(std::sync::atomic::Ordering::Relaxed),
+        u64::from(c.PageFaultCount),
+        micros(kernel),
+        micros(user),
+    ]
 }
 
 /// (PROJECT ONE) The PC's physical memory free and what is left to commit,
@@ -105,6 +140,7 @@ pub(crate) fn frame(now: Counters, making: u64) {
         memory: None,
         pipes_before: pipe_totals().0,
         windows: [0; 2],
+        process_before: process_totals(),
     });
     log.frame += 1;
     let ms = at.duration_since(log.last).as_secs_f64() * 1000.0;
@@ -136,13 +172,19 @@ pub(crate) fn frame(now: Counters, making: u64) {
     let staged = crate::texture::staged_now();
     let [_, copies_bytes] = crate::shadow::live();
     let [ram_free, commit_left] = system_memory();
+    let process = process_totals();
+    let was = std::mem::replace(&mut log.process_before, process);
+    let left_out = process[0].saturating_sub(was[0]);
+    let faults = (process[1] as u32).wrapping_sub(was[1] as u32);
+    let kernel_ms = process[2].saturating_sub(was[2]) as f64 / 1000.0;
+    let user_ms = process[3].saturating_sub(was[3]) as f64 / 1000.0;
     let mb = |bytes: u64| bytes >> 20;
     let (pipes, oldest) = pipe_totals();
     let p: Vec<u64> = pipes.iter().zip(log.pipes_before).map(|(now, was)| now.saturating_sub(was)).collect();
     log.pipes_before = pipes;
     let _ = writeln!(
         file,
-        "{},{:.1},{ms:.2},{:.2},{:.2},{:.2},{},{},{},{making},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.2},{},{:.2},{},{},{oldest},{},{},{},{},{},{},{},{},{windows},{},{},{}",
+        "{},{:.1},{ms:.2},{:.2},{:.2},{:.2},{},{},{},{making},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.2},{},{:.2},{},{},{oldest},{},{},{},{},{},{},{},{},{windows},{},{},{},{left_out},{faults},{kernel_ms:.1},{user_ms:.1}",
         log.frame,
         at.duration_since(log.began).as_secs_f64() * 1000.0,
         spent[0] as f64 / 1000.0,
@@ -303,8 +345,8 @@ mod tests {
 
     #[test]
     fn the_file_has_a_column_for_every_value_written() {
-        // 41 columns: the line `frame` writes has as many values.
-        assert_eq!(HEADER.split(',').count(), 41);
+        // 45 columns: the line `frame` writes has as many values.
+        assert_eq!(HEADER.split(',').count(), 45);
         // One line: a line break in it made three header lines (25/11).
         assert!(!HEADER.contains('\n') && !HEADER.contains(' '));
     }
