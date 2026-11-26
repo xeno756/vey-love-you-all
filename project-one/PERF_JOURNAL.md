@@ -210,17 +210,26 @@ Audit et premier levier : [FINDINGS.md](FINDINGS.md), cycle 1. Départ : 2,68 im
 seconde, 95 % des images sous 418 ms (`rapide`, 26/11 à 1 h 00). Objectifs : 10 images par
 seconde avec 95 % sous 100 ms, puis 15 avec 95 % sous 66,7 ms.
 
-**Aucune mesure en jeu dans ce cycle** : je ne lance plus le jeu (DECISIONS 22). Les trois
-commits ci-dessous sont compilés et testés hors jeu ; leurs colonnes « Après » se rempliront
-avec les séries du banc que l'utilisateur lance.
+Je ne lance plus le jeu (DECISIONS 22) : les mesures viennent des séries du banc que
+l'utilisateur lance.
+
+**Cycle 1 mesuré (7 h 50 et 7 h 57, banc propre, 300 s de monde, l'utilisateur jouait) :**
+`performance` donne 4,68 et 4,45 images par seconde, médiane 201 et 217 ms, 95 % sous 265
+et 266 ms, sans perte de carte ni manque de mémoire. `rapide` en banc propre : 327 à 337 ms.
+
+**Cycle 2 préparé (8 h)** : le fil qui soumet attend la carte 12,8 à 14 fois par image
+(135 à 154 ms). Trois réglages de ScarlettPort ont un mot dans le lanceur (`precis`,
+`relais:2`, `fenetres`) ; aucun n'est mesuré.
 
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |
 |---|---|---|---|---|---|---|
-| 26/11 | `6eaf67c` | mission, carte | ne pas donner `sans-ombres` ni `performance` (sans `VICTORY_SKIP_DRAW_SHADERS`, rien ne change) | 4 549 dessins indirects mesh par image, dont au moins 1 300 pour les cartes d'ombres (25 à 30 ms de carte) | **non mesuré** ; hors jeu : un pipeline de dessin fait avec un shader de la liste ne dessine plus, un calcul jamais (test) | plus d'ombres portées ; image fausse si une passe relit une carte d'ombres jamais écrite |
-| 26/11 | `aad682c` | mission, mesure | — (colonnes en fin de fichier) | ni défauts de page ni temps noyau par image | quatre colonnes de plus (45) ; le banc les résume et donne le verdict des deux objectifs | deux appels système de plus par image quand le fichier est écrit |
-| 26/11 | `a409572` | mission, profil | ne pas donner `performance` | `rapide` : 327 à 337 ms de médiane en banc propre | **non mesuré** ; estimation 220 à 250 ms (ombres écartées, relais, réglages bas du jeu) | réunit deux réglages qui ont laissé des doutes à l'image (BLOCKERS 10 et 21) |
+| 26/11 | `19f3e56` | mission, cycle 2 | ne pas donner `precis`, `relais:2`, `fenetres` | `performance` : 12,8 à 14 attentes de la carte par image, 135 à 154 ms sur 200 | **non mesuré** (réglages de ScarlettPort, jamais lancés ici) | image fausse, alerte des attentes précises, perte de carte : à juger au banc et sur capture |
+| 26/11 | `19f3e56` | mission, image | `sans:transparence` le redonne | haut du corps du personnage proche absent (capture d'écran de 7 h 54) | **non vérifié** : `performance` ne laisse plus le groupe `transparence` de côté | quelques calculs de plus par image, coût non mesuré |
+| 26/11 | `6eaf67c` | mission, carte | ne pas donner `sans-ombres` ni `performance` (sans `VICTORY_SKIP_DRAW_SHADERS`, rien ne change) | 4 549 dessins indirects mesh par image, dont au moins 1 300 pour les cartes d'ombres (25 à 30 ms de carte) | 1 810 à 2 220 dessins écartés par image ; mesuré avec le profil entier (ligne `a409572`), pas seul | plus d'ombres portées : des rectangles de soleil traversent les murs |
+| 26/11 | `aad682c` | mission, mesure | — (colonnes en fin de fichier) | ni défauts de page ni temps noyau par image | quatre colonnes de plus (45) ; `performance` : 18 700 à 19 200 défauts de page par image, 94–98 ms noyau et 393–397 ms utilisateur (tous les fils) | deux appels système de plus par image quand le fichier est écrit |
+| 26/11 | `a409572` | mission, profil | ne pas donner `performance` | `rapide` : 327 à 337 ms de médiane en banc propre (3 images par seconde) | **4,68 et 4,45 images par seconde**, médiane 201 et 217 ms, 95 % sous 265 et 266 ; processeur 56 + carte 149–161 + recopie 33–35 ; 0 perte de carte sur 2 | image : haut du corps du personnage proche absent (groupe `transparence`, retiré du profil ensuite), soleil à travers les murs |
 | 25/11 | `432cb67` | profils | ne pas donner `rapide` | 2560 × 1440 : carte 777 ms, 6 596 textures en 7 min 35, arrêt par manque de mémoire | 1280 × 720 + textures:2 : carte 221 ms, 67 915 textures en 2 min 06, carte dans son budget (4,2 Go sur 4,7) | image moins nette ; taches colorées vues à ce lancement, cause non établie |
 | 25/11 | `dfca70d` | 1, streaming | `VICTORY_STREAM_POOL=0` | sans profil : aucune texture envoyée tant que la carte dépasse 90 % de son budget | **non mesuré** ; hors jeu : la réserve des textures vaut au moins 512 Mio, et 16 textures par image sont faites même pleine (tests) | textures plus grossières quand la réserve se remplit ; pas de retour au détail fin ensuite |
 | 25/11 | `7a95d07` | 0, mesure | ne pas donner `VICTORY_FRAME_CSV` | pas de mesure image par image | une ligne par image, centiles sur 300 images dans la barre de titre | une demande de mémoire à la carte par image quand le fichier est écrit |

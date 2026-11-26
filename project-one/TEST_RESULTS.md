@@ -179,8 +179,22 @@ Les deux tests intermittents (`inplace::…warp_a_title_buffer_in_place…`,
 `pipeline::…a_preparation_leaves_what_is_no_shader_alone`) et la violation d'accès, vue une
 fois et pas reproduite en 85 passes : BLOCKERS 25.
 
-**Ce que cela ne prouve pas :** aucun de ces tests ne lance le jeu. Ni le gain du profil
-`performance` ni son image ne sont vérifiés.
+**Ce que cela ne prouve pas :** aucun de ces tests ne lance le jeu. Le gain du profil
+`performance` a été mesuré ensuite par l'utilisateur (4,68 et 4,45 images par seconde).
+
+### Cycle 2 (26/11, 8 h) : aucun changement du runtime
+
+Rien n'est recompilé, donc la suite de tests n'a pas été relancée. Vérifié hors jeu :
+
+| Vérification | Résultat |
+|---|---|
+| Lanceur à blanc : `performance`, `performance precis relais:2`, les mêmes avec `fenetres sans:volumetrie-collecte`, `rapide relais`, `maximum`, `rapide` | réglages attendus affichés ; `performance` sans `transparence`, `maximum` et `rapide` inchangés |
+| Banc, `-Resume` sur trois lancements passés | ligne « attentes » : 12,8 par image et 154 ms (`performance`), 13 et 224 ms (`rapide relais`, version diagnostic), absente sans relais |
+| Cibles des dessins que la liste d'ombres écarte, sur trois images capturées la veille | 4 512 dessins, tous vers des cartes d'ombres, aucun vers l'image |
+
+**Ce que cela ne prouve pas :** ni la vitesse ni l'image avec `precis`, `relais:2`,
+`fenetres` ou `sans:volumetrie-collecte` ; ni que retirer `transparence` rend le haut du
+corps des personnages.
 
 ## Ce que ces tests ne prouvent pas
 
