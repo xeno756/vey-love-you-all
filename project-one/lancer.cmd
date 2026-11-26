@@ -78,8 +78,28 @@ rem                                         et dans les petites zones : 40 %% pl
 rem                                         rapide le 25/11, mais la carte a ete
 rem                                         perdue une fois apres 72 s (experimental)
 rem   lancer.cmd series-x rapide relais     les commandes partent vers la carte sans
-rem                                         attendre les precedentes : 10 %% de mieux,
-rem                                         mais l'image se couvre de taches
+rem                                         attendre les precedentes : 54 ms de moins
+rem                                         par image le 26/11, image propre
+rem   lancer.cmd series-x performance       tout ce qui est mesure plus rapide, la
+rem                                         qualite d'image passant apres : maximum
+rem                                         sans son groupe transparence (il fait
+rem                                         disparaitre des parties de personnages),
+rem                                         plus les cartes d'ombres non dessinees
+rem                                         (sans-ombres), le relais et qualite-s.
+rem                                         Mesure le 26/11 : 4,5 images par seconde
+rem                                         contre 3 avec rapide
+rem   lancer.cmd series-x sans-ombres       les cartes d'ombres ne sont plus dessinees
+rem                                         (sans-dessins:<groupe> pour un groupe de
+rem                                         ..\victory-profils\dessins-<groupe>.txt)
+rem Reglages d'attente et de bornage de ScarlettPort, a donner APRES le profil,
+rem jamais lances ici avant le 26/11 (a juger sur le banc et sur capture) :
+rem   ... performance precis                une texture encore lue par la carte ne
+rem                                         fait plus attendre tout ce qui est en vol
+rem   ... performance relais:2              second niveau du relais : une lecture
+rem                                         n'attend que les soumissions qui ecrivent
+rem                                         ce qu'elle lit
+rem   ... performance fenetres              les dessins indirects qui se suivent sont
+rem                                         bornes en une passe, pas un par un
 rem
 rem Le dossier du jeu vient de victory.toml, a la racine du depot (non suivi
 rem par git), ou du fichier que VICTORY_CONFIG designe. Chaque lancement garde
@@ -102,6 +122,8 @@ set "WATCHDOG="
 set "VITESSE="
 set "QUALITE="
 set "RELAIS="
+set "PRECIS="
+set "FENETRES="
 set "PROFIL="
 set "SANS_DESSINS="
 :args
@@ -122,7 +144,8 @@ if /i "%~2"=="minimal" call :minimal
 if /i "%~2"=="chien-de-garde" set "WATCHDOG=1"
 if /i "%~2"=="sans-synchro" set "VICTORY_PRESENT_SYNC=0"
 if /i "%~2"=="qualite-s" call :quality_s
-if /i "%~2"=="relais" call :relay
+if /i "%~2"=="precis" call :precise
+if /i "%~2"=="fenetres" call :windows
 if /i "%~2"=="1080p" call :size 1920x1080
 if /i "%~2"=="720p" call :size 1280x720
 if /i "%~2"=="540p" call :size 960x540
@@ -134,6 +157,7 @@ for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="sortie" set "SORTIE=%%b"
     if /i "%%a"=="echelle" set "ECHELLE=%%b"
     if /i "%%a"=="vitesse" call :vitesse %%b
+    if /i "%%a"=="relais" call :relay %%b
 )
 shift /2
 goto args
@@ -223,7 +247,10 @@ rem chemin plus long que Windows n'en accepte.
 if defined PROFIL set "TAG=-scarlettport-%PROFIL%"
 if defined VITESSE set "TAG=%TAG%-vitesse%VITESSE%"
 if defined QUALITE set "TAG=%TAG%-qualite-%QUALITE%"
-if defined RELAIS set "TAG=%TAG%-relais"
+if "%RELAIS%"=="1" set "TAG=%TAG%-relais"
+if "%RELAIS%"=="2" set "TAG=%TAG%-relais2"
+if defined PRECIS set "TAG=%TAG%-precis"
+if defined FENETRES set "TAG=%TAG%-fenetres"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -246,7 +273,10 @@ if defined SANS_DESSINS echo   dessins : laisses de cote pour %SANS_DESSINS% (ce
 if defined VICTORY_AMBIENT_FILL if /i not "%VICTORY_AMBIENT_FILL%"=="off" echo   lumiere : rebondie remplie a %VICTORY_AMBIENT_FILL% (rien ne l'ecrit)
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
-if defined RELAIS echo   relais  : les soumissions partent vers la carte sans attendre chacune
+if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune
+if "%RELAIS%"=="2" echo   relais  : niveau 2, une lecture n'attend que les soumissions qui ecrivent ce qu'elle lit
+if defined PRECIS echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
+if defined FENETRES echo   bornage : les dessins indirects qui se suivent sont bornes par fenetres, en une passe
 if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
 if "%VICTORY_TEXTURE_GATE_S%"=="0" echo   arrivee : textures a l'allure ordinaire, sans rattrapage
 if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
@@ -355,14 +385,19 @@ rem carte au lancement mesure du 25/11 : le monde est eclaire sans ombres
 rem portees), les soumissions partent sans attendre chacune (relais : 312 a
 rem 325 ms contre 361 a 380 le 26/11), et le jeu prend ses propres reglages bas
 rem (qualite-s : 440 ms contre 506 et 3,6 Go de memoire en moins le 25/11).
-rem Jamais mesure ensemble : a essayer contre rapide avec banc.ps1.
+rem Mesure le 26/11 (banc propre, 2 lancements) : 4,45 et 4,68 images par
+rem seconde, mediane 201 et 217 ms, contre 327 a 337 ms avec rapide.
+rem Le groupe transparence n'y est plus depuis ce jour : sans la passe qui
+rem compose les matieres transparentes, ce qui passe par elle n'arrive pas a
+rem l'image, et un personnage proche de la camera y passe (haut du corps absent
+rem sur une capture d'ecran du 26/11 ; cause probable, a confirmer en jeu).
 :performance
 set "PROFIL=performance"
 call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
 call :card_copies
 call :steady_textures
-call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
+call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+eclairage-indirect"
 call :without_draws "ombres"
 call :relay
 call :quality_s
@@ -404,11 +439,39 @@ if "%VITESSE%"=="2" set "VICTORY_COPY_BACK_SMALL_KB=1024"
 goto :eof
 
 rem Les commandes partent vers la carte sans attendre la fin des precedentes
-rem (le relais du fork) : environ 10 %% d'images en plus le 25/11, mais l'image
-rem se couvre de taches et de mosaiques (captures du 25/11, 17 h 15).
+rem (le relais du fork) : 312 a 325 ms contre 361 a 380 le 26/11, image propre
+rem (les taches du 25/11 venaient de la lumiere rebondie jamais ecrite).
+rem relais:2, son second niveau : une soumission qui lit de la memoire du jeu
+rem n'attend que les soumissions qui l'ecrivent, pas tout ce qui est en vol.
+rem Mesure du 26/11 avec performance (niveau 1) : le fil qui soumet attend
+rem encore la carte 14 fois par image, 135 ms sur 197. Le niveau 2 n'a jamais
+rem ete lance ici ; l'amont le laisse eteint (murs de la premiere piece perdus
+rem dans ses essais).
 :relay
-set "VICTORY_RELAY=1"
-set "RELAIS=1"
+set "RELAIS=%~1"
+if not "%RELAIS%"=="2" set "RELAIS=1"
+set "VICTORY_RELAY=%RELAIS%"
+goto :eof
+
+rem Les attentes precises de ScarlettPort (VICTORY_SYNC_PRECISE), avec le
+rem relais : une texture dont le tampon d'envoi est encore lu par la carte ne
+rem fait plus attendre tout ce qui est en vol ; seule son ecriture attend, et
+rem seulement la soumission qui la copie. Au lancement du 26/11, 11 ou 12 des
+rem 14 attentes par image venaient de la. Jamais lance ici : le journal dit
+rem "VICTORY_SYNC_PRECISE hazard" si une dependance lui echappe.
+:precise
+set "VICTORY_SYNC_PRECISE=1"
+set "PRECIS=1"
+goto :eof
+
+rem Le bornage par fenetres de ScarlettPort (VICTORY_INDIRECT_WINDOW) : les
+rem dessins indirects qui lisent des enregistrements a la suite sont bornes
+rem en une passe au lieu d'une passe de calcul avant chaque dessin. Mesure le
+rem 25/11 avec d'autres reglages (265 ms contre 293), image a requalifier :
+rem ses taches d'alors venaient peut-etre de la lumiere rebondie.
+:windows
+set "VICTORY_INDIRECT_WINDOW=1"
+set "FENETRES=1"
 goto :eof
 
 rem Les reglages bas du jeu lui-meme (ceux qu'il prend sur une Series S), la
