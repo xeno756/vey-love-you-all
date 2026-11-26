@@ -604,6 +604,105 @@ fil de recopie.
 **Risques.** Perte de carte, image fausse si le jeu relit par le processeur un résultat
 de plus de 1 Mio hors de ses tampons de relecture.
 
+### Cycle 3, mesuré (26/11, 8 h 25) : deux fois plus vite, puis la carte perdue
+
+Lancement de l'utilisateur : `performance precis relais:2 vitesse:3 fenetres
+sans:volumetrie-collecte`. La carte a été perdue après 90 s de monde.
+
+Sur les mêmes plans de la cinématique d'ouverture (75 à 85 s après l'arrivée du monde, 4 400 à
+4 700 dessins demandés par image, dont environ 2 000 d'ombres écartés) :
+
+| Réglage | Images par seconde | Par image |
+|---|---|---|
+| `performance` du matin (7 h 57) | 4,2 | 217 ms |
+| avec `precis relais:2` (8 h 13) | 5,0 à 5,2 | 187 ms |
+| tout le cycle 3 (8 h 25) | **7,8 à 8,6** | **113 à 121 ms** : préparation 41, attente de la carte 62–65, recopie 25–27 |
+
+Ce que le journal montre :
+
+- la relecture a disparu : 56 à 89 morceaux comparés par image au lieu de 11 100, 5 à 23
+  relus (0,2 à 0,5 Mo au lieu de 36) ;
+- le fil qui soumet attend encore la carte 2 à 3 fois par image, 44 à 71 ms : des lectures
+  de mémoire du jeu qu'une autre copie écrit en vol, et parfois la limite de 128 listes en
+  vol ;
+- le monde est dessiné (2 400 à 2 600 dessins exécutés par image). Les « 12 images par
+  seconde sans rien à l'écran » que l'utilisateur a vues sont un carton de texte du
+  prologue : les trois lancements du matin ont le même creux au même instant (55 s après
+  le monde, 1 050 à 1 120 dessins demandés au lieu de 2 600 à 5 000).
+
+**La panne.** Défaut de page dans des objets libérés (une texture 128 × 256, un tampon de
+travail de liste, deux copies de mémoire du jeu), seize soumissions en vol. C'est la
+signature des pertes du 25/11, que `c4cd932` avait fermées en gardant les objets libérés
+deux images de plus. Deux images font 660 ms à 3 images par seconde et 230 ms à 9 : la
+marge a fondu avec la vitesse. Quatorze lancements à 3–5 images par seconde n'avaient rien
+perdu. Cause déduite, pas démontrée.
+
+**Le chargement.** Pendant la première minute de monde, la passe qui crée les copies de
+textures a fait 3 000 à 9 000 textures toutes les 5 s, en y passant 1,1 à 3,3 s : jusqu'à
+250 ms par image, sur le fil qui enregistre l'image (2 à 3 images par seconde). En 85 s,
+66 500 textures faites pour 20 000 à 27 000 vivantes : le balayage en libère des centaines
+par seconde, qui sont refaites ensuite.
+
+## Mission, cycle 4 (26/11, 8 h 30 à 9 h) : tenir, et charger sans tout bloquer
+
+Fait dans le runtime (branche fusionnée) :
+
+- `ab1bec0` : un objet libéré attend ses deux images **et** une seconde
+  (`VICTORY_RETIRE_MS`), puis la fin de toutes les soumissions lancées entre-temps. Les
+  objets en attente sont deux files prises par leur tête : 75 000 objets par seconde
+  passaient par là, et chaque atterrissage les relisait tous.
+- `63caa72` : `VICTORY_TEXTURE_SPAN_MS`, le temps par image de la passe de textures (250
+  comme avant si rien n'est donné).
+- `c2ed234` : **`performance` est la seule version à essayer** : tout le cycle 3, plus la
+  passe de textures à 80 ms par image. `performance-sur` garde le réglage qui a tenu tous
+  ses lancements (5 images par seconde).
+
+Vérifié hors jeu : 784 tests réussis, 0 échec (4 nouveaux pour la file d'attente des objets
+libérés) ; `clippy` et `xtask policy` sans remarque.
+
+**Mesuré (mon lancement de 8 h 54, 300 s de monde)** : 8,77 images par seconde, médiane
+110 ms, 95 % sous 162, 99 % sous 254 ; carte tenue. En régime établi : 8,6 à 9,7 images
+par seconde, 103 à 117 ms par image. Le compte du runtime dit « limité par notre
+préparation et la recopie » : la carte travaille 62 à 69 % du temps.
+
+## Mission, cycle 5 (26/11, 9 h) : ce qui sépare 9 images par seconde de 10
+
+Dans une image de 107 ms (lancement de 8 h 54) :
+
+| Poste | Valeur | Ce qui le fait |
+|---|---|---|
+| Préparation | 44–50 ms | copies de tampons 22–34 ms, textures 2–3 ms, liaisons et dessins |
+| Attente de la carte par le fil qui soumet | 2,4 à 3 fois par image, 46 à 56 ms | voir plus bas |
+| Recopie (fil à part) | 24–33 ms | |
+| Carte | au travail 62–69 % | 2 400 dessins mesh, chacun avec une passe de calcul à lui pour ses arguments |
+
+**Les attentes qui restent sont fausses.** La ligne ajoutée au journal (`b4371fc`) nomme ce
+qu'elles attendent. Au lancement de 9 h 07, toutes étaient du même genre : le
+rafraîchissement d'une **fenêtre** de mémoire du jeu (1,2 à 3,8 Mo, depuis l'adresse d'une
+vue racine jusqu'au bout de la fenêtre) attendait qu'une soumission en vol ait fini
+d'écrire **un tampon du jeu** situé dans cette plage (384 à 32 768 octets, 1,5 Mo plus
+loin). Or les octets d'un tampon sont lus par la copie du tampon lui-même, jamais par la
+fenêtre (`shadow::lookup` prend toujours le tampon le plus intérieur). Correctif écrit :
+`VICTORY_WINDOW_PAST_BUFFER_WRITES=1` (une fenêtre n'attend plus les écritures d'un tampon
+de sa plage ; elle attend toujours celles d'une autre fenêtre et les relectures). Ce qu'il
+abandonne : une vue qui commence hors de tout tampon et lit jusque dans un tampon que les
+shaders viennent d'écrire verrait ces octets une soumission en retard.
+
+**Les arguments des dessins mesh.** Chaque dessin mesh indirect lançait une passe de calcul
+à lui pour fabriquer les arguments de son calcul et de son dessin. `38da7cf` les fait
+écrire par la passe qui borne déjà toute la fenêtre d'enregistrements
+(`VICTORY_MESH_WINDOW_ARGS=1`). Au lancement de 9 h 07, 30 à 60 % des dessins mesh les ont
+pris dans leur fenêtre ; le reste n'était pas dans une fenêtre utilisable.
+
+**Retiré (`5572a82`).** Avec ce réglage, la carte a été perdue deux fois sur deux : après
+45 s de monde (9 h 07) puis après 230 s (9 h 11), chaque fois à une adresse qui n'appartient
+à aucun objet, loin au-delà du tas de vues. Après la première perte j'avais soupçonné une
+signature racine de calcul gardée d'un dessin à l'autre et corrigé cela ; la seconde perte
+est venue quand même, cause non trouvée. Et le réglage ne rapportait rien : 8,63 images par
+seconde contre 8,77 sans lui. Le lancement sans lui (8 h 54) avait tenu 300 s ; la signature
+de ces deux pertes (adresse d'aucun objet) n'est pas celle de la perte de 8 h 25 (objets
+libérés).
+
 ### Risques du cycle 2 (pour mémoire)
 
 Image fausse (murs perdus comme en amont, taches), alerte des attentes

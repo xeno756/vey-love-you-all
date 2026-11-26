@@ -10,7 +10,9 @@ Dernière mise à jour : 26/11/2026 à 8 h 25, mission 10 à 15 images par secon
 
 Objectifs : niveau 1, moyenne ≥ 10 images par seconde et 95 % des images sous 100 ms ;
 niveau 2, ≥ 15 et 95 % sous 66,7 ms ; sans plantage ni gel, sur plusieurs lancements.
-L'utilisateur fait tous les lancements : un cycle reste « non mesuré » jusqu'à sa série.
+Depuis le 26/11 à 8 h 55 je lance de nouveau le banc moi-même (DECISIONS 29) ; avant, les
+lancements étaient ceux de l'utilisateur. La version à lui donner est une seule :
+`series-x performance`.
 
 | Cycle | État | Ce qui est fait, ce qui manque |
 |---|---|---|

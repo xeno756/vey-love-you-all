@@ -221,11 +221,33 @@ et 266 ms, sans perte de carte ni manque de mémoire. `rapide` en banc propre : 
 (135 à 154 ms). Trois réglages de ScarlettPort ont un mot dans le lanceur (`precis`,
 `relais:2`, `fenetres`) ; aucun n'est mesuré.
 
+### Mes lancements (26/11, à partir de 8 h 54)
+
+L'utilisateur m'a de nouveau permis de lancer le jeu (DECISIONS 29). Banc propre, 300 s de
+monde, cinématique d'ouverture sans personne aux commandes : les plans sont les mêmes d'un
+lancement à l'autre.
+
+| Heure | Réglage | Images par seconde | Médiane / 95 % / 99 % | Processeur + carte + recopie | Attentes | Fin |
+|---|---|---|---|---|---|---|
+| 8 h 54 | `performance` (version complète, `c2ed234`) | **8,77** | 110 / 162 / 254 ms | 50 + 51 + 28 | 2,8 par image, 51 ms | 300 s, carte tenue |
+| 9 h 07 | + `VICTORY_MESH_WINDOW_ARGS=1` (`38da7cf`) | — | — | — | — | **carte perdue à 45 s** (adresse d'aucun objet) |
+| 9 h 11 | + le même, liaisons de calcul refaites à chaque dessin | 8,63 | 110 / 171 / 337 ms | 48 + 53 + 26 | 3 par image, 51 ms | **carte perdue à 230 s** (même signature) ; réglage retiré (`5572a82`) |
+
+À comparer : le même réglage sans la correction des objets libérés avait perdu la carte à
+90 s (8 h 25). Un lancement ne prouve pas la stabilité : il en faut d'autres.
+
+En régime établi (de 2 à 5 minutes de monde) : 8,6 à 9,7 images par seconde, 103 à 117 ms par
+image, la carte au travail 62 à 69 % du temps. Le chargement (première minute) tourne à 3,6
+à 6,6 images par seconde au lieu de 2 à 3, et dure deux fois plus longtemps (26 000
+textures vivantes à 50 s au lieu de 25 s).
+
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |
 |---|---|---|---|---|---|---|
-| 26/11 | lanceur, `vitesse:3` | mission, cycle 3 | ne pas donner `vitesse:2` ni `vitesse:3` | avec `precis relais:2` : 570 morceaux (36 Mo) relus de la carte par image, 60 à 104 ms d'attente du fil de recopie | **non mesuré** (`vitesse:2` seul : environ −40 % le 25/11) | perte de carte (une fois le 25/11, avant `c4cd932`) ; image fausse si le jeu relit un grand résultat hors de ses tampons de relecture |
+| 26/11 | `ab1bec0` | mission, cycle 4, stabilité | `VICTORY_RETIRE_MS=0` (l'attente d'avant : deux images) | carte perdue après 90 s à 8–9 images par seconde (8 h 25), défaut de page dans des objets libérés | voir « Mes lancements » plus haut | les objets libérés vivent une seconde de plus : jusqu'à quelques centaines de Mo de plus pendant le chargement |
+| 26/11 | `63caa72`, `c2ed234` | mission, cycle 4, chargement | `VICTORY_TEXTURE_SPAN_MS=250` | première minute de monde : jusqu'à 250 ms par image à créer des textures, 2 à 3 images par seconde | voir « Mes lancements » plus haut | les textures arrivent plus tard |
+| 26/11 | lanceur, `vitesse:3` (`87d13b1`) | mission, cycle 3 | ne pas donner `vitesse:2` ni `vitesse:3` | avec `precis relais:2` : 570 morceaux (36 Mo) relus de la carte par image, 60 à 104 ms d'attente du fil de recopie ; 5,0 à 5,2 images par seconde sur les plans de référence | avec `vitesse:3 fenetres sans:volumetrie-collecte` : **7,8 à 8,6 images par seconde** sur les mêmes plans (113 à 121 ms), 5 à 23 morceaux relus | carte perdue après 90 s (BLOCKERS 28) ; image non vérifiée sur capture |
 | 26/11 | `19f3e56` | mission, cycle 2 | ne pas donner `precis`, `relais:2`, `fenetres` | `performance` : 12,8 à 14 attentes de la carte par image, 135 à 154 ms sur 200 ; 4,45–4,68 images par seconde | `precis relais:2` : **4,97 images par seconde**, médiane 187 ms ; 4 attentes par image mais encore 119 ms ; 0 alerte, 0 perte sur 1 lancement. `fenetres` : non mesuré | image non vérifiée sur capture |
 | 26/11 | `19f3e56` | mission, image | `sans:transparence` le redonne | haut du corps du personnage proche absent (capture d'écran de 7 h 54) | **non vérifié** : `performance` ne laisse plus le groupe `transparence` de côté | quelques calculs de plus par image, coût non mesuré |
 | 26/11 | `6eaf67c` | mission, carte | ne pas donner `sans-ombres` ni `performance` (sans `VICTORY_SKIP_DRAW_SHADERS`, rien ne change) | 4 549 dessins indirects mesh par image, dont au moins 1 300 pour les cartes d'ombres (25 à 30 ms de carte) | 1 810 à 2 220 dessins écartés par image ; mesuré avec le profil entier (ligne `a409572`), pas seul | plus d'ombres portées : des rectangles de soleil traversent les murs |
