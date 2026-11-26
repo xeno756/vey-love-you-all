@@ -9,6 +9,12 @@
 //!
 //! Only dispatches are left out: a name that also matches shaders of draws
 //! leaves out none of them (`victory_gpu::pipeline::leave_out`).
+//!
+//! (PROJECT ONE) `VICTORY_SKIP_DRAW_SHADERS` names lists of the same form
+//! for the other kind of leaving out: the DRAWS of the graphics and mesh
+//! pipelines made with a shader the lists name
+//! (`victory_gpu::pipeline::leave_out_draws`). It takes geometry away and
+//! is meant for passes a picture can do without, shadow maps first.
 
 use std::path::Path;
 
@@ -100,6 +106,47 @@ pub(crate) fn apply(cache_dir: &Path) {
     );
     #[cfg(windows)]
     victory_gpu::pipeline::leave_out(chosen.hashes);
+}
+
+/// (PROJECT ONE) Reads the lists `VICTORY_SKIP_DRAW_SHADERS` names and tells
+/// the GPU layer which shaders' draws to leave out. Before the title starts.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn apply_draws(cache_dir: &Path) {
+    let Some(value) = std::env::var_os("VICTORY_SKIP_DRAW_SHADERS").filter(|v| !v.is_empty()) else {
+        return;
+    };
+    let mut lists = String::new();
+    for path in std::env::split_paths(&value) {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                lists.push_str(&text);
+                lists.push('\n');
+            }
+            Err(e) => {
+                println!("draws left out list {} not read: {e}", path.display());
+                eprintln!("draws left out: list {} not read: {e}", path.display());
+            }
+        }
+    }
+    let names_path = cache_dir.join(crate::prepare::NAMES_FILE);
+    let names = std::fs::read_to_string(&names_path).unwrap_or_default();
+    let chosen = choose(&lists, &names);
+    if names.is_empty() {
+        eprintln!(
+            "draws left out: no shader names at {}: entries that are names leave nothing out",
+            names_path.display()
+        );
+    }
+    for (entry, shaders) in &chosen.entries {
+        eprintln!("draws left out: \"{entry}\" names {shaders} shaders");
+    }
+    println!(
+        "draws left out the draws of the pipelines made with {} shaders named by {} entries",
+        chosen.hashes.len(),
+        chosen.entries.len()
+    );
+    #[cfg(windows)]
+    victory_gpu::pipeline::leave_out_draws(chosen.hashes);
 }
 
 #[cfg(test)]

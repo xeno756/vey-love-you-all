@@ -2351,6 +2351,10 @@ impl State {
     /// programs are one-dimensional).
     pub(crate) fn dispatch_mesh(&mut self, list: &HostList, x: u32) {
         self.window = None;
+        // (PROJECT ONE) A pass the draws' list leaves out.
+        if crate::pipeline::draw_left_out(self.pipeline as This) {
+            return;
+        }
         #[cfg(feature = "diagnostics")]
         self.trace("mesh", x, 0);
         if let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This)
@@ -2907,6 +2911,10 @@ impl State {
         self.window = None;
         #[cfg(feature = "diagnostics")]
         self.trace("draw", vertices, first);
+        // (PROJECT ONE) A pass the draws' list leaves out.
+        if crate::pipeline::draw_left_out(self.pipeline as This) {
+            return;
+        }
         let ready = self.prepare(list, false);
         // A pipeline with the rectangle geometry stage draws the title's
         // vertices as they are; any other gets its rectangles expanded.
@@ -3013,6 +3021,10 @@ impl State {
         self.window = None;
         #[cfg(feature = "diagnostics")]
         self.trace("indexed", indices, first);
+        // (PROJECT ONE) A pass the draws' list leaves out.
+        if crate::pipeline::draw_left_out(self.pipeline as This) {
+            return;
+        }
         // Indexed rectangles are drawn by the rectangle geometry stage
         // alone (nothing expands them on the CPU).
         let lost = self.topology == RECTANGLES && !self.completes_rects();
@@ -3070,6 +3082,12 @@ impl State {
         // An effect the list given leaves out: done, as far as the title's
         // call goes (it is not one the host could not run).
         if crate::pipeline::is_left_out(self.pipeline as This) {
+            // (PROJECT ONE) An indirect draw of a pass the draws' list
+            // leaves out is counted with the draws.
+            if kind != DISPATCH {
+                crate::pipeline::DRAWS_LEFT_OUT.fetch_add(1, Ordering::Relaxed);
+                return true;
+            }
             crate::pipeline::LEFT_OUT_COUNT[0].fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
             crate::pipeline::note_why("a compute shader the list given leaves out".to_owned());

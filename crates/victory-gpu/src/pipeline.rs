@@ -509,20 +509,57 @@ pub fn leave_out(hashes: impl IntoIterator<Item = String>) -> bool {
     LEFT_OUT.set(list).is_ok()
 }
 
-/// Whether a pipeline of `shaders` is left out: a compute pipeline
-/// (`graphics` false) with a shader of the list.
-#[cfg(windows)]
-fn left_out(shaders: &[Arc<Shader>], graphics: bool) -> bool {
-    !graphics
-        && LEFT_OUT
-            .get()
-            .is_some_and(|list| !list.is_empty() && shaders.iter().any(|s| list.contains(&s.hash)))
+/// (PROJECT ONE) The shaders whose draws are left out, by hash
+/// ([`leave_out_draws`]).
+static LEFT_OUT_DRAWS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+
+/// (PROJECT ONE) Draws left out since the start ([`leave_out_draws`]).
+pub(crate) static DRAWS_LEFT_OUT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) Leaves out every draw (plain, indexed, mesh, indirect) of
+/// the graphics and mesh pipelines made with a shader named by `hashes`:
+/// what they draw is not drawn, and what reads their targets reads what a
+/// clear or an earlier frame left there. Unlike [`leave_out`] this takes
+/// geometry away: it is for passes a picture can do without (shadow maps,
+/// whose 1,300 indirect draws a frame cost a quarter of the card's time on
+/// an RX 5600 XT, run of 25/11), asked for by a list of its own
+/// (`VICTORY_SKIP_DRAW_SHADERS`), never by the lists of effects. Once,
+/// before the title makes its pipelines; false if a list was given already.
+pub fn leave_out_draws(hashes: impl IntoIterator<Item = String>) -> bool {
+    let list: std::collections::HashSet<String> = hashes.into_iter().map(|h| h.to_ascii_lowercase()).collect();
+    tracing::warn!(
+        shaders = list.len(),
+        "the DRAWS of graphics and mesh pipelines made of these shaders are left out for this run (VICTORY_SKIP_DRAW_SHADERS)"
+    );
+    LEFT_OUT_DRAWS.set(list).is_ok()
 }
 
-/// Whether the dispatches of the title's pipeline `this` are left out.
+/// Whether a pipeline of `shaders` is left out: a compute pipeline
+/// (`graphics` false) with a shader of the effects' list, or a graphics or
+/// mesh pipeline with a shader of the draws' list.
+#[cfg(windows)]
+fn left_out(shaders: &[Arc<Shader>], graphics: bool) -> bool {
+    let list = if graphics { &LEFT_OUT_DRAWS } else { &LEFT_OUT };
+    list.get()
+        .is_some_and(|list| !list.is_empty() && shaders.iter().any(|s| list.contains(&s.hash)))
+}
+
+/// Whether the dispatches (a compute pipeline) or the draws (a graphics or
+/// mesh one) of the title's pipeline `this` are left out.
 #[cfg(windows)]
 pub(crate) fn is_left_out(this: This) -> bool {
     !this.is_null() && pipeline(this).left_out
+}
+
+/// (PROJECT ONE) Whether a draw of the title's pipeline `this` is left out
+/// ([`leave_out_draws`]); counts it if so.
+#[cfg(windows)]
+pub(crate) fn draw_left_out(this: This) -> bool {
+    let out = is_left_out(this);
+    if out {
+        DRAWS_LEFT_OUT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    out
 }
 
 /// Whether the title's pipeline `this` is one of the structure builder's.
@@ -850,11 +887,15 @@ fn hand_out(
     out: *mut This,
 ) -> HRESULT {
     tracing::trace!(?shaders, "pipeline state");
+    // (A graphics pipeline made from a plain description has no state
+    // kept: told from a compute one by its shaders.)
     #[cfg(windows)]
-    let left_out = left_out(&shaders, graphics.is_some());
+    let draws = graphics.is_some() || !matches!(shaders.as_slice(), [only] if only.stage == "compute");
+    #[cfg(windows)]
+    let left_out = left_out(&shaders, draws);
     #[cfg(windows)]
     if left_out && LEFT_OUT_COUNT[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64 {
-        tracing::info!(?shaders, "a compute pipeline whose dispatches are left out, as the list given asks");
+        tracing::info!(?shaders, draws, "a pipeline whose dispatches or draws are left out, as the list given asks");
     }
     #[cfg(windows)]
     let host = Arc::new(make::Pending::new(shaders.clone(), graphics));
@@ -1268,6 +1309,24 @@ mod tests {
         assert!(!super::left_out(std::slice::from_ref(&other), false));
         assert!(!super::left_out(&[other, listed], true), "never a draw");
         assert!(!super::leave_out([String::new()]), "one list a run");
+    }
+
+    /// (PROJECT ONE) Draws are left out by their own list alone: a shader of
+    /// it in a graphics or mesh pipeline, never a compute pipeline, and the
+    /// effects' list still leaves out no draw.
+    #[cfg(windows)]
+    #[test]
+    fn draws_are_left_out_by_their_own_list_only() {
+        let shadow = super::shader("mesh", b"a mesh shader of a shadow pass the draws' list names");
+        let pixel = super::shader("pixel", b"its pixel shader, which the list does not name");
+        let world = super::shader("mesh", b"a mesh shader of the world, not named");
+        let compute = super::shader("compute", b"a compute shader, which a draws' list cannot take");
+        assert!(!super::left_out(&[shadow.clone(), pixel.clone()], true), "no list yet");
+        assert!(super::leave_out_draws([shadow.hash.to_ascii_uppercase(), compute.hash.clone()]));
+        assert!(super::left_out(&[shadow.clone(), pixel.clone()], true), "one named shader is enough");
+        assert!(!super::left_out(&[world, pixel], true));
+        assert!(!super::left_out(std::slice::from_ref(&compute), false), "a dispatch is not a draw");
+        assert!(!super::leave_out_draws([String::new()]), "one list a run");
     }
 
     #[cfg(all(windows, feature = "diagnostics"))]
