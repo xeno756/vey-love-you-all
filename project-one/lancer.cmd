@@ -103,10 +103,13 @@ set "VITESSE="
 set "QUALITE="
 set "RELAIS="
 set "PROFIL="
+set "SANS_DESSINS="
 :args
 if "%~2"=="" goto args_done
 if /i "%~2"=="rapide" call :rapide
 if /i "%~2"=="maximum" call :maximum
+if /i "%~2"=="performance" call :performance
+if /i "%~2"=="sans-ombres" call :without_draws "ombres"
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
 if /i "%~2"=="traces" set "TRACES=1"
@@ -127,6 +130,7 @@ for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="textures" set "TEXTURES=%%b"
     if /i "%%a"=="plancher" set "VICTORY_TEXTURE_SMALLEST=%%b"
     if /i "%%a"=="sans" call :without "%%b"
+    if /i "%%a"=="sans-dessins" call :without_draws "%%b"
     if /i "%%a"=="sortie" set "SORTIE=%%b"
     if /i "%%a"=="echelle" set "ECHELLE=%%b"
     if /i "%%a"=="vitesse" call :vitesse %%b
@@ -205,6 +209,15 @@ if not defined SANS goto groups_done
 for %%g in (%SANS:+= %) do call :group %%g
 if defined BAD exit /b 1
 :groups_done
+rem Les passes dont les DESSINS sont laisses de cote (sans-ombres,
+rem sans-dessins:groupe) : un fichier ..\victory-profils\dessins-<groupe>.txt
+rem par groupe, de la meme forme que ceux des effets. Contrairement a
+rem sans:groupe, cela retire des dessins : a reserver aux passes dont l'image
+rem peut se passer (les cartes d'ombres).
+if not defined SANS_DESSINS goto draws_done
+for %%g in (%SANS_DESSINS:+= %) do call :draw_group %%g
+if defined BAD exit /b 1
+:draws_done
 rem Un profil donne son nom au journal : la liste de ses reglages ferait un
 rem chemin plus long que Windows n'en accepte.
 if defined PROFIL set "TAG=-scarlettport-%PROFIL%"
@@ -229,9 +242,11 @@ if defined SORTIE echo   sortie  : image du jeu en %SORTIE%
 if defined ECHELLE echo   echelle : rendu 3D a %ECHELLE% de l'image du jeu
 if defined TEXTURES echo   textures: sans leurs %TEXTURES% premiers niveaux de detail
 if defined SANS echo   sans    : %SANS%
+if defined SANS_DESSINS echo   dessins : laisses de cote pour %SANS_DESSINS% (ces passes ne sont plus dessinees)
 if defined VICTORY_AMBIENT_FILL if /i not "%VICTORY_AMBIENT_FILL%"=="off" echo   lumiere : rebondie remplie a %VICTORY_AMBIENT_FILL% (rien ne l'ecrit)
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
+if defined RELAIS echo   relais  : les soumissions partent vers la carte sans attendre chacune
 if defined VICTORY_CARD_BUFFERS_MIN_MB echo   copies  : tampons du jeu de %VICTORY_CARD_BUFFERS_MIN_MB% Mio et plus sur la carte (%VICTORY_CARD_BUFFERS_MB% Mio au plus)
 if "%VICTORY_TEXTURE_GATE_S%"=="0" echo   arrivee : textures a l'allure ordinaire, sans rattrapage
 if "%SORTIE%"=="960x540" echo   attention : en 960x540 le jeu est reste sur l'ecran des licences (25/11, 10 h 13)
@@ -331,6 +346,47 @@ if not defined TEXTURES set "TEXTURES=3"
 call :card_copies
 call :steady_textures
 call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
+goto :eof
+
+rem Le profil performance : tout ce qui a ete mesure plus rapide, la qualite
+rem d'image passant apres. En plus de maximum : les cartes d'ombres ne sont plus
+rem dessinees (au moins 1 300 dessins indirects par image, un quart du temps de
+rem carte au lancement mesure du 25/11 : le monde est eclaire sans ombres
+rem portees), les soumissions partent sans attendre chacune (relais : 312 a
+rem 325 ms contre 361 a 380 le 26/11), et le jeu prend ses propres reglages bas
+rem (qualite-s : 440 ms contre 506 et 3,6 Go de memoire en moins le 25/11).
+rem Jamais mesure ensemble : a essayer contre rapide avec banc.ps1.
+:performance
+set "PROFIL=performance"
+call :size 1280x720
+if not defined TEXTURES set "TEXTURES=3"
+call :card_copies
+call :steady_textures
+call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+transparence+eclairage-indirect"
+call :without_draws "ombres"
+call :relay
+call :quality_s
+goto :eof
+
+rem Ajoute des groupes de passes (separes par +) dont les dessins sont laisses de cote.
+:without_draws
+if defined SANS_DESSINS (set "SANS_DESSINS=%SANS_DESSINS%+%~1") else set "SANS_DESSINS=%~1"
+goto :eof
+
+rem Ajoute la liste d'un groupe de dessins a celles que le runtime lit.
+:draw_group
+if not exist "%PROFILS%\dessins-%~1.txt" (
+    echo Groupe de dessins inconnu : %~1
+    echo   attendu : %PROFILS%\dessins-%~1.txt
+    set "BAD=1"
+    goto :eof
+)
+if defined VICTORY_SKIP_DRAW_SHADERS (
+    set "VICTORY_SKIP_DRAW_SHADERS=%VICTORY_SKIP_DRAW_SHADERS%;%PROFILS%\dessins-%~1.txt"
+) else (
+    set "VICTORY_SKIP_DRAW_SHADERS=%PROFILS%\dessins-%~1.txt"
+)
+set "TAG=%TAG%-sans-dessins-%~1"
 goto :eof
 
 rem Les reglages de vitesse de ScarlettPort du cote du processeur : 1, les
