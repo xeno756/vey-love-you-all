@@ -164,3 +164,36 @@ phase, avec le piège déjà connu des numéros réservés (emplacements de raci
   du début enregistrés le 25/11 en `rapide` ; la vidéo du menu se décode à 30 images par
   seconde dans les trois lancements. Pas de régression visible ; s'il manque un fond, ce
   n'est pas nouveau. Non vérifié.
+
+## 10. Lancement de 13 h 47 : les murs sont revenus, la vitesse a baissé
+
+Captures de l'utilisateur : **le dortoir a ses murs** (plafonniers, porte, sanitaires, sol),
+avec les deux correctifs de l'amont (`a5b2dd3`). La cinématique d'ouverture montre encore des
+visages noirs et des cheveux très clairs, avec 62 943 textures en attente à ce moment.
+
+Le lancement a été fermé après 125 s de monde, pendant le chargement : pas de mesure en
+régime établi. Aux mêmes moments du monde :
+
+| Tranche de monde | 13 h 14 | 13 h 47 |
+|---|---|---|
+| 0 à 30 s | 3,23 images/s | 2,21 |
+| 30 à 60 s | 4,08 | 1,60 |
+| 60 à 90 s | 5,17 | 2,50 |
+| 90 à 130 s | 6,74 | 3,80 |
+
+Où est passé le temps (journal) :
+- les enregistrements que le jeu copie en octets : 403 000 regardés et **58 000 refaits par
+  image**, 63 à 110 ms sur le fil qui soumet ;
+- la passe des vues de tampons choisies par index (`heap_buffers`), sur un fil du jeu qui
+  enregistre : de 2 500 emplacements changés et 19 à 28 ms par image à **41 000 à 143 000
+  emplacements et 118 à 262 ms** ; ses vues gardées passent de 84 000 à 284 000 ;
+- la garde des vues multiples : environ 1 200 vues rouvertes par image (autant de copies qui
+  seraient restées périmées), le temps du noyau de 250 à 400-860 ms par image (tous fils) ;
+- deux fois plus de textures en attente au début du monde (62 943 contre 29 139) : le miroir
+  en fait connaître davantage, d'où les visages noirs plus longtemps dans la cinématique.
+
+L'amont a eu le même emballement (26 000 à 43 000 enregistrements refaits par image, puis la
+passe des tampons) et l'a ramené en laissant les emplacements des tables à leurs dessins : nous
+le faisons (179 700 laissés par image), il en reste 58 000. `762c7b8` dit maintenant de quelle
+sorte ils sont (vues de constantes, de tampons, de mémoire placée, de textures) : c'est la
+donnée qui manque pour les traiter sans perdre les murs.
