@@ -4,6 +4,10 @@ Prises le 25/11/2026 pour avancer sans poser de question. Chacune se change en l
 
 | # | Question | Décision | Raison |
 |---|---|---|---|
+| 51 | Le profil console Series S du README (`--console series-s`) ? | Pas sans ton oui. | Ta règle du 25/11 : la version Series X seulement. C'est pourtant le plus gros gain du README (27 à 29 images/s, 18 Go au lieu de 27). |
+| 50 | `VICTORY_LATE_WAIT_LISTS=512` du README ? | Non : `performance` met déjà 256. | Partie de 14 h 56 : 0,0 ms d'attente pour « listes en l'air » ; la limite ne joue pas chez nous. |
+| 49 | Le port #1 (constantes lues sur place, `VICTORY_PORT_CONSTANTS`) dans la même version ? | Non : préparé ensuite, à part. | Il place le tas de 185 Mo du jeu dans la mémoire de la carte ; le fork note qu'une passe sur cette mémoire a fait perdre le pilote dans un autre arbre. Il enlèverait pourtant les 65,6 ms par image d'attente de la carte « mémoire du jeu lue par un remplissage » (BLOCKERS 42). |
+| 48 | Le port #2 d'avatarmanz (le jeu marque ses descripteurs) dans `performance` ? | Oui (`ea371e3`), `VICTORY_PORT_DESCRIPTORS=0` le retire. | 110 ms par image de synchronisation à 14 h 56 ; le README d'un autre joueur le compte parmi les réglages qui l'ont fait passer de 16 à 21 images/s. Le filet relit toujours des pages entières. Non mesuré ici. |
 | 45 | Profils RT OFF / LOW / BALANCED ? | Pas de profil : le lancer de rayons est déjà éteint (constructeur off, passes écartées) et la carte ne fait que 10 % de l'image. | Un profil qui ne change aucune mesure serait trompeur (doc 13). |
 | 46 | Déverrouiller la cadence de 30 images/s du jeu par défaut ? | Non : réglage `cadence:` éteint par défaut. | Elle ne joue pas dans le monde (150-250 ms par image), et le rythme de la simulation à une autre cadence n'est pas connu. |
 | 47 | Textures plus fines pour les personnages dans `performance` ? | Oui (`personnages`, un niveau retiré au lieu de trois). | Demande de l'utilisateur ; ce sont peu de textures à côté du monde. Non mesuré. |

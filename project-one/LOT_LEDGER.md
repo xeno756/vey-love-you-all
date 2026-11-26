@@ -28,7 +28,8 @@ lancements étaient ceux de l'utilisateur. La version à lui donner est une seul
 | 15 plantage title+0x4dbd74d | FAIT, NON VÉRIFIÉ | `0b3af3b` (écritures du noyau gardes ouvertes). |
 | 16 personnages plus nets | FAIT, NON VÉRIFIÉ | `0b3af3b`, mot `personnages`. |
 | 17 limiteurs d'images, lancer de rayons | ÉTUDIÉ | Doc 13 : aucun plafond ne joue dans le monde ; rayons déjà éteints. |
-| 14 coût du miroir des descripteurs | EN COURS | `762c7b8` compte les sortes d'enregistrements refaits ; à traiter après le prochain lancement. |
+| 14 coût du miroir des descripteurs | FAIT, NON MESURÉ | `762c7b8` compte ; 14 h 56 : 110 ms par image, 519 000 cases relues. `ea371e3` : port #2 d'avatarmanz, le jeu marque les cases qu'il écrit, seules celles-là sont relues (mot `marques`, dans `performance`).
+| 18 port #1, constantes sur place | À FAIRE | DECISIONS 49, BLOCKERS 42 : 65,6 ms par image d'attente de la carte. |
 | 12 fusion de l'amont fxceless | À FAIRE | 98 commits, 35 blocs en conflit sur la branche stable (BLOCKERS 37). |
 | 8 préréglage SafeMode abaissé | FAIT, JAMAIS LANCÉ | `2cf979c`, option `prereglage:bas|extreme|diagnostic|safemode`. 11 tests hors jeu. Positions des champs non vérifiées en jeu (BLOCKERS 35). |
 | 2 ter personnages incomplets | PRÉPARÉ, NON VÉRIFIÉ | `performance` ne laisse plus `transparence` de côté (`19f3e56`). À confirmer à l'œil et sur capture. |

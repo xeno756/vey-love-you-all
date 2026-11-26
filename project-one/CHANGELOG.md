@@ -4,6 +4,19 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (16 h 40) — le jeu signale lui-même ses descripteurs (port #2)
+
+- Partie de 14 h 56 : 4,47 images par seconde, médiane 220 ms. La synchronisation des tas de
+  descripteurs coûte **110 ms par image** sur le fil qui soumet : 254 pages relues,
+  519 000 cases comparées, 61 000 refaites.
+- Repris du fork d'avatarmanz (VIctory-7900XTX, GPL-3.0-or-later, `4cb90be`), son « port #2 » :
+  les 6 écritures du jeu qui remplissent ses tables de descripteurs (vérifiées octet pour octet
+  dans notre exécutable) et son `memcpy`/`memmove` marquent les cases écrites ; la
+  synchronisation ne relit plus que ces cases. Un filet relit 16 pages entières par image et
+  compte ce qu'aucune marque n'a signalé (`ea371e3`).
+- Dans `performance` (étiquette `-marques`). `VICTORY_PORT_DESCRIPTORS=0` avant le lancement
+  le retire. **Jamais lancé chez nous.**
+
 ## 26/11/2026 (15 h) — limiteurs, lancer de rayons, plantage, personnages
 
 Détail : [docs/technical/13-limiteurs-rayons-personnages-26-11.md](docs/technical/13-limiteurs-rayons-personnages-26-11.md).

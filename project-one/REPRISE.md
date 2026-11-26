@@ -3,6 +3,12 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 16 h 40** : port #2 d'avatarmanz repris (`ea371e3`, branche fusionnée) : le
+jeu marque les cases de descripteurs qu'il écrit, la synchronisation des tas (110 ms par
+image à 14 h 56) ne relit plus que celles-là. Dans `performance`, jamais lancé. Suite : la
+partie de l'utilisateur (`meilleure.cmd series-x performance`), puis le port #1
+(DECISIONS 49, BLOCKERS 42).
+
 **Au 26/11 à 14 h** : 6,43 images par seconde mesurées (13 h 14) ; les murs manquaient : deux
 correctifs de l'amont repris (`a5b2dd3`), non vérifiés ; `performance` prend `attentes-textures`.
 
