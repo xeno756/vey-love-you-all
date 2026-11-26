@@ -153,6 +153,9 @@ function Get-Summary([string]$Path) {
             ram = Get-Number $r.ram_free_mb; commit = Get-Number $r.commit_left_mb; shared = Get-Number $r.shared_mb
             budget = Get-Number $r.card_budget_mb; translated = Get-Number $r.shaders_translated; wait = Get-Number $r.pipe_wait_ms
             windows = Get-Number $r.windows_mb
+            # Colonnes du 26/11 (absentes des fichiers d'avant : 0).
+            out = Get-Number $r.draws_left_out; faults = Get-Number $r.page_faults
+            kernel = Get-Number $r.kernel_ms; user = Get-Number $r.user_ms
         })
     }
     $first = $rows | Where-Object { $_.draws -ge 300 } | Select-Object -First 1
@@ -172,6 +175,10 @@ function Get-Summary([string]$Path) {
         images = $steady.Count
         par_seconde = [Math]::Round($steady.Count / [Math]::Max(1, $seconds), 2)
         mediane = (& $at 0.5); p95 = (& $at 0.95); p99 = (& $at 0.99); max = [int]$sorted[-1]
+        # Le 95e centile sans arrondi, pour les seuils de 100 et 66,7 ms.
+        p95_exact = [Math]::Round($sorted[[Math]::Min($sorted.Count - 1, [int]($sorted.Count * 0.95))], 1)
+        dessins = [int](& $avg 'draws'); dessins_ecartes = [int](& $avg 'out')
+        defauts_de_page = [int](& $avg 'faults'); noyau = [int](& $avg 'kernel'); utilisateur = [int](& $avg 'user')
         longues = @($world | Where-Object { $_.ms -gt 800 }).Count
         plus_de_50 = @($sorted | Where-Object { $_ -gt 50 }).Count
         processeur = [int](& $avg 'cpu'); carte = [int](& $avg 'gpu'); recopie = [int](& $avg 'back')
@@ -197,6 +204,12 @@ function Show-Summary($s) {
     "temps d'image : mediane {0} ms, 95 % sous {1}, 99 % sous {2}, plus longue {3}" -f $s.mediane, $s.p95, $s.p99, $s.max
     "images de plus de 0,8 s : {0} ; de plus de 50 ms : {1}" -f $s.longues, $s.plus_de_50
     "par image : processeur {0} ms + carte {1} + recopie {2} = {3:P0} du temps d'image" -f $s.processeur, $s.carte, $s.recopie, $s.bout_a_bout
+    "par image : {0} dessins, {1} laisses de cote ; {2} defauts de page ; processus entier {3} ms noyau + {4} ms utilisateur (tous les fils)" -f $s.dessins, $s.dessins_ecartes, $s.defauts_de_page, $s.noyau, $s.utilisateur
+    # Les deux objectifs de la mission, sur CE lancement (ni la stabilite sur
+    # plusieurs lancements ni l'absence de gel ne se lisent ici).
+    $level = { param($fps, $ms) if ($s.par_seconde -ge $fps -and $s.p95_exact -le $ms) { "ATTEINT sur ce lancement" } else { "non atteint" } }
+    "objectif 10 images/s (moyenne >= 10 et 95 % sous 100 ms)  : {0} (moyenne {1}, 95 % a {2} ms)" -f (& $level 10 100), $s.par_seconde, $s.p95_exact
+    "objectif 15 images/s (moyenne >= 15 et 95 % sous 66,7 ms) : {0}" -f (& $level 15 66.7)
     "textures vivantes a 60 / 120 / 240 s : {0} / {1} / {2} ; dues sous 200 a {3} s" -f $s.vivantes_60, $s.vivantes_120, $s.vivantes_240, $s.dues_sous_200_s
     "memoire : RAM libre min {0} Mo (mediane {1}), partagee max {2} Mo (fenetres {3}), budget carte min {4} Mo" -f $s.ram_libre_min, $s.ram_libre_mediane, $s.partagee_max, $s.fenetres_max, $s.budget_carte_min
     if ($s.shaders_traduits -gt 20 -or $s.attente_pipelines_ms -gt 500) { "ATTENTION cache froid : {0} shaders traduits en jeu, {1} ms d'attente de pipelines" -f $s.shaders_traduits, $s.attente_pipelines_ms }
@@ -329,14 +342,15 @@ try {
     if ($Series -gt 1 -and $results.Count -gt 0) {
         ""
         "=== serie '{0}' : {1} lancements, banc propre : {2} ===" -f $Nom, $results.Count, $(if ($clean) { "oui" } else { "non" })
-        "heure     mediane  95%   99%   max   >0,8s  vivantes 60/120/240     proc+carte+recopie  RAM min  horloge  degres  perdue"
+        "heure     img/s  mediane  95%   99%   max   >0,8s  vivantes 60/120/240     proc+carte+recopie  RAM min  horloge  degres  perdue"
         foreach ($e in $results) {
             $s = $e.resume
             if (-not $s -or $s.images -eq 0) { "{0}  (monde non mesure)  perdue: {1}" -f $e.debut.Substring(11), $e.carte_perdue; continue }
-            "{0}  {1,6}  {2,4}  {3,4}  {4,4}  {5,5}  {6,6}/{7,6}/{8,6}  {9,4}+{10,4}+{11,3}       {12,6}  {13,7}  {14,6}  {15}" -f $e.debut.Substring(11), $s.mediane, $s.p95, $s.p99, $s.max, $s.longues, $s.vivantes_60, $s.vivantes_120, $s.vivantes_240, $s.processeur, $s.carte, $s.recopie, $s.ram_libre_min, $e.carte.horloge_mediane, $e.carte.temperature_max, $(if ($e.carte_perdue) { "OUI" } else { "non" })
+            "{0}  {16,5}  {1,6}  {2,4}  {3,4}  {4,4}  {5,5}  {6,6}/{7,6}/{8,6}  {9,4}+{10,4}+{11,3}       {12,6}  {13,7}  {14,6}  {15}" -f $e.debut.Substring(11), $s.mediane, $s.p95, $s.p99, $s.max, $s.longues, $s.vivantes_60, $s.vivantes_120, $s.vivantes_240, $s.processeur, $s.carte, $s.recopie, $s.ram_libre_min, $e.carte.horloge_mediane, $e.carte.temperature_max, $(if ($e.carte_perdue) { "OUI" } else { "non" }), $s.par_seconde
         }
         $ok = @($results | Where-Object { $_.resume -and $_.resume.images -gt 0 })
         if ($ok.Count -gt 0) {
+            "images par seconde : de {0} a {1} ; 95 % le plus long : {2} ms" -f ($ok | ForEach-Object { $_.resume.par_seconde } | Measure-Object -Minimum).Minimum, ($ok | ForEach-Object { $_.resume.par_seconde } | Measure-Object -Maximum).Maximum, ($ok | ForEach-Object { $_.resume.p95_exact } | Measure-Object -Maximum).Maximum
             "mediane des lancements : mediane {0} ms ; images > 0,8 s {1} (de {2} a {3}) ; 99 % de {4} a {5} ms" -f (Get-Median ($ok | ForEach-Object { $_.resume.mediane })), (Get-Median ($ok | ForEach-Object { $_.resume.longues })), ($ok | ForEach-Object { $_.resume.longues } | Measure-Object -Minimum).Minimum, ($ok | ForEach-Object { $_.resume.longues } | Measure-Object -Maximum).Maximum, ($ok | ForEach-Object { $_.resume.p99 } | Measure-Object -Minimum).Minimum, ($ok | ForEach-Object { $_.resume.p99 } | Measure-Object -Maximum).Maximum
         }
         if ($results | Where-Object { $_.cache_froid }) { "ATTENTION : au moins un lancement a traduit des shaders ou attendu des pipelines en jeu (cache froid)." }

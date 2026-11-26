@@ -4,7 +4,34 @@ Un lot est FAIT, EN COURS, À FAIRE ou REFUSÉ (avec la raison). Mis à jour à 
 Les preuves sont dans [FINDINGS.md](FINDINGS.md), ce qui bloque dans [BLOCKERS.md](BLOCKERS.md),
 les choix dans [DECISIONS.md](DECISIONS.md).
 
-Dernière mise à jour : 26/11/2026, itération 4.
+Dernière mise à jour : 26/11/2026, mission 10 à 15 images par seconde, cycle 1.
+
+## Mission 10 à 15 images par seconde
+
+Objectifs : niveau 1, moyenne ≥ 10 images par seconde et 95 % des images sous 100 ms ;
+niveau 2, ≥ 15 et 95 % sous 66,7 ms ; sans plantage ni gel, sur plusieurs lancements.
+L'utilisateur fait tous les lancements : un cycle reste « non mesuré » jusqu'à sa série.
+
+| Cycle | État | Ce qui est fait, ce qui manque |
+|---|---|---|
+| 1 cartes d'ombres écartées, profil `performance` | FAIT hors jeu, NON MESURÉ | `6eaf67c`, `aad682c`, `a409572`. Suite de tests réussie (780 tests ; deux intermittents d'amont, BLOCKERS 25). Manque : les trois séries du banc et une capture de contrôle. |
+| 2 brouillard volumétrique | À FAIRE | 18,7 ms de carte pour 4 calculs : un groupe d'effets `volumetrie-collecte` à écrire puis à essayer sur capture. |
+| 3 manque de RAM | À FAIRE | 53 000 défauts de page par image. Lot R2 (fenêtres page par page) ; `qualite-s` rend déjà 3,6 Go. À chiffrer d'abord avec la colonne `page_faults`. |
+| 4 dessins mesh regroupés | À FAIRE | BLOCKERS 14 : le plus gros poste de la carte après les ombres (environ 100 ms). |
+
+### Registre de la mission
+
+But : 330 ms → 100 ms par image (niveau 1), puis 66,7 ms (niveau 2).
+
+| Poste | Aujourd'hui | Levier | Gain estimé | Gain mesuré |
+|---|---|---|---|---|
+| Cartes d'ombres | ≥ 1 300 dessins, 25–30 ms de carte | `sans-ombres` | −25 à −30 ms, plus leur préparation | non mesuré |
+| Mise bout à bout | 91–98 % du temps d'image | `relais` | −54 ms | −54 ms (26/11, série « Discord ouvert ») |
+| Réglages bas du jeu | — | `qualite-s` | −13 % | 440 ms contre 506 (25/11, une mesure) |
+| Brouillard volumétrique | 18,7 ms de carte | groupe d'effets | −15 ms | 0 |
+| Dessins mesh restants | environ 100 ms de carte | regroupement | −60 à −80 ms | 0 |
+| Processeur et recopie | 93–101 + 36–38 ms | RAM, copies | à chiffrer | 0 |
+| **Total** | **327–337 ms (3 images par seconde)** | | **vers 220–250 ms avec le cycle 1** | **0 vérifié pour ce cycle** |
 
 ## Lot E — métrologie
 

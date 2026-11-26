@@ -4,6 +4,25 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (matin) — mission 10 à 15 images par seconde : audit, profil `performance`
+
+Détail : [FINDINGS.md](FINDINGS.md), cycle 1. **Rien de cette entrée n'est mesuré en jeu** :
+je ne lance plus le jeu, les mesures viendront des séries du banc que tu lances.
+
+- **Audit.** Départ à 2,7 images par seconde (330 ms par image). La carte passe 136 de ses
+  189 ms dans 4 549 dessins de programmes mesh, dont au moins 1 300 pour les cartes d'ombres.
+  Côté processeur : 53 000 défauts de page par image, la machine manque de RAM.
+- **Cartes d'ombres laissées de côté.** Option `sans-ombres` : le monde reste éclairé, sans
+  ombres portées. `sans-dessins:<groupe>` fait de même pour un groupe de ton choix
+  (`..\victory-profils\dessins-<groupe>.txt`).
+- **Profil `performance`.** `maximum`, plus les ombres écartées, le relais et les réglages
+  bas du jeu. À mesurer contre `rapide`.
+- **Mesure.** Le fichier par image compte les dessins écartés, les défauts de page et le
+  temps processeur du processus. Le banc affiche les images par seconde et dit, pour chaque
+  lancement, si les objectifs 10 et 15 images par seconde sont atteints.
+- **Attendu, sans preuve.** Autour de 220 à 250 ms par image avec `performance`, soit 4 à
+  4,5 images par seconde : ce cycle seul ne donne pas 10 images par seconde.
+
 ## 26/11/2026 (1 h 30) — banc propre, relais remesuré, veille installée
 
 Détail : [FINDINGS.md](FINDINGS.md), itération 4. État de chaque lot : [LOT_LEDGER.md](LOT_LEDGER.md).

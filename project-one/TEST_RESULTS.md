@@ -148,6 +148,40 @@ Détails et lecture : [docs/technical/06-performances.md](docs/technical/06-perf
 
 Les trois tests du format R9G9B9E5 échouent si on retire la correction : vérifié par l'agent 3.
 
+## Mission 10 à 15 images par seconde, cycle 1 (26/11, branche fusionnée)
+
+Commandes, dans `..\victory-scarlettport` :
+
+```powershell
+$env:VICTORY_DXIL = "$env:LOCALAPPDATA\Programs\DXC\v1.9.2609\bin\x64\dxil.dll"
+cargo test --release --workspace --no-fail-fast
+cargo clippy --release --workspace --all-targets
+cargo xtask policy
+```
+
+| Vérification | Résultat | Durée |
+|---|---|---|
+| Suite complète | 554 tests réussis, 0 échec, 10 ignorés ; la suite de `victory-gpu` s'est arrêtée sur une violation d'accès (code `0xc0000005`) | 57 s |
+| `victory-gpu` repassée à part, trois fois | 226 réussis, 0 échec, 3 ignorés, à chaque fois | 4 à 5 s |
+| `victory-gpu` en boucle | 50 passes réussies sur 55 ; 5 échecs sur deux tests intermittents | |
+| La même boucle sans les changements du cycle | 24 passes réussies sur 30 ; 6 échecs sur les deux mêmes tests | |
+| `clippy` | aucun avertissement | |
+| `xtask policy` | 242 fichiers, rien à signaler | |
+| Version diagnostic | compilée | 41 s |
+| Lanceur, essai à blanc (`performance test`, `rapide sans-ombres test`, groupe inconnu) | réglages attendus affichés ; le groupe inconnu est refusé | |
+| Banc, `-Resume` sur un fichier de 41 colonnes et un de 45 | résumé et verdict affichés pour les deux | |
+
+Tests ajoutés : `pipeline::tests::draws_are_left_out_by_their_own_list_only` (un pipeline de
+dessin fait avec un shader de la liste est écarté ; un calcul ne l'est jamais par cette
+liste) ; `framelog` : 45 colonnes, en-tête sur une seule ligne.
+
+Les deux tests intermittents (`inplace::…warp_a_title_buffer_in_place…`,
+`pipeline::…a_preparation_leaves_what_is_no_shader_alone`) et la violation d'accès, vue une
+fois et pas reproduite en 85 passes : BLOCKERS 25.
+
+**Ce que cela ne prouve pas :** aucun de ces tests ne lance le jeu. Ni le gain du profil
+`performance` ni son image ne sont vérifiés.
+
 ## Ce que ces tests ne prouvent pas
 
 - **Le rendu en jeu** : un test unitaire réussi ne prouve pas que PROJECT GAME s'affiche.

@@ -204,10 +204,23 @@ lancement (programmes sur la carte, pilote, horloge, température et activité d
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
+### Mission 10 à 15 images par seconde, cycle 1 (26/11, matin)
+
+Audit et premier levier : [FINDINGS.md](FINDINGS.md), cycle 1. Départ : 2,68 images par
+seconde, 95 % des images sous 418 ms (`rapide`, 26/11 à 1 h 00). Objectifs : 10 images par
+seconde avec 95 % sous 100 ms, puis 15 avec 95 % sous 66,7 ms.
+
+**Aucune mesure en jeu dans ce cycle** : je ne lance plus le jeu (DECISIONS 22). Les trois
+commits ci-dessous sont compilés et testés hors jeu ; leurs colonnes « Après » se rempliront
+avec les séries du banc que l'utilisateur lance.
+
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |
 |---|---|---|---|---|---|---|
+| 26/11 | `6eaf67c` | mission, carte | ne pas donner `sans-ombres` ni `performance` (sans `VICTORY_SKIP_DRAW_SHADERS`, rien ne change) | 4 549 dessins indirects mesh par image, dont au moins 1 300 pour les cartes d'ombres (25 à 30 ms de carte) | **non mesuré** ; hors jeu : un pipeline de dessin fait avec un shader de la liste ne dessine plus, un calcul jamais (test) | plus d'ombres portées ; image fausse si une passe relit une carte d'ombres jamais écrite |
+| 26/11 | `aad682c` | mission, mesure | — (colonnes en fin de fichier) | ni défauts de page ni temps noyau par image | quatre colonnes de plus (45) ; le banc les résume et donne le verdict des deux objectifs | deux appels système de plus par image quand le fichier est écrit |
+| 26/11 | `a409572` | mission, profil | ne pas donner `performance` | `rapide` : 327 à 337 ms de médiane en banc propre | **non mesuré** ; estimation 220 à 250 ms (ombres écartées, relais, réglages bas du jeu) | réunit deux réglages qui ont laissé des doutes à l'image (BLOCKERS 10 et 21) |
 | 25/11 | `432cb67` | profils | ne pas donner `rapide` | 2560 × 1440 : carte 777 ms, 6 596 textures en 7 min 35, arrêt par manque de mémoire | 1280 × 720 + textures:2 : carte 221 ms, 67 915 textures en 2 min 06, carte dans son budget (4,2 Go sur 4,7) | image moins nette ; taches colorées vues à ce lancement, cause non établie |
 | 25/11 | `dfca70d` | 1, streaming | `VICTORY_STREAM_POOL=0` | sans profil : aucune texture envoyée tant que la carte dépasse 90 % de son budget | **non mesuré** ; hors jeu : la réserve des textures vaut au moins 512 Mio, et 16 textures par image sont faites même pleine (tests) | textures plus grossières quand la réserve se remplit ; pas de retour au détail fin ensuite |
 | 25/11 | `7a95d07` | 0, mesure | ne pas donner `VICTORY_FRAME_CSV` | pas de mesure image par image | une ligne par image, centiles sur 300 images dans la barre de titre | une demande de mémoire à la carte par image quand le fichier est écrit |
