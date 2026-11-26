@@ -71,7 +71,16 @@ unsafe impl Sync for Host {}
 /// releases reach the host at once, from its own threads, while the host
 /// runs a submission: freeing there is a GPU page fault on the freed
 /// texture (a device hang).
-static RETIRED: Mutex<Vec<(u64, u64, Retired)>> = Mutex::new(Vec::new());
+static RETIRED: Mutex<crate::graveyard::Graveyard<Retired>> = Mutex::new(crate::graveyard::Graveyard::new());
+
+/// (PROJECT ONE) Milliseconds an object [`retire`] was given waits at
+/// least, with its frames ([`retire_frames`]): 1,000, or
+/// `VICTORY_RETIRE_MS`. Frames alone shrink as the frame rate rises: see
+/// `crate::graveyard`.
+fn retire_ms() -> u64 {
+    static MS: OnceLock<u64> = OnceLock::new();
+    *MS.get_or_init(|| std::env::var("VICTORY_RETIRE_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1_000))
+}
 
 /// (PROJECT ONE) Frames an object [`retire`] was given outlives the
 /// submissions running then: 2, or `VICTORY_RETIRE_FRAMES` (0: dropped as
@@ -222,8 +231,8 @@ fn sweep() {
 /// if none is.
 pub(crate) fn retire<T: 'static>(object: T) {
     let started = STARTED.load(Ordering::Acquire);
-    let frames = retire_frames();
-    if frames == 0 && started <= FINISHED.load(Ordering::Acquire) {
+    let (frames, ms) = (retire_frames(), retire_ms());
+    if frames == 0 && ms == 0 && started <= FINISHED.load(Ordering::Acquire) {
         RETIREMENTS[0].fetch_add(1, Ordering::Relaxed);
         drop(object);
         return;
@@ -232,7 +241,7 @@ pub(crate) fn retire<T: 'static>(object: T) {
     RETIRED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push((started, crate::frame::current() + frames, Retired(Box::new(object))));
+        .push(started, crate::frame::current() + frames, now_ms() + ms, Retired(Box::new(object)));
 }
 
 /// Submissions started and finished so far ([`STARTED`], [`FINISHED`]): a
@@ -245,18 +254,23 @@ pub(crate) fn submissions() -> (u64, u64) {
 
 /// Drops what waited for submissions up to `finished`.
 fn bury(finished: u64) {
-    let done: Vec<(u64, u64, Retired)> = {
+    let mut done: Vec<Retired> = Vec::new();
+    {
         let mut retired = RETIRED.lock().unwrap_or_else(|e| e.into_inner());
         if retired.is_empty() {
             return;
         }
-        let frame = crate::frame::current();
-        let (done, keep) = std::mem::take(&mut *retired)
-            .into_iter()
-            .partition(|(at, due, _)| *at <= finished && *due <= frame);
-        *retired = keep;
-        done
-    };
+        let now = crate::graveyard::Now {
+            frame: crate::frame::current(),
+            ms: now_ms(),
+            started: STARTED.load(Ordering::Acquire),
+            finished,
+        };
+        // (PROJECT ONE) With a wait, what is due also waits for the
+        // submissions started while it waited.
+        retired.due(now, retire_frames() > 0 || retire_ms() > 0, &mut done);
+    }
+    // Outside the lock: dropping releases host objects.
     drop(done);
 }
 

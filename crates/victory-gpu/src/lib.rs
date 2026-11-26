@@ -34,6 +34,8 @@ pub mod frame;
 #[cfg(windows)]
 mod framelog;
 #[cfg(windows)]
+mod graveyard;
+#[cfg(windows)]
 mod host;
 #[cfg(windows)]
 mod over;
