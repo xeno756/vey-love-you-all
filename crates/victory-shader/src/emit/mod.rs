@@ -1683,6 +1683,7 @@ mod tests {
     /// edge flags set as without them; with the culling bit, nothing is lit.
     #[test]
     #[cfg(windows)]
+    #[ignore = "PROJECT ONE: the nine-bit corner indices it checks (a14e6dc) are set aside, see project-one/docs/technical/11"]
     fn edge_flagged_triangles_draw_as_unflagged_ones() {
         use super::host::{Draw, Host, Root};
         use windows::Win32::Graphics::Direct3D12::{
