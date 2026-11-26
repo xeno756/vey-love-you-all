@@ -179,6 +179,14 @@ reprises, aucune sur deux sans elles ; les mosaïques bleues de l'image varient 
 retirées. La lecture des pixels voisins par opérations de quad fait planter le compilateur de
 shaders du pilote AMD sur un pipeline du jeu : elle reste coupée par défaut.
 
+### La pâte bleue (25/11, 20 h à 21 h)
+
+Trouvée et corrigée : [FINDINGS.md](FINDINGS.md), chantier A. L'éclairage par tuiles lisait
+6 textures de lumière rebondie que rien n'écrit (passes laissées de côté ou demandant le
+lancer de rayons) : elles gardaient ce que la mémoire du jeu contenait. Remplies d'une
+constante, la pâte disparaît (0,0 % de pixels bleus sur deux lancements, contre jusqu'à
+23,7 % avant), sans coût mesurable.
+
 Chemin parcouru sur cette scène : 1 050 ms par image le matin en 2560 × 1440, 494 ms avec le
 premier `rapide`, 335 ms maintenant.
 
@@ -197,6 +205,7 @@ premier `rapide`, 335 ms maintenant.
 | 25/11 | `528d504` | image et 6, charge de la carte | `sans:` autre chose, ou `series-x` sans profil | taches sur toute l'image ; carte 267 ms par image | plus de taches ; carte 177 ms ; image 398 ms contre 537 | intérieurs plus sombres, traînées autour des sources de lumière |
 | 25/11 | `2d8ba5a` | 5, recopie | ne pas donner `vitesse:2` | image noire avec `VICTORY_COPY_BACK_ONLY_READBACK` | image présente avec `VICTORY_COPY_BACK_SMALL_KB=1024`, environ 250 ms contre 400 | carte perdue une fois après 72 s : expérimental |
 | 25/11 | `12e7c2b` | 3, pipelines | `VICTORY_BARYCENTRIC_GS=0` | 3 à 8 pipelines refusés, 42 dessins par image perdus | 0 refusé, aucun dessin perdu pour refus ; même temps d'image | cheveux dessinés mais mal rendus |
+| 25/11 | lanceur (`rapide`, `maximum`) | A, image | `VICTORY_AMBIENT_FILL=off` | pâte bleue sur 4 lancements de 5 (jusqu'à 23,7 % des pixels) | 0,0 % sur 2 lancements ; médiane 327 ms contre 325 | intérieurs éclairés d'une lumière rebondie constante, pas la vraie |
 | 25/11 | `83c3e60` | 3, pipelines | `VICTORY_QUAD_READS=lane` ou `op` (les rallume) | `preparer-graphiques` plante à l'enregistrement 12 363 (compilateur du pilote) | 25 204 pipelines faits, 0 échec | aucun : même traduction qu'avant la reprise `08058ad` |
 | 25/11 | `df2da97`, `663d05c` | 8, non-régression | — (retraits) | 2 pertes de carte sur 4 lancements avec les reprises | 0 sur 2 lancements sans | indices de 9 bits et corrections d'instructions du fork absents |
 | 25/11 | `a867de6` | 5, processeur | `VICTORY_CARD_BUFFERS_MIN_MB=16` | processeur 110 ms, recopie 54, 99 % sous 839 ms | processeur 78, recopie 34, 99 % sous 537 ; médiane 318 | la carte prend 1 Go de plus pour ces copies (les textures en ont moins) |
