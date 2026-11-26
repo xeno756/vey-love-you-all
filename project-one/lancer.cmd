@@ -72,13 +72,13 @@ rem   10 h 13 ; aucun profil ne l'utilise plus)
 rem   lancer.cmd series-x rapide vitesse    en plus, moins de copies et de calculs
 rem                                         de controle du cote du processeur
 rem                                         (reglages de ScarlettPort, non mesures)
-rem   lancer.cmd series-x rapide vitesse:2  en plus, ce que les shaders ecrivent
+rem   lancer.cmd series-x rapide vitesse:2  DANGEREUX : ce que les shaders ecrivent
 rem                                         n'est recopie que la ou le jeu le relit
-rem                                         et dans les petites zones : 40 %% plus
-rem                                         rapide le 25/11, mais la carte a ete
-rem                                         perdue une fois apres 72 s (experimental)
-rem   lancer.cmd series-x rapide vitesse:3  en plus, les passes de controle du runtime
-rem                                         sur la carte sont jointes (jamais lance)
+rem                                         et dans les petites zones. Bien plus
+rem                                         rapide, mais la carte est perdue (6
+rem                                         lancements sur 7 le 26/11)
+rem   lancer.cmd series-x rapide vitesse:3  DANGEREUX : vitesse:2, plus les passes de
+rem                                         controle du runtime sur la carte jointes
 rem   lancer.cmd series-x rapide relais     les commandes partent vers la carte sans
 rem                                         attendre les precedentes : 54 ms de moins
 rem                                         par image le 26/11, image propre
@@ -86,12 +86,12 @@ rem   lancer.cmd series-x performance       LA version a essayer : tout ce qui e
 rem                                         mesure plus rapide, la qualite d'image
 rem                                         passant apres. maximum sans son groupe
 rem                                         transparence, les cartes d'ombres non
-rem                                         dessinees, qualite-s, et depuis le 26/11
-rem                                         a 9 h : precis, relais:2, vitesse:3,
-rem                                         fenetres, le brouillard collecte en
-rem                                         moins, les textures creees 80 ms par
-rem                                         image au plus. 8 images par seconde sur
-rem                                         les plans ou rapide en donne 3
+rem                                         dessinees, qualite-s, precis, relais:2,
+rem                                         256 listes en vol, fenetres, le
+rem                                         brouillard collecte en moins, les
+rem                                         textures creees 80 ms par image au plus.
+rem                                         6,3 images par seconde le 26/11 a 10 h,
+rem                                         la ou rapide en donne 3
 rem   lancer.cmd series-x performance-sur   le reglage qui a tenu tous ses
 rem                                         lancements : 5 images par seconde
 rem   lancer.cmd series-x sans-ombres       les cartes d'ombres ne sont plus dessinees
@@ -399,26 +399,27 @@ rem Le groupe transparence n'y est plus depuis ce jour : sans la passe qui
 rem compose les matieres transparentes, ce qui passe par elle n'arrive pas a
 rem l'image, et un personnage proche de la camera y passe (haut du corps absent
 rem sur une capture d'ecran du 26/11 ; cause probable, a confirmer en jeu).
-rem Depuis le 26/11 a 9 h, performance reunit TOUT ce qui a ete mesure plus
-rem rapide ce jour-la (une seule version a essayer) : en plus, les attentes
-rem precises et le relais au niveau 2, la recopie limitee a ce que le jeu
-rem relit et les passes de controle jointes (vitesse:3), le bornage par
-rem fenetres, la collecte du brouillard laissee de cote, et la creation des
-rem textures bornee a 80 ms par image. Mesure a 8 h 25 sur les memes plans :
-rem 7,8 a 8,6 images par seconde contre 4,2 avec le profil du matin. Ce
-rem lancement a perdu la carte apres 90 s (un objet libere encore lu) : le
-rem runtime garde depuis les objets liberes une seconde de plus
-rem (VICTORY_RETIRE_MS). Ni cette correction ni l'image ne sont verifiees.
-rem performance-sur : le reglage qui a tenu ses lancements (profil du matin,
-rem attentes precises, relais au niveau 2 : 5 images par seconde).
+rem performance reunit ce qui a ete mesure plus rapide ET a tenu (une seule
+rem version a essayer) : en plus du profil du matin, les attentes precises et
+rem le relais au niveau 2, 256 listes en vol, les fenetres de memoire qui
+rem n'attendent plus les ecritures des tampons qu'elles recouvrent, le bornage
+rem par fenetres, la collecte du brouillard laissee de cote, et la creation
+rem des textures bornee a 80 ms par image. Mesure le 26/11 a 10 h 02 (Discord
+rem et OBS ouverts) : 6,3 images par seconde, mediane 151 ms, 240 s sans perte.
+rem PAS vitesse:2 ni vitesse:3 : 6 lancements sur 7 avec eux ont perdu la
+rem carte le 26/11 (ce que les shaders ecrivent n'est plus recopie vers la
+rem memoire du jeu, et des octets perimes finissent lus comme adresses).
+rem performance-sur : le profil du matin, attentes precises et relais au
+rem niveau 2 seulement (5 images par seconde, a toujours tenu).
 :performance
 call :performance_base
 call :relay 2
 call :precise
-call :vitesse 3
 call :windows
 call :without "volumetrie-collecte"
 if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=80"
+if not defined VICTORY_LATE_WAIT_LISTS set "VICTORY_LATE_WAIT_LISTS=256"
+if not defined VICTORY_WINDOW_PAST_BUFFER_WRITES set "VICTORY_WINDOW_PAST_BUFFER_WRITES=1"
 goto :eof
 
 :performance_sure
