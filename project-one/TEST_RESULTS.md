@@ -220,6 +220,28 @@ Tests ajoutés (5) :
 En jeu, par mes propres lancements du banc : voir [PERF_JOURNAL.md](PERF_JOURNAL.md),
 « Mes lancements ».
 
+### Préréglage du jeu (26/11, 11 h, branche fusionnée, `2cf979c`)
+
+`cargo test --release -p victory-loader` : 45 tests réussis, dont 11 nouveaux dans
+`preset.rs` ; `cargo clippy --release -p victory-loader --tests` sans avertissement.
+
+| Test | Ce qu'il vérifie |
+|---|---|
+| `fields_fit_the_structure_without_overlapping` | chaque champ dans les 0x700 octets, aligné sur sa taille, aucun chevauchement (ni avec la clé à 0x6F0) ; le booléen fait un octet |
+| `profiles_name_known_fields_of_their_kind` | chaque profil ne nomme que des champs connus, avec une valeur de leur type (énumération 0 à 4) |
+| `a_profile_writes_its_fields_and_nothing_else` | seuls les octets des champs du profil changent ; les trois octets à côté du booléen restent |
+| `unexpected_values_are_left_alone_and_lower_floats_kept` | une valeur hors forme (énumération 0x1234, booléen 7, flottant NaN) n'est pas écrite ; un flottant déjà plus bas reste |
+| `the_base_replaces_the_selectors_choice_then_the_profile_lowers_it` | SafeMode cherché une fois à la place de la clé du jeu, puis les champs abaissés |
+| `a_base_missing_from_the_table_falls_back_to_the_selectors_key` | sans SafeMode dans la table, la clé du jeu est cherchée et remise dans la structure |
+| `a_failed_lookup_writes_nothing` | recherche ratée : rien d'écrit, l'échec rendu tel quel |
+| `the_selectors_key_is_looked_up_once_and_base_only_lowers_nothing` | base `jeu` : une seule recherche ; `safemode` seul : aucun champ changé |
+| `the_tail_jump_reaches_the_lookup` | les 5 octets attendus au saut décodent bien vers `0x1d704f0` |
+| `the_hook_works_through_a_thunk` | le crochet appelé par un relais `mov rax ; jmp rax` placé à moins de 2 Gio, comme pour le jeu |
+| `names_parse` | noms des profils et des bases |
+
+Ces tests passent par une fausse recherche : ils ne prouvent ni les positions des champs ni
+l'effet dans le jeu.
+
 ## Ce que ces tests ne prouvent pas
 
 - **Le rendu en jeu** : un test unitaire réussi ne prouve pas que PROJECT GAME s'affiche.

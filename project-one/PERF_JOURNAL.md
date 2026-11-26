@@ -272,6 +272,16 @@ image, la carte au travail 62 à 69 % du temps. Le chargement (première minute)
 à 6,6 images par seconde au lieu de 2 à 3, et dure deux fois plus longtemps (26 000
 textures vivantes à 50 s au lieu de 25 s).
 
+**Correction (11 h 15) : ces vitesses ont été mesurées sur un monde noir.** De 8 h 25 à
+10 h 38, tous les lancements sauf celui de 9 h 38 laissaient de côté la collecte du
+brouillard ; sans elle, le monde est noir ([FINDINGS.md](FINDINGS.md), « Le monde noir »).
+Les 8,6 à 9,7 images par seconde ci-dessus et les 6,0 à 6,1 de la série H ne mesurent donc
+pas un monde visible. Les derniers lancements avec le monde visible sont ceux de 7 h 50
+(4,68 images par seconde), 7 h 57 (4,45) et 8 h 13 (4,97, avec `relais:2 precis`).
+`performance` rend de nouveau le brouillard (`2273cfe`) : sa vitesse n'est pas mesurée. Le
+brouillard coûtait 18,7 ms de carte par image le 25/11 ; ajouté aux 166 ms de la série H, cela
+donnerait de l'ordre de 5,4 images par seconde. C'est un calcul, pas une mesure.
+
 ## Commits
 
 | Date | Commit | Lot | Réglage qui l'annule | Avant | Après | Risque |

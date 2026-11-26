@@ -3,6 +3,14 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 11 h 15** : la version à essayer est `meilleure.cmd series-x performance`
+(branche fusionnée, `2cf979c`), avec le brouillard rendu de nouveau : sans lui le monde
+était noir de 8 h 25 à 10 h 38, et les vitesses mesurées alors ne comptent pas. Le monde
+n'est pas encore vérifié en jeu. L'option `prereglage:bas` (préréglage SafeMode abaissé)
+n'a jamais tourné. Je ne lance plus le jeu : l'utilisateur fait les lancements
+(DECISIONS 35). Suite : sa capture du monde, puis la mission vitesse (pics de temps
+d'image, attentes de la carte), voir [LOT_LEDGER.md](LOT_LEDGER.md).
+
 ## Branches
 
 | Branche ou étiquette | Rôle |
