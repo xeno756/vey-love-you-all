@@ -2361,7 +2361,7 @@ impl State {
     pub(crate) fn dispatch_mesh(&mut self, list: &HostList, x: u32) {
         self.window = None;
         // (PROJECT ONE) A pass the draws' list leaves out.
-        if crate::pipeline::draw_left_out(self.pipeline as This) {
+        if crate::pipeline::draw_left_out(self.pipeline as This) || self.far_cascade() {
             return;
         }
         #[cfg(feature = "diagnostics")]
@@ -2921,7 +2921,7 @@ impl State {
         #[cfg(feature = "diagnostics")]
         self.trace("draw", vertices, first);
         // (PROJECT ONE) A pass the draws' list leaves out.
-        if crate::pipeline::draw_left_out(self.pipeline as This) {
+        if crate::pipeline::draw_left_out(self.pipeline as This) || self.far_cascade() {
             return;
         }
         let ready = self.prepare(list, false);
@@ -3031,7 +3031,7 @@ impl State {
         #[cfg(feature = "diagnostics")]
         self.trace("indexed", indices, first);
         // (PROJECT ONE) A pass the draws' list leaves out.
-        if crate::pipeline::draw_left_out(self.pipeline as This) {
+        if crate::pipeline::draw_left_out(self.pipeline as This) || self.far_cascade() {
             return;
         }
         // Indexed rectangles are drawn by the rectangle geometry stage
@@ -3060,7 +3060,78 @@ impl State {
     }
 }
 
+/// (PROJECT ONE) `VICTORY_SHADOW_CASCADES=<n>`: the sun's shadow draws of
+/// the first `n` cascades only ([`far_cascade`]). Unset: all of them, as the
+/// title asks.
+fn shadow_cascades() -> Option<u64> {
+    static KEEP: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *KEEP.get_or_init(|| {
+        let keep = std::env::var("VICTORY_SHADOW_CASCADES").ok().and_then(|v| v.trim().parse::<u64>().ok());
+        if let Some(n) = keep {
+            tracing::warn!(
+                cascades = n,
+                "the sun's shadow map is drawn for its nearest cascades only (VICTORY_SHADOW_CASCADES); farther away nothing casts a shadow"
+            );
+        }
+        keep
+    })
+}
+
+/// (PROJECT ONE) Draws into the far cascades left out, since the start.
+pub(crate) static CASCADE_DRAWS_LEFT_OUT: AtomicU64 = AtomicU64::new(0);
+
+/// (PROJECT ONE) Whether a draw with `viewport` (x, y, width, height) into a
+/// depth target of `atlas` (width, height) and no colour target draws a
+/// cascade past the first `keep`.
+///
+/// The title draws the sun's shadow map as one depth texture of square
+/// cascades stacked down (2048 x 8192 on this PC: four of 2048 x 2048), each
+/// draw with the viewport of its cascade, the nearest at the top (counted in a
+/// frame of 25/11 with shadows: 370 draws into the first, 716, 694 and 82 into
+/// the others). A far cascade left out keeps its clear: what lies there casts
+/// no shadow, as with the whole map left out, while the nearest cascades keep
+/// the sun out of the rooms around the player.
+pub(crate) fn far_cascade(keep: u64, atlas: (u64, u64), viewport: (f32, f32, f32, f32)) -> bool {
+    let (width, height) = atlas;
+    let (x, y, w, h) = viewport;
+    if width < 256 || height < 2 * width || height % width != 0 {
+        return false;
+    }
+    if x != 0.0 || w != width as f32 || h != width as f32 || y < 0.0 || y.fract() != 0.0 {
+        return false;
+    }
+    y as u64 / width >= keep
+}
+
 impl State {
+    /// (PROJECT ONE) [`far_cascade`] for the draw about to run; counted with
+    /// the draws left out if so.
+    fn far_cascade(&self) -> bool {
+        let Some(keep) = shadow_cascades() else {
+            return false;
+        };
+        if self.depth == 0 || self.targets.iter().any(|&t| t != 0) {
+            return false;
+        }
+        let Some(v) = self.viewports.first() else {
+            return false;
+        };
+        // Cheap tests first: only a square viewport past the kept ones looks
+        // the target up.
+        if v.Width != v.Height || v.Width < 256.0 || v.TopLeftY < keep as f32 * v.Width {
+            return false;
+        }
+        let Some((width, height)) = crate::resource::size_2d(self.depth as This) else {
+            return false;
+        };
+        let out = far_cascade(keep, (width, u64::from(height)), (v.TopLeftX, v.TopLeftY, v.Width, v.Height));
+        if out {
+            crate::pipeline::DRAWS_LEFT_OUT.fetch_add(1, Ordering::Relaxed);
+            CASCADE_DRAWS_LEFT_OUT.fetch_add(1, Ordering::Relaxed);
+        }
+        out
+    }
+
     /// Counts a draw run on the host, under the size of its viewport.
     fn drew(&self) {
         DRAWN.fetch_add(1, Ordering::Relaxed);
@@ -3100,6 +3171,10 @@ impl State {
             crate::pipeline::LEFT_OUT_COUNT[0].fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
             crate::pipeline::note_why("a compute shader the list given leaves out".to_owned());
+            return true;
+        }
+        // (PROJECT ONE) A draw into a far cascade of the sun's shadow atlas.
+        if kind != 2 && self.far_cascade() {
             return true;
         }
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
@@ -3760,6 +3835,32 @@ fn t_is_light(texture: &ID3D12Resource) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (PROJECT ONE) The far cascades of a stacked shadow atlas are left out,
+    /// the near ones and every other depth pass kept.
+    #[test]
+    fn only_the_far_cascades_of_a_stacked_atlas_are_left_out() {
+        let atlas = (2048, 8192);
+        let cascade = |i: f32| (0.0, i * 2048.0, 2048.0, 2048.0);
+        // Two kept: the first two drawn, the last two left out.
+        let out: Vec<bool> = (0..4).map(|i| far_cascade(2, atlas, cascade(i as f32))).collect();
+        assert_eq!(out, [false, false, true, true]);
+        assert!(!far_cascade(1, atlas, cascade(0.0)) && far_cascade(1, atlas, cascade(1.0)));
+        // None kept: all four left out; more kept than there are: none.
+        assert!((0..4).all(|i| far_cascade(0, atlas, cascade(i as f32))));
+        assert!((0..4).all(|i| !far_cascade(8, atlas, cascade(i as f32))));
+        // Not an atlas of square cascades: the picture's depth pre-pass, a
+        // local light's square map, a map wider than tall.
+        assert!(!far_cascade(0, (1280, 720), (0.0, 0.0, 1280.0, 720.0)));
+        assert!(!far_cascade(0, (1024, 1024), (0.0, 0.0, 1024.0, 1024.0)));
+        assert!(!far_cascade(0, (8192, 2048), (2048.0, 0.0, 2048.0, 2048.0)));
+        // A viewport that is not one whole cascade is drawn.
+        assert!(!far_cascade(1, atlas, (0.0, 4096.0, 1024.0, 1024.0)));
+        assert!(!far_cascade(1, atlas, (512.0, 4096.0, 2048.0, 2048.0)));
+        assert!(!far_cascade(1, atlas, (0.0, 4096.5, 2048.0, 2048.0)));
+        // A full-target viewport over the atlas (a clear drawn as a quad).
+        assert!(!far_cascade(1, atlas, (0.0, 0.0, 2048.0, 8192.0)));
+    }
 
     #[test]
     fn a_frame_without_an_upload_is_one_where_slots_waited_and_none_was_made() {

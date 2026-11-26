@@ -1936,6 +1936,17 @@ pub(crate) fn host_copy(this: This) -> Option<std::sync::Arc<HostTexture>> {
     hosted(this, true).map(|made| made.0)
 }
 
+/// (PROJECT ONE) A title texture's width and height as the title described
+/// it (none for a buffer); makes nothing.
+#[cfg(windows)]
+pub(crate) fn size_2d(this: This) -> Option<(u64, u32)> {
+    if this.is_null() {
+        return None;
+    }
+    let r = resource(this);
+    (r.desc.dimension != BUFFER).then_some((r.desc.width, r.desc.height))
+}
+
 /// (PROJECT ONE) Host textures made for title textures, and the
 /// microseconds their creation took (for the log's texture pass line).
 pub(crate) static HOST_TEXTURES_MADE: [std::sync::atomic::AtomicU64; 2] =

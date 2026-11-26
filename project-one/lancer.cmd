@@ -104,6 +104,13 @@ rem                                         seconde, mais 10 pertes de carte sur
 rem                                         lancements le 26/11
 rem   ... performance fenetres              les dessins indirects qui se suivent sont
 rem                                         bornes en une passe, pas un par un
+rem   lancer.cmd series-x ultra-bas         A : performance sans aucune carte d'ombres
+rem   lancer.cmd series-x equilibre         C : performance, deux cascades du soleil,
+rem                                         textures:2 (non mesure)
+rem   ... performance ombres-soleil:N       les ombres du soleil sur ses N cascades
+rem                                         les plus proches (performance : 1)
+rem   ... performance attentes-textures     ESSAI : une texture n'attend que la
+rem                                         soumission qui lit son tampon d'envoi
 rem   ... performance prereglage:bas        le prereglage SafeMode du jeu, abaisse
 rem                                         (bas, extreme, diagnostic, safemode ; voir
 rem                                         :preset plus bas). Jamais lance ici
@@ -134,6 +141,8 @@ set "FENETRES="
 set "PROFIL="
 set "SANS_DESSINS="
 set "PREREGLAGE="
+set "OMBRES_SOLEIL="
+set "ATTENTES_TEXTURES="
 :args
 if "%~2"=="" goto args_done
 if /i "%~2"=="rapide" call :rapide
@@ -141,6 +150,11 @@ if /i "%~2"=="maximum" call :maximum
 if /i "%~2"=="performance" call :performance
 if /i "%~2"=="performance-sur" call :performance_sure
 if /i "%~2"=="sans-ombres" call :without_draws "ombres"
+if /i "%~2"=="sans-ombres" set "OMBRES_SOLEIL="
+if /i "%~2"=="ombres-soleil" call :sun_shadows 1
+if /i "%~2"=="attentes-textures" call :staging_precise
+if /i "%~2"=="ultra-bas" call :ultra_low
+if /i "%~2"=="equilibre" call :balanced
 if /i "%~2"=="capture" set "CAPTURE=1"
 if /i "%~2"=="profil" set "PROFILE=1"
 if /i "%~2"=="traces" set "TRACES=1"
@@ -167,6 +181,7 @@ for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="echelle" set "ECHELLE=%%b"
     if /i "%%a"=="vitesse" call :vitesse %%b
     if /i "%%a"=="relais" call :relay %%b
+    if /i "%%a"=="ombres-soleil" call :sun_shadows %%b
     if /i "%%a"=="prereglage" call :preset "%%b"
     if /i "%%a"=="prereglage-base" set "VICTORY_PRESET_BASE=%%b"
 )
@@ -249,6 +264,10 @@ rem sans-dessins:groupe) : un fichier ..\victory-profils\dessins-<groupe>.txt
 rem par groupe, de la meme forme que ceux des effets. Contrairement a
 rem sans:groupe, cela retire des dessins : a reserver aux passes dont l'image
 rem peut se passer (les cartes d'ombres).
+rem Avec ombres-soleil : les cascades proches du soleil sont dessinees, les
+rem lointaines et les ombres des lampes non (groupe ombres-locales).
+if defined OMBRES_SOLEIL if not defined VICTORY_SHADOW_CASCADES set "VICTORY_SHADOW_CASCADES=%OMBRES_SOLEIL%"
+if defined OMBRES_SOLEIL if defined SANS_DESSINS set "SANS_DESSINS=%SANS_DESSINS:ombres=ombres-locales%"
 if not defined SANS_DESSINS goto draws_done
 for %%g in (%SANS_DESSINS:+= %) do call :draw_group %%g
 if defined BAD exit /b 1
@@ -263,6 +282,8 @@ if "%RELAIS%"=="2" set "TAG=%TAG%-relais2"
 if defined PRECIS set "TAG=%TAG%-precis"
 if defined FENETRES set "TAG=%TAG%-fenetres"
 if defined PREREGLAGE set "TAG=%TAG%-prereglage-%PREREGLAGE%"
+if defined OMBRES_SOLEIL set "TAG=%TAG%-soleil%OMBRES_SOLEIL%"
+if defined ATTENTES_TEXTURES set "TAG=%TAG%-attentes-textures"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -286,6 +307,8 @@ if defined VICTORY_AMBIENT_FILL if /i not "%VICTORY_AMBIENT_FILL%"=="off" echo  
 if defined VITESSE echo   vitesse : reglages du processeur, niveau %VITESSE%
 if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de la Series X
 if defined PREREGLAGE echo   prereglage : %PREREGLAGE% sur la base %VICTORY_PRESET_BASE% (le journal dit ce qui a ete change)
+if defined OMBRES_SOLEIL echo   soleil  : ombres des %VICTORY_SHADOW_CASCADES% cascades les plus proches, pas plus loin
+if defined ATTENTES_TEXTURES echo   attentes: ESSAI, une texture n'attend que la soumission qui lit encore son tampon d'envoi
 if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune
 if "%RELAIS%"=="2" echo   relais  : niveau 2, une lecture n'attend que les soumissions qui ecrivent ce qu'elle lit
 if defined PRECIS if "%VICTORY_SYNC_PRECISE%"=="1" echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
@@ -424,13 +447,63 @@ rem carte sur 15 lancements avec eux le 26/11, plus vite (8 images par
 rem seconde) mais pas jouable. PAS vitesse:2 ni vitesse:3 non plus : ce que les
 rem shaders ecrivent n'est plus recopie vers la memoire du jeu.
 rem performance-sur : le profil du matin seul (4,5 images par seconde).
+rem Mesure du 26/11 a 11 h 12 (brouillard rendu, monde visible) : 5,6 images
+rem par seconde, mediane 175 ms, 95 %% sous 217 ms, 300 s sans perte.
+rem Depuis 12 h : la cascade la plus proche des ombres du soleil est dessinee
+rem (ombres-soleil:1). Sans aucune carte d'ombres, le soleil traversait les
+rem murs : rectangles orange a l'interieur et brouillard eclaire dans les
+rem pieces (captures de l'utilisateur, 11 h 15). Cette cascade fait 370 des
+rem 1 621 dessins des cascades (image du 25/11) ; non mesure en jeu.
 :performance
+call :performance_core
+call :sun_shadows 1
+goto :eof
+
+rem Profil A : performance sans aucune carte d'ombres (le soleil traverse les
+rem murs). Le plus rapide qui montre le monde.
+:ultra_low
+call :performance_core
+set "PROFIL=ultra-bas"
+goto :eof
+
+rem Profil C : performance avec les deux cascades proches du soleil (1 086
+rem dessins de plus par image) et des textures sans leurs 2 premiers niveaux
+rem au lieu de 3. Non mesure.
+:balanced
+if not defined TEXTURES set "TEXTURES=2"
+call :performance_core
+set "PROFIL=equilibre"
+call :sun_shadows 2
+goto :eof
+
+:performance_core
 call :performance_base
 call :relay
 call :windows
 if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=80"
 if not defined VICTORY_LATE_WAIT_LISTS set "VICTORY_LATE_WAIT_LISTS=256"
 if not defined VICTORY_WINDOW_PAST_BUFFER_WRITES set "VICTORY_WINDOW_PAST_BUFFER_WRITES=1"
+goto :eof
+
+rem Les ombres du soleil pour ses N cascades les plus proches (1 par defaut ;
+rem VICTORY_SHADOW_CASCADES). Les ombres des lampes restent non dessinees
+rem quand le profil laisse les ombres de cote (groupe ombres-locales).
+:sun_shadows
+set "OMBRES_SOLEIL=%~1"
+if not defined OMBRES_SOLEIL set "OMBRES_SOLEIL=1"
+goto :eof
+
+rem ESSAI (26/11, jamais lance) : la moitie textures des attentes precises.
+rem Mesure de 11 h 12 : 11,8 des 13,8 attentes de la carte par image venaient
+rem d'un tampon d'envoi de texture encore lu par une soumission en vol, et le
+rem fil qui soumet attendait alors TOUT ce qui etait en vol (119,6 ms par
+rem image), la carte restant inoccupee 60 ms par image derriere lui. Avec ce
+rem reglage, seule l'ecriture d'une texture qui a change attend, et seulement
+rem la soumission qui lit son tampon. La moitie dangereuse de precis (les
+rem lectures de memoire du jeu, comme relais:2) n'est PAS prise.
+:staging_precise
+if not defined VICTORY_STAGING_PRECISE set "VICTORY_STAGING_PRECISE=1"
+set "ATTENTES_TEXTURES=1"
 goto :eof
 
 :performance_sure
