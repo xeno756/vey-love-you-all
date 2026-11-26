@@ -703,6 +703,49 @@ seconde contre 8,77 sans lui. Le lancement sans lui (8 h 54) avait tenu 300 s ; 
 de ces deux pertes (adresse d'aucun objet) n'est pas celle de la perte de 8 h 25 (objets
 libérés).
 
+### `vitesse:3` perd la carte (9 h à 9 h 48, mes lancements)
+
+Neuf lancements de 4 à 5 minutes, de la version complète puis en retirant un réglage à la
+fois (détail dans [PERF_JOURNAL.md](PERF_JOURNAL.md), « Mes lancements ») :
+
+| Avec `vitesse:3` | Sans `vitesse:3` |
+|---|---|
+| 8 h 25, 9 h 07, 9 h 11, 9 h 20, 9 h 23, 9 h 28, 9 h 38 : **carte perdue** (de 27 s à 4 min de monde) ; 8 h 54 : tenu | 7 h 50, 7 h 57, 8 h 13, 9 h 42 : **tenu**, 0 perte |
+
+Les pertes restent quand on retire `fenetres` (9 h 23), le brouillard (9 h 38), le réglage des
+dessins mesh (9 h 20 et après) ; elles s'arrêtent quand on retire `vitesse:3` (9 h 42).
+
+Pourquoi, par la lecture du code (pas démontré par une trace : la version diagnostic de
+9 h 28 a perdu la carte sans nommer de commande) : `vitesse:2` et `3` ne recopient plus vers
+la mémoire du jeu ce que les shaders écrivent dans les tampons de plus de 1 Mio, sauf ceux
+que le jeu relit. La mémoire du jeu garde alors les octets d'avant. Dès que le processeur du
+jeu écrit à côté, dans la même page, le runtime rafraîchit cette page de sa copie sur la
+carte avec les octets du jeu : il écrase ce que les shaders y avaient mis. Et toute autre
+copie des mêmes octets (une fenêtre, un tampon qui en recouvre un autre) lit les octets
+d'avant. Si ces octets sont des index ou des adresses, un shader qui lit la mémoire par
+adresse va lire n'importe où : c'est exactement la panne vue (une adresse d'aucun objet).
+Le réglage est retiré de `performance`. Il reste une option, signalée comme dangereuse.
+
+Sans lui, la relecture revient : 33 à 34 Mo relus par image, et le fil qui soumet attend la
+carte 4,3 fois par image, 95 ms (lancement de 9 h 42 : 5,3 images par seconde). De ces
+attentes, 2,5 par image viennent de la limite de 128 listes en vol, et 2 de lectures de
+mémoire du jeu.
+
+### Regagner sans `vitesse:3` (9 h 48 à 10 h)
+
+- **256 listes en vol** (`VICTORY_LATE_WAIT_LISTS=256`, un réglage existant) : 5,99 images
+  par seconde au lieu de 5,33, attentes 1,7 par image au lieu de 4,3, aucun dessin perdu faute
+  d'emplacements de descripteurs (le risque que son auteur signalait). Mais la carte devient
+  le goulot : occupée 81 % du temps.
+- **Nos propres passes sur la carte.** Ce qui l'occupe en plus : les passes qui hachent et
+  comparent les copies de mémoire du jeu gardées sur la carte, 170 à 240 par image (11 100
+  morceaux de 64 Kio comparés). Chaque passe faisait lire à **un seul fil** un morceau entier,
+  16 octets à la fois : 4 096 lectures l'une après l'autre, les 64 fils d'une vague à 64 Kio
+  les uns des autres. `a191a66` les fait lire par un groupe de 64 fils côte à côte, puis
+  replie les 64 résultats dans l'ordre. Essayé sur l'adaptateur logiciel : chaque octet de
+  chaque place compte (une première version ne repliait que 8 fils sur 64 à cause d'une
+  directive de déroulement de boucle ; le test l'a attrapé avant tout lancement).
+
 ### Risques du cycle 2 (pour mémoire)
 
 Image fausse (murs perdus comme en amont, taches), alerte des attentes
