@@ -149,6 +149,33 @@ pub(crate) fn apply_draws(cache_dir: &Path) {
     victory_gpu::pipeline::leave_out_draws(chosen.hashes);
 }
 
+/// (PROJECT ONE) Reads the lists `VICTORY_DETAIL_SHADERS` names (the same
+/// form) and tells the GPU layer which shaders draw characters: the textures
+/// those draws read keep more of their levels. Before the title starts.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn apply_detail(cache_dir: &Path) {
+    let Some(value) = std::env::var_os("VICTORY_DETAIL_SHADERS").filter(|v| !v.is_empty()) else {
+        return;
+    };
+    let mut lists = String::new();
+    for path in std::env::split_paths(&value) {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                lists.push_str(&text);
+                lists.push('\n');
+            }
+            Err(e) => eprintln!("characters' detail: list {} not read: {e}", path.display()),
+        }
+    }
+    let names = std::fs::read_to_string(cache_dir.join(crate::prepare::NAMES_FILE)).unwrap_or_default();
+    let chosen = choose(&lists, &names);
+    for (entry, shaders) in &chosen.entries {
+        eprintln!("characters' detail: \"{entry}\" names {shaders} shaders");
+    }
+    #[cfg(windows)]
+    victory_gpu::pipeline::detail_draws(chosen.hashes);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -54,11 +54,12 @@ pub(crate) extern "system" fn set_interval(
     _period: u32,
     _flags: u32,
 ) -> HRESULT {
-    let interval = match length {
+    let asked = match length {
         0 => SIXTIETH,
         us => Duration::from_micros(u64::from(us)),
     };
-    tracing::info!(?interval, "frame interval");
+    let interval = rate_override().unwrap_or(asked);
+    tracing::info!(?interval, title = ?asked, "frame interval");
     // A new interval starts from now, after the last tick handed out.
     let first = LAST
         .iter()
@@ -71,6 +72,39 @@ pub(crate) extern "system" fn set_interval(
         first,
     });
     S_OK
+}
+
+/// (PROJECT ONE) `VICTORY_FRAME_RATE=<n>` (10 to 1000): the frame clock
+/// ticks `n` times a second whatever interval the title sets (it sets
+/// 33.333 ms, 30 frames a second, and its menus run at exactly that);
+/// `VICTORY_FRAME_RATE=libre` (or `0`): a tick every microsecond, so no
+/// wait for a frame to begin lasts. Unset: the title's interval, as before.
+///
+/// Only the clock the title waits on changes (its frame waits end sooner):
+/// whether the title's own simulation keeps its pace at another rate is
+/// not known (a title that steps its world by the interval it set would
+/// run faster), so this is for a run that tests it. In the world at 4 to 7
+/// frames a second (26/11) a frame takes 150 to 250 ms and never waits for
+/// a tick: this changes nothing there.
+fn rate_override() -> Option<Duration> {
+    static RATE: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
+    *RATE.get_or_init(|| {
+        let asked = std::env::var("VICTORY_FRAME_RATE").ok()?;
+        let asked = asked.trim();
+        let interval = match asked {
+            "libre" | "free" | "0" => Duration::from_micros(1),
+            n => {
+                let fps = n.parse::<u32>().ok().filter(|f| (10..=1000).contains(f))?;
+                Duration::from_nanos(1_000_000_000 / u64::from(fps))
+            }
+        };
+        tracing::warn!(
+            ?interval,
+            asked,
+            "the frame clock ticks at this interval, not the title's (VICTORY_FRAME_RATE); the title's pace is not known to keep"
+        );
+        Some(interval)
+    })
 }
 
 /// Set while fast boot ran the clock without sleeping.

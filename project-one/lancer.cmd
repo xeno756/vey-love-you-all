@@ -143,6 +143,8 @@ set "SANS_DESSINS="
 set "PREREGLAGE="
 set "OMBRES_SOLEIL="
 set "ATTENTES_TEXTURES="
+set "PERSONNAGES="
+set "CADENCE="
 :args
 if "%~2"=="" goto args_done
 if /i "%~2"=="rapide" call :rapide
@@ -153,6 +155,7 @@ if /i "%~2"=="sans-ombres" call :without_draws "ombres"
 if /i "%~2"=="sans-ombres" set "OMBRES_SOLEIL="
 if /i "%~2"=="ombres-soleil" call :sun_shadows 1
 if /i "%~2"=="attentes-textures" call :staging_precise
+if /i "%~2"=="personnages" call :characters
 if /i "%~2"=="ultra-bas" call :ultra_low
 if /i "%~2"=="equilibre" call :balanced
 if /i "%~2"=="capture" set "CAPTURE=1"
@@ -182,6 +185,8 @@ for /f "tokens=1,* delims=:" %%a in ("%~2") do (
     if /i "%%a"=="vitesse" call :vitesse %%b
     if /i "%%a"=="relais" call :relay %%b
     if /i "%%a"=="ombres-soleil" call :sun_shadows %%b
+    if /i "%%a"=="cadence" call :frame_rate "%%b"
+    if /i "%%a"=="vsync" call :present_sync "%%b"
     if /i "%%a"=="prereglage" call :preset "%%b"
     if /i "%%a"=="prereglage-base" set "VICTORY_PRESET_BASE=%%b"
 )
@@ -284,6 +289,8 @@ if defined FENETRES set "TAG=%TAG%-fenetres"
 if defined PREREGLAGE set "TAG=%TAG%-prereglage-%PREREGLAGE%"
 if defined OMBRES_SOLEIL set "TAG=%TAG%-soleil%OMBRES_SOLEIL%"
 if defined ATTENTES_TEXTURES set "TAG=%TAG%-attentes-textures"
+if defined PERSONNAGES set "TAG=%TAG%-personnages"
+if defined CADENCE set "TAG=%TAG%-cadence%CADENCE%"
 set "NAME=%STAMP%-%CONSOLE%-%MODE%%TAG%"
 if defined PREPARE set "NAME=%STAMP%-preparation-%MODE%"
 set "LOG=%LOGS%\%NAME%.err.log"
@@ -309,6 +316,9 @@ if defined QUALITE echo   qualite : reglages bas du jeu (Series S), memoire de l
 if defined PREREGLAGE echo   prereglage : %PREREGLAGE% sur la base %VICTORY_PRESET_BASE% (le journal dit ce qui a ete change)
 if defined OMBRES_SOLEIL echo   soleil  : ombres des %VICTORY_SHADOW_CASCADES% cascades les plus proches, pas plus loin
 if defined ATTENTES_TEXTURES echo   attentes: une texture n'attend que la soumission qui lit encore son tampon d'envoi (mesure une fois : +22 %%)
+if defined PERSONNAGES echo   personnages: leurs textures gardent plus de niveaux de detail (au plus %VICTORY_DETAIL_SKIP% retire)
+if defined CADENCE echo   cadence : ESSAI, l'horloge du jeu bat a %CADENCE% au lieu de 30 images par seconde
+if defined VICTORY_PRESENT_SYNC echo   vsync   : intervalle de presentation %VICTORY_PRESENT_SYNC%
 if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune
 if "%RELAIS%"=="2" echo   relais  : niveau 2, une lecture n'attend que les soumissions qui ecrivent ce qu'elle lit
 if defined PRECIS if "%VICTORY_SYNC_PRECISE%"=="1" echo   attentes: precises, une texture n'attend que la soumission qui la copie encore
@@ -462,6 +472,7 @@ rem 188. VICTORY_STAGING_PRECISE=0 avant le lancement le retire.
 call :performance_core
 call :sun_shadows 1
 call :staging_precise
+call :characters
 goto :eof
 
 rem Profil A : performance sans aucune carte d'ombres (le soleil traverse les
@@ -509,6 +520,38 @@ rem lectures de memoire du jeu, comme relais:2) n'est PAS prise.
 :staging_precise
 if not defined VICTORY_STAGING_PRECISE set "VICTORY_STAGING_PRECISE=1"
 if "%VICTORY_STAGING_PRECISE%"=="1" set "ATTENTES_TEXTURES=1"
+goto :eof
+
+rem Les textures des personnages (dessins des shaders de
+rem ..\victory-profils\details-personnages.txt) gardent plus de niveaux de
+rem detail : au plus VICTORY_DETAIL_SKIP retire (1 par defaut) au lieu des
+rem 3 de performance. Un visage de 1024 texels etait montre en 128.
+:characters
+for %%d in ("%ROOT%\..\victory-profils") do set "PROFILS=%%~fd"
+if not exist "%PROFILS%\details-personnages.txt" (
+    echo Liste des personnages absente : %PROFILS%\details-personnages.txt
+    goto :eof
+)
+if not defined VICTORY_DETAIL_SHADERS set "VICTORY_DETAIL_SHADERS=%PROFILS%\details-personnages.txt"
+if not defined VICTORY_DETAIL_SKIP set "VICTORY_DETAIL_SKIP=1"
+set "PERSONNAGES=1"
+goto :eof
+
+rem ESSAI : l'horloge que le jeu attend bat N fois par seconde (cadence:60) ou
+rem sans attente (cadence:libre) au lieu des 30 que le jeu demande. Dans le
+rem monde a 4-7 images par seconde, aucune image n'attend cette horloge : rien
+rem n'y change. Le rythme de la simulation du jeu a une autre cadence n'est
+rem pas connu (VICTORY_FRAME_RATE).
+:frame_rate
+set "CADENCE=%~1"
+if not defined VICTORY_FRAME_RATE set "VICTORY_FRAME_RATE=%~1"
+goto :eof
+
+rem L'intervalle de presentation (VICTORY_PRESENT_SYNC) : 0 sans attendre
+rem l'ecran ; sans ce mot, autant de rafraichissements que l'intervalle du jeu
+rem en contient (4 sur un ecran de 280 Hz).
+:present_sync
+if /i not "%~1"=="auto" set "VICTORY_PRESENT_SYNC=%~1"
 goto :eof
 
 :performance_sure

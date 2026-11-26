@@ -1168,6 +1168,10 @@ struct Hosted {
     /// Something copied from or into it on the host: its host copy has
     /// every level from then on ([`host_resource_whole`]).
     whole: std::sync::atomic::AtomicBool,
+    /// (PROJECT ONE) A draw of a character read it: its host copy leaves out
+    /// at most [`detail_skip`] first levels from then on
+    /// ([`host_resource_detail`]).
+    detail: std::sync::atomic::AtomicBool,
 }
 
 /// Counts for the memory line: host copies of textures the title fills
@@ -1341,6 +1345,10 @@ fn hosted_as(this: This, make: bool, whole: bool) -> Option<Made> {
             .map_or(std::ptr::null(), |c| std::ptr::from_ref(c).cast::<c_void>());
         let skip = if r.host.whole.load(Relaxed) {
             0
+        } else if r.host.detail.load(Relaxed) {
+            // (PROJECT ONE) A character's texture: fewer levels left out,
+            // the pool's pressure still added.
+            lowered_levels(&r.desc, (detail_skip() + PRESSURE.load(Relaxed)).min(skip_levels()))
         } else {
             // The run's setting, and more as the pool fills (`pressure`):
             // added to it, or a run that already asks for two levels less
@@ -1794,6 +1802,52 @@ pub(crate) fn host_resource_whole<'a>(
     Some(unsafe { &*std::ptr::from_ref(&host.texture) })
 }
 
+/// (PROJECT ONE) [`host_resource`] for a texture a draw of a character
+/// reads (`crate::pipeline::is_detail`): its host copy leaves out at most
+/// [`detail_skip`] first levels where the run's setting leaves out more
+/// (`VICTORY_TEXTURE_SKIP_MIPS`, 3 in `performance`: a face of 1024 texels
+/// was one of 128). A copy made coarser before is let go and made again,
+/// as [`host_resource_whole`] does, once; the slots that show it are made
+/// again of the new one before the next submission runs.
+#[cfg(windows)]
+pub(crate) fn host_resource_detail<'a>(
+    this: This,
+) -> Option<&'a windows::Win32::Graphics::Direct3D12::ID3D12Resource> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if this.is_null() {
+        return None;
+    }
+    let r = resource(this);
+    if r.desc.dimension != BUFFER && !r.host.detail.swap(true, Relaxed) {
+        let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+        let wanted = lowered_levels(&r.desc, detail_skip().min(skip_levels()));
+        if made.as_ref().is_some_and(|(host, _)| host.skip > wanted) {
+            crate::texture::unstage(this);
+            if let Some((host, _)) = made.take() {
+                DETAILED.fetch_add(1, Relaxed);
+                crate::descriptor::texture_replaced(&host.texture);
+                crate::host::retire(host);
+            }
+        }
+    }
+    host_resource(this)
+}
+
+/// (PROJECT ONE) Host copies of characters' textures made again finer
+/// ([`host_resource_detail`]), since the start.
+#[cfg(windows)]
+pub(crate) static DETAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) `VICTORY_DETAIL_SKIP=<n>` (0 to 6, 1 by default): the most
+/// first levels the host copy of a character's texture leaves out.
+#[cfg(windows)]
+pub(crate) fn detail_skip() -> u32 {
+    static SKIP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SKIP.get_or_init(|| {
+        std::env::var("VICTORY_DETAIL_SKIP").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).min(6)
+    })
+}
+
 /// How many of title texture `this`'s first levels `texture`, a host copy
 /// of it, leaves out: told by the widths, so that it is said of the very
 /// copy the caller holds, whatever was made of the texture since.
@@ -2162,6 +2216,7 @@ fn hand_out_resource(
             gone: std::sync::atomic::AtomicBool::new(false),
             placed: std::sync::atomic::AtomicBool::new(false),
             whole: std::sync::atomic::AtomicBool::new(false),
+            detail: std::sync::atomic::AtomicBool::new(false),
         },
     });
     // The host copy waits for the texture's first use ([`Hosted`]).
@@ -2852,6 +2907,42 @@ mod tests {
         );
         assert_eq!(size(host_resource(target).expect("a target")).0, 1024);
         assert_eq!(host_skip(target), 0);
+        SKIP_FOR_TEST.set(None);
+    }
+
+    /// (PROJECT ONE) On the host card: with three levels left out by the
+    /// run, a texture a character's draw reads is made again with one, once,
+    /// and stays so; one such a draw reads first is made with one at once.
+    #[cfg(windows)]
+    #[test]
+    fn a_characters_texture_keeps_more_of_its_levels() {
+        if crate::host::host().is_none() {
+            eprintln!("no host GPU; skipped");
+            return;
+        }
+        const BC3: u32 = 77;
+        SKIP_FOR_TEST.set(Some(3));
+        let null = std::ptr::null();
+        let size = |t: &windows::Win32::Graphics::Direct3D12::ID3D12Resource| {
+            // SAFETY: a live resource.
+            let d = unsafe { t.GetDesc() };
+            (d.Width, d.Height, d.MipLevels)
+        };
+        let desc = texture(2048, 1024, BC3, 12);
+        let mut face = null;
+        assert_eq!(create_committed(null, &PROPERTIES, 0, &desc, 0, null.cast(), &RESOURCE_IIDS[0], &mut face), S_OK);
+        assert_eq!(size(host_resource(face).expect("a host copy")), (256, 128, 9));
+        let made_again = DETAILED.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(detail_skip(), 1, "the default");
+        assert_eq!(size(host_resource_detail(face).expect("a finer copy")), (1024, 512, 11));
+        assert_eq!(host_skip(face), 1);
+        assert_eq!(size(host_resource_detail(face).expect("the same")), (1024, 512, 11));
+        assert_eq!(size(host_resource(face).expect("it stays")), (1024, 512, 11));
+        assert_eq!(DETAILED.load(std::sync::atomic::Ordering::Relaxed), made_again + 1, "made again once");
+        let mut first = null;
+        assert_eq!(create_committed(null, &PROPERTIES, 0, &desc, 0, null.cast(), &RESOURCE_IIDS[0], &mut first), S_OK);
+        assert_eq!(size(host_resource_detail(first).expect("a finer copy")), (1024, 512, 11));
+        assert_eq!(DETAILED.load(std::sync::atomic::Ordering::Relaxed), made_again + 1, "nothing made again");
         SKIP_FOR_TEST.set(None);
     }
 

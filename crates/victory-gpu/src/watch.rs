@@ -755,6 +755,25 @@ pub fn writing(at: usize, len: usize) {
     crate::descriptor::host::remapped(at, len);
 }
 
+/// (PROJECT ONE) Runs `write`, a write of the kernel's into title memory
+/// `[at, at + len)` (which never faults into our handler: on a read-only
+/// page it fails, or writes part, and says nothing of it), with the guarded
+/// blocks there and their other views open, and kept open until it returns:
+/// the guards' lock is held meanwhile, so no guard taken elsewhere makes them
+/// read-only again in between. Without that, a guard of another view of the
+/// same pages (`VICTORY_VIEW_GUARD`) could close a block between the caller's
+/// [`writing`] and the kernel's write, and the write was lost: the title then
+/// read the bytes from before (26/11 13:47 run, a value of -1 indexed by the
+/// title, a read of nothing). The write must take no lock of ours.
+pub(crate) fn kernel_write<R>(at: usize, len: usize, write: impl FnOnce() -> R) -> R {
+    let mut g = guards();
+    open(&mut g, at, at.saturating_add(len));
+    let r = write();
+    drop(g);
+    crate::descriptor::host::remapped(at, len);
+    r
+}
+
 /// (PROJECT ONE) After a read into title memory `[at, at + len)` through the
 /// kernel has landed (the title's own synchronous reads, DirectStorage's into
 /// plain addresses): the placed textures under it are due again. [`writing`]

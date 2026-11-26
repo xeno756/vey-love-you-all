@@ -534,6 +534,34 @@ pub fn leave_out_draws(hashes: impl IntoIterator<Item = String>) -> bool {
     LEFT_OUT_DRAWS.set(list).is_ok()
 }
 
+/// (PROJECT ONE) The shaders whose draws are a character's, by hash
+/// ([`detail_draws`]).
+static DETAIL_DRAWS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+
+/// (PROJECT ONE) The draws of the graphics and mesh pipelines made with a
+/// shader named by `hashes` are a character's (`VICTORY_DETAIL_SHADERS`):
+/// the textures they read keep more of their first levels than the run's
+/// setting leaves them (`crate::resource::host_resource_detail`). The
+/// characters were blurred with the rest at three levels left out (a face
+/// of 1024 texels shown from one of 128), where the world's textures are
+/// most of the memory and the characters' a small part of it. Once, before
+/// the title makes its pipelines; false if a list was given already.
+pub fn detail_draws(hashes: impl IntoIterator<Item = String>) -> bool {
+    let list: std::collections::HashSet<String> = hashes.into_iter().map(|h| h.to_ascii_lowercase()).collect();
+    tracing::warn!(
+        shaders = list.len(),
+        "the textures the draws of these shaders read keep more of their levels (VICTORY_DETAIL_SHADERS)"
+    );
+    DETAIL_DRAWS.set(list).is_ok()
+}
+
+/// (PROJECT ONE) Whether the draws of the title's pipeline `this` are a
+/// character's ([`detail_draws`]).
+#[cfg(windows)]
+pub(crate) fn is_detail(this: This) -> bool {
+    !this.is_null() && pipeline(this).detail
+}
+
 /// Whether a pipeline of `shaders` is left out: a compute pipeline
 /// (`graphics` false) with a shader of the effects' list, or a graphics or
 /// mesh pipeline with a shader of the draws' list.
@@ -677,6 +705,10 @@ struct Pipeline {
     /// A compute pipeline whose dispatches are left out ([`leave_out`]).
     #[cfg(windows)]
     left_out: bool,
+    /// (PROJECT ONE) A graphics or mesh pipeline that draws characters: the
+    /// textures its draws read keep more of their levels ([`detail_draws`]).
+    #[cfg(windows)]
+    detail: bool,
 }
 const _: () = assert!(offset_of!(Pipeline, packet) == 0x10);
 
@@ -897,6 +929,12 @@ fn hand_out(
     if left_out && LEFT_OUT_COUNT[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64 {
         tracing::info!(?shaders, draws, "a pipeline whose dispatches or draws are left out, as the list given asks");
     }
+    // (PROJECT ONE) Whether its draws are a character's.
+    #[cfg(windows)]
+    let detail = draws
+        && DETAIL_DRAWS
+            .get()
+            .is_some_and(|list| !list.is_empty() && shaders.iter().any(|s| list.contains(&s.hash)));
     #[cfg(windows)]
     let host = Arc::new(make::Pending::new(shaders.clone(), graphics));
     #[cfg(windows)]
@@ -919,6 +957,8 @@ fn hand_out(
         builder,
         #[cfg(windows)]
         left_out,
+        #[cfg(windows)]
+        detail,
         shaders,
         precompiled,
         bound: std::sync::atomic::AtomicBool::new(false),

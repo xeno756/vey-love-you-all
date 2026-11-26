@@ -2364,6 +2364,7 @@ impl State {
         if crate::pipeline::draw_left_out(self.pipeline as This) || self.far_cascade() {
             return;
         }
+        let _detail = DetailDraw::set(crate::pipeline::is_detail(self.pipeline as This));
         #[cfg(feature = "diagnostics")]
         self.trace("mesh", x, 0);
         if let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This)
@@ -2924,6 +2925,7 @@ impl State {
         if crate::pipeline::draw_left_out(self.pipeline as This) || self.far_cascade() {
             return;
         }
+        let _detail = DetailDraw::set(crate::pipeline::is_detail(self.pipeline as This));
         let ready = self.prepare(list, false);
         // A pipeline with the rectangle geometry stage draws the title's
         // vertices as they are; any other gets its rectangles expanded.
@@ -3034,6 +3036,7 @@ impl State {
         if crate::pipeline::draw_left_out(self.pipeline as This) || self.far_cascade() {
             return;
         }
+        let _detail = DetailDraw::set(crate::pipeline::is_detail(self.pipeline as This));
         // Indexed rectangles are drawn by the rectangle geometry stage
         // alone (nothing expands them on the CPU).
         let lost = self.topology == RECTANGLES && !self.completes_rects();
@@ -3177,6 +3180,7 @@ impl State {
         if kind != 2 && self.far_cascade() {
             return true;
         }
+        let _detail = DetailDraw::set(kind != 2 && crate::pipeline::is_detail(self.pipeline as This));
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             return false;
         }
@@ -3629,6 +3633,27 @@ fn fill_ambient(view: &View) -> bool {
     true
 }
 
+thread_local! {
+    /// (PROJECT ONE) The draw being prepared on this thread is a character's
+    /// (`crate::pipeline::is_detail`), for [`readable`].
+    static DETAIL_DRAW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// (PROJECT ONE) [`DETAIL_DRAW`] for the time of one draw, as it was after.
+struct DetailDraw(bool);
+
+impl DetailDraw {
+    fn set(on: bool) -> DetailDraw {
+        DetailDraw(DETAIL_DRAW.replace(on))
+    }
+}
+
+impl Drop for DetailDraw {
+    fn drop(&mut self) {
+        DETAIL_DRAW.set(self.0);
+    }
+}
+
 fn readable(list: &HostList, kind: ResourceType, view: &View) {
     const UNORDERED_ACCESS: u32 = 0x8;
     let filled = fill_ambient(view);
@@ -3679,6 +3704,11 @@ fn readable(list: &HostList, kind: ResourceType, view: &View) {
                 if LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 24 {
                     tracing::info!(resource = format_args!("{resource:#x}"), "an R9G9B9E5 texture is read with no host-written texture at its address");
                 }
+            }
+            // (PROJECT ONE) A character's draw: its textures keep more of
+            // their levels (`crate::pipeline::detail_draws`).
+            if !aliased && DETAIL_DRAW.get() {
+                let _ = crate::resource::host_resource_detail(*resource as This);
             }
             if !aliased
                 && let Some(t) = crate::resource::host_resource(*resource as This)

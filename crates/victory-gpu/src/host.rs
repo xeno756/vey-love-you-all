@@ -3730,6 +3730,30 @@ fn late_line(frames: f64) {
                 d[1]
             );
         }
+        // (PROJECT ONE) VICTORY_DETAIL_SHADERS.
+        static DETAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let detailed = crate::resource::DETAILED.load(Ordering::Relaxed);
+        let new = detailed - DETAILED.swap(detailed, Ordering::Relaxed);
+        if new > 0 {
+            tracing::info!(
+                "characters' textures made again with more of their levels (VICTORY_DETAIL_SHADERS), since the last line: {new} \
+                 ({detailed} in all; at most {} first levels left out)",
+                crate::resource::detail_skip()
+            );
+        }
+        // (PROJECT ONE) Writes of what shaders wrote into title memory that
+        // failed once (a block guarded again in between) and went with the
+        // guards held open; pieces never written (memory not there).
+        static WRITES: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+        let again = KERNEL_WRITES_AGAIN.load(Ordering::Relaxed);
+        let lost = KERNEL_WRITES_LOST.load(Ordering::Relaxed);
+        let (a, l) = (again - WRITES[0].swap(again, Ordering::Relaxed), lost - WRITES[1].swap(lost, Ordering::Relaxed));
+        if a + l > 0 {
+            tracing::info!(
+                "copy-backs into title memory, since the last line: {a} went only once the guards were held open \
+                 (each would have been lost before), {l} 4 KiB pieces not written (not mapped)"
+            );
+        }
     }
     {
         // (PROJECT ONE) VICTORY_SHADOW_CASCADES.
@@ -7030,13 +7054,15 @@ fn copy_os(dst: *mut u8, src: *const u8, len: usize, title_dst: bool) {
     if ask_first && !title_committed(dst, len) {
         return;
     }
-    if title_dst {
-        // The kernel writes the destination: it must not be guarded.
-        crate::watch::writing(dst as usize, len);
-    }
     #[cfg(feature = "diagnostics")]
     let moved = std::time::Instant::now();
-    let whole = read(src, dst, len);
+    // The kernel writes the destination: it must not be guarded, and stays
+    // open while the kernel writes it (`crate::watch::kernel_write`).
+    let whole = if title_dst {
+        crate::watch::kernel_write(dst as usize, len, || read(src, dst, len))
+    } else {
+        read(src, dst, len)
+    };
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::MoveUs, moved.elapsed().as_micros() as u64);
     if whole {
@@ -7055,6 +7081,12 @@ fn copy_os(dst: *mut u8, src: *const u8, len: usize, title_dst: bool) {
     if !title_dst && len >= 64 << 10 {
         read_sparse(src, dst, len);
     } else {
+        // (Into title memory too, as before: its zeros for what cannot be
+        // read are written in place, which may fault into the guards'
+        // handler, so the guards' lock is not held here.)
+        if title_dst {
+            crate::watch::writing(dst as usize, len);
+        }
         read_pieces(src, dst, len);
     }
     #[cfg(feature = "diagnostics")]
@@ -7182,14 +7214,29 @@ pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
     if len == 0 || write(dst as usize, len) {
         return;
     }
+    // (PROJECT ONE) Failed: a page not mapped, or one guarded again since
+    // the caller opened it (`crate::watch::kernel_write`). Once more with
+    // the guards held open, then piece by piece as before (each piece the
+    // same way); what still fails is memory that is not there.
+    if crate::watch::kernel_write(dst as usize, len, || write(dst as usize, len)) {
+        KERNEL_WRITES_AGAIN.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     for_pieces(dst as usize, len, 64 << 10, |at, n| {
-        if !write(at, n) {
+        if !crate::watch::kernel_write(at, n, || write(at, n)) {
             for_pieces(at, n, 4 << 10, |at, n| {
-                write(at, n);
+                if !crate::watch::kernel_write(at, n, || write(at, n)) {
+                    KERNEL_WRITES_LOST.fetch_add(1, Ordering::Relaxed);
+                }
             });
         }
     });
 }
+
+/// (PROJECT ONE) Writes into title memory that failed and went through once
+/// the guards were held open; 4 KiB pieces that never went (not mapped).
+pub(crate) static KERNEL_WRITES_AGAIN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static KERNEL_WRITES_LOST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Calls `f` with the pieces of `[start, start + len)` cut at multiples of
 /// `step`.
