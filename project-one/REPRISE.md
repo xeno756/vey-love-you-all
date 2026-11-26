@@ -25,6 +25,14 @@ question, [BLOCKERS.md](BLOCKERS.md) pour ce qui attend. Les lots 0 à 2 sont é
 testés hors jeu (763 tests) ; les lots suivants attendent un lancement qui montre le
 monde chargé.
 
+Le 25/11 au soir, le fork VIctory-7900XTX (remote git `x7900`, clone dans
+`..\references\VIctory-7900XTX`) a été lu et trois de ses correctifs essayés en jeu : deux
+sont retirés, le troisième est coupé par défaut. Ce qui reste à reprendre, et dans quel
+ordre : [docs/technical/11-victory-7900xtx.md](docs/technical/11-victory-7900xtx.md).
+Après tout changement du traducteur : `meilleure.cmd series-x preparer`, puis
+`preparer-graphiques` (le lancement de 18 h 41, préparé ainsi, a eu les meilleurs 95e et
+99e centiles de la journée).
+
 | Version | Commande | Ce qui est vu en jeu |
 |---|---|---|
 | Branche stable | `project-one/lancer.cmd series-x` | entre dans le monde et y tourne, modèles 3D visibles, 0,3 à 2,5 images par seconde pendant les 25 secondes de monde du lancement de 8 h 20 ; introduction saccadée à ce lancement, corrigée depuis sans nouvel essai |

@@ -4,6 +4,22 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 25/11/2026 (19 h 30) — le fork VIctory-7900XTX essayé
+
+Détail et mesures : [docs/technical/11-victory-7900xtx.md](docs/technical/11-victory-7900xtx.md).
+
+- **Pas utilisable tel quel.** Il dessine les programmes mesh en vrais mesh shaders, que la
+  RX 5600 XT n'a pas, et prend 40 à 46 Go de mémoire ; sa fusion touche 46 fichiers déjà
+  réécrits ici.
+- **Trois correctifs repris puis mesurés en jeu.** Aucun gain de vitesse. Deux pertes de
+  carte sur quatre lancements avec eux, aucune sur deux sans : les deux correctifs actifs sont
+  retirés (`df2da97`, `663d05c`) en attendant de les mesurer un par un.
+- **Lecture des pixels voisins.** Celle du fork fait planter le compilateur de shaders du
+  pilote AMD : coupée par défaut (`83c3e60`, `VICTORY_QUAD_READS`), la précompilation des
+  pipelines graphiques repasse sans échec.
+- **L'image varie d'un lancement à l'autre** avec le même code (mosaïques bleues) : ce n'est
+  pas dû aux reprises (BLOCKERS 15).
+
 ## 25/11/2026 (11 h 20) — mesure par image, textures qui ne restent plus bloquées, `maximum` réparé
 
 Suivi commit par commit : [PERF_JOURNAL.md](PERF_JOURNAL.md). Décisions prises sans
