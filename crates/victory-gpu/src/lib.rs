@@ -87,7 +87,8 @@ pub use inplace::{title_memory_freeing, title_memory_section, title_memory_view}
 pub use regions::{title_memory_not_placeholder, title_memory_placeholder};
 #[cfg(windows)]
 pub use watch::{
-    title_memory_reading, title_memory_remapped, title_memory_remapping, writing as kernel_will_write,
+    read_landed as kernel_wrote, title_memory_reading, title_memory_remapped, title_memory_remapping,
+    writing as kernel_will_write,
 };
 
 /// Total installed physical RAM in bytes, queried once from the OS.

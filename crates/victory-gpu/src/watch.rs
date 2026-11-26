@@ -663,6 +663,23 @@ pub fn writing(at: usize, len: usize) {
     crate::descriptor::host::remapped(at, len);
 }
 
+/// (PROJECT ONE) After a read into title memory `[at, at + len)` through the
+/// kernel has landed (the title's own synchronous reads, DirectStorage's into
+/// plain addresses): the placed textures under it are due again. [`writing`]
+/// makes them due before the read begins, and the texture pass may take them
+/// while it runs, from memory that does not hold the bytes yet; nothing asked
+/// again once they were there, and such a texture kept zeros (the black faces
+/// of the opening cutscene: fxceless/victory-fork e4245f3, which does this for
+/// reads to plain addresses by default). The guards are not opened again here,
+/// as upstream does not by default either. `VICTORY_READ_LANDED=0`: not done.
+pub fn read_landed(at: usize, len: usize) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_READ_LANDED").is_none_or(|v| v != "0")) || len == 0 {
+        return;
+    }
+    crate::descriptor::host::remapped(at, len);
+}
+
 /// Held shared by a read of title memory in place, and alone by the runtime
 /// while it changes what title memory shows.
 ///

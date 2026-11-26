@@ -382,6 +382,10 @@ struct Lane {
     clock: u64,
     /// Enqueued, not yet submitted.
     unsubmitted: Vec<Command>,
+    /// (PROJECT ONE, after fxceless/victory-fork 79cfdd9) Left out when the
+    /// queue submitted itself, until the title's Submit: reads into physical
+    /// pages and the status entries behind them ([`Lanes::submit_as`]).
+    held: Vec<Command>,
     /// Submitted, by sequence number: reads not started, status entries
     /// not written, reads running, and failures not yet reported.
     reads: VecDeque<(u64, Request)>,
@@ -566,8 +570,21 @@ impl Lanes {
         }
     }
 
-    /// Moves a queue's enqueued commands to the workers.
+    /// Moves a queue's enqueued commands to the workers (the title's
+    /// Submit).
     fn submit(&mut self, id: u64) {
+        self.submit_as(id, true);
+    }
+
+    /// As [`Lanes::submit`]; `explicit` false when a half-full queue submits
+    /// itself. That leaves the reads into physical pages for the title's
+    /// Submit: their page lists point into the title's page table, which the
+    /// title fills for the batch in its own submit path, right before Submit,
+    /// so until then they name no page or a page that now holds something
+    /// else (the read's bytes then land in the wrong pages, and the texture
+    /// or model that owns the right ones keeps what it held). A status entry
+    /// behind a held read waits with it. (fxceless/victory-fork 79cfdd9.)
+    fn submit_as(&mut self, id: u64, explicit: bool) {
         let Some(class) = self.lanes.get(&id).map(|l| l.class) else {
             return;
         };
@@ -586,7 +603,18 @@ impl Lanes {
         if lane.reads.is_empty() {
             lane.clock = lane.clock.max(self.lane_now[class]);
         }
-        for command in std::mem::take(&mut lane.unsubmitted) {
+        let mut commands = if explicit { std::mem::take(&mut lane.held) } else { Vec::new() };
+        commands.append(&mut lane.unsubmitted);
+        for command in commands {
+            let hold = !explicit
+                && match &command {
+                    Command::Read(r) => r.options & PAGE_DESTINATION != 0,
+                    Command::Status(_) => !lane.held.is_empty(),
+                };
+            if hold {
+                lane.held.push(command);
+                continue;
+            }
             let seq = self.next_seq;
             self.next_seq += 1;
             match command {
@@ -605,6 +633,7 @@ impl Lane {
             capacity: usize::from(capacity),
             clock: 0,
             unsubmitted: Vec::new(),
+            held: Vec::new(),
             reads: VecDeque::new(),
             statuses: VecDeque::new(),
             running: BTreeSet::new(),
@@ -615,7 +644,7 @@ impl Lane {
 
     /// Requests and status entries held, submitted or not.
     fn entries(&self) -> usize {
-        self.unsubmitted.len() + self.reads.len() + self.statuses.len() + self.running.len()
+        self.unsubmitted.len() + self.held.len() + self.reads.len() + self.statuses.len() + self.running.len()
     }
 
     /// Writes the status entries whose earlier reads have all finished.
@@ -663,6 +692,7 @@ fn close_lane(id: u64) {
     };
     lane.closed = true;
     lane.unsubmitted.clear();
+    lane.held.clear();
     lane.reads.clear();
     lane.statuses.clear(); // releases their arrays
     while lanes.lanes.get(&id).is_some_and(|l| !l.running.is_empty()) {
@@ -774,6 +804,16 @@ fn queue(this: QueueRef, command: Command) {
         if lane.entries() + 1 < lane.capacity.max(2) {
             break;
         }
+        // Full with reads held for a Submit the title cannot make while it
+        // waits here: they go now, page lists as they are.
+        if !lane.held.is_empty() {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!("dstorage: a full queue's reads into physical pages start before the title's Submit");
+            }
+            lanes.submit(id);
+            scheduler.wake();
+        }
         lanes = scheduler
             .finished
             .wait(lanes)
@@ -784,9 +824,29 @@ fn queue(this: QueueRef, command: Command) {
     };
     lane.unsubmitted.push(command);
     if lane.unsubmitted.len() >= (lane.capacity / 2).max(1) {
-        lanes.submit(id);
+        let capacity = lane.capacity;
+        lanes.submit_as(id, !hold_page_reads());
         scheduler.wake();
+        let held = lanes.lanes.get(&id).map_or(0, |l| l.held.len());
+        static AUTO_SUBMITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = AUTO_SUBMITS.fetch_add(1, Ordering::Relaxed) + 1;
+        if n.is_power_of_two() {
+            tracing::info!(
+                n,
+                capacity,
+                held,
+                "dstorage: a queue half full submitted itself; reads into physical pages wait for the title's Submit"
+            );
+        }
     }
+}
+
+/// (PROJECT ONE) Whether a half-full queue that submits itself holds its
+/// reads into physical pages for the title's Submit ([`Lanes::submit_as`]).
+/// `VICTORY_DSTORAGE_HOLD=0`: they start at once, as before.
+fn hold_page_reads() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_DSTORAGE_HOLD").is_none_or(|v| v != "0"))
 }
 
 extern "system" fn submit(this: QueueRef) {
@@ -796,7 +856,7 @@ extern "system" fn submit(this: QueueRef) {
         return;
     };
     let mut lanes = scheduler.lock();
-    let pending = lanes.lanes.get(&id).map_or(0, |l| l.unsubmitted.len());
+    let pending = lanes.lanes.get(&id).map_or(0, |l| l.unsubmitted.len() + l.held.len());
     tracing::debug!(commands = pending, "dstorage: submit");
     lanes.submit(id);
     scheduler.wake();
@@ -1028,7 +1088,13 @@ fn into_destination(
         // SAFETY: the title's destination holds `destination_size` bytes, at
         // least `len`, and nothing else writes it until completion.
         let out = unsafe { std::slice::from_raw_parts_mut(request.destination.cast::<u8>(), len) };
-        return fill(out).map(drop);
+        let filled = fill(out).map(drop);
+        // (PROJECT ONE) Its bytes are there now: the textures under it are
+        // due again (one taken while the read ran kept zeros).
+        if filled.is_ok() {
+            victory_gpu::kernel_wrote(request.destination as usize, len);
+        }
+        return filled;
     }
     let offset = (request.page_offset & 0xffff) as usize;
     let pages = &filled(request.destination.cast(), (offset + len).div_ceil(PAGE))[..];
@@ -1525,6 +1591,40 @@ mod tests {
         assert_eq!(started[1] + started[2], 300, "{started:?}");
         assert_eq!(started[0], 30, "{started:?}");
         assert!(started[1].abs_diff(started[2]) <= 1, "{started:?}");
+    }
+
+    /// (PROJECT ONE) A queue that submits itself starts its plain reads and
+    /// holds those into physical pages, and the status entry behind them,
+    /// for the title's Submit, which releases them in their order.
+    #[test]
+    fn a_self_submit_holds_reads_into_pages_for_the_titles_submit() {
+        let mut l = lanes(STAGING);
+        l.lanes.insert(0, Lane::new(0, 64));
+        let array = status_array(1).cast::<Instance<StatusArray>>();
+        add_ref_instance(array);
+        // SAFETY: an array we created.
+        let entries = unsafe { &(*array).state.entries };
+        entries[0].store(E_PENDING, Ordering::Release);
+        read(&mut l, 0, 0, 16);
+        read(&mut l, 0, PAGE_DESTINATION, 16);
+        read(&mut l, 0, 0, 16);
+        l.lanes.get_mut(&0).unwrap().unsubmitted.push(Command::Status(Status { array, index: 0 }));
+        l.submit_as(0, false);
+        let lane = &l.lanes[&0];
+        assert_eq!((lane.reads.len(), lane.held.len(), lane.statuses.len()), (2, 2, 0), "plain reads go, the page read and the status wait");
+        assert_eq!(lane.entries(), 4, "held entries take their slots");
+        let plain: Vec<Job> = (0..2).map(|_| l.start().unwrap()).collect();
+        assert!(plain.iter().all(|j| j.request.options & PAGE_DESTINATION == 0));
+        assert!(l.start().is_none(), "the page read waits for the title's Submit");
+        plain.iter().for_each(|j| l.finish(j, Ok(())));
+        assert_eq!(result(array.cast(), 0), E_PENDING, "the status waits with the held read");
+        l.submit(0);
+        let paged = l.start().unwrap();
+        assert_eq!(paged.request.options, PAGE_DESTINATION);
+        assert_eq!(result(array.cast(), 0), E_PENDING);
+        l.finish(&paged, Ok(()));
+        assert_eq!(result(array.cast(), 0), S_OK);
+        assert_eq!(l.lanes[&0].entries(), 0);
     }
 
     #[test]
