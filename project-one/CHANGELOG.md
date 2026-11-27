@@ -4,6 +4,39 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (10 h 45 – 12 h 15) — Series S : le vrai profil Lockhart, moins de mémoire, moins de recopie
+
+Mission de l'utilisateur : une Series S optimisée (dix phases). Dossiers `..\series-s\`
+(captures, registre des bugs `bugs\registre.md`, rapport `reports\audit-series-x-s.md`).
+
+- **Profil vérifié dans le binaire** (SHA-256 `e95020b2…8993`) :
+  - le sélecteur 0x5b56bc0 choisit 0xDEADBEEF (Lockhart) quand 0x501ad20 rend 1 ;
+  - 0x501ad20 rend 1 quand 0x75140 voit le type 6 (Series S) ;
+  - nous donnons `ConsoleMode` 0x60 en Series S (type 6) et 0x64 en Series X (type 7).
+- **Bug S-005 : nos lancements Series S tournaient avec les choix Series X.** Le profil
+  `performance` pose `VICTORY_SERIES_S_QUALITY` (6 remplacé par 7 à 0x7518a, pour que la Series X
+  prenne les choix Series S). Sur une vraie Series S, ce crochet faisait répondre « pas une
+  Series S » : préréglage Anaconda dans la mémoire de la Series S. Effets :
+  - RAM épuisée (8 à 55 Mo libres) ;
+  - taches violettes, bleues et rouges sur les murs ;
+  - une perte de carte.
+
+  `d08552f` : le runtime refuse ce crochet sur une Series S, le lanceur ne le demande plus en
+  Series S et garde l'agrandisseur du jeu. Partie de 11 h 21 : cellule propre, 4,43 images/s,
+  1 à 1,7 Go de RAM libre, prison atteinte.
+- Lumière : filtre de teinte de scarlet-fps (`VICTORY_AMBIENT_HUE=1`) et estimation seule
+  (`VICTORY_AMBIENT_LEFTOVER=0`) en options, désactivés : les taches venaient du profil.
+- **Mémoire (demande de l'utilisateur, 11 h 35)** : la mémoire partagée avec la carte est faite
+  de copies de la mémoire du jeu (fenêtres de 4 Mio, copies de tampons).
+  - `963a7ce`, Series S seulement : fenêtres de 1 Mio. Mémoire partagée 5,8 Go au lieu de 6,4,
+    temps d'image 221 ms au lieu de 217 ;
+  - 256 Kio essayé : 5,4 Go mais 241 ms ;
+  - plus de tampons sur la carte : sans effet, la limite n'était pas atteinte.
+- **`5056699`, Series S seulement : limite de recopie de scarlet-fps à 1 Mio.** Recopie 45 ms par
+  image au lieu de 106, 4,59 images/s au lieu de 4,38 ; image et jeu corrects (la partie va
+  jusqu'à « Approchez-vous d'une codétenue »).
+- La Series X n'est pas changée : ses réglages restent ceux de `1f0cbd4`/`150778a`.
+
 ## 27/11/2026 (8 h 30 – 10 h 30) — la course des textures corrigée, textures qui partent et reviennent
 
 - **`d2e2383` : la course des textures, cause des pertes de carte aux adresses basses.** Nos

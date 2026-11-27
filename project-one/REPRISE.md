@@ -3,6 +3,17 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 12 h 15** : **Series S** : `meilleure.cmd series-s performance` (scarlettport
+`5056699`). Le jeu prend enfin son vrai profil Lockhart (bug S-005 corrigé). Réglages propres à
+la Series S :
+- fenêtres de 1 Mio ;
+- limite de recopie de 1 Mio ;
+- agrandisseur du jeu.
+
+Mesures : 4,59 images/s, médiane 208 ms, prison atteinte, image propre. Mission Series S en
+cours : `..\series-s\` (registre des bugs, audit). La Series X reste
+`meilleure.cmd series-x performance`, inchangée.
+
 **Au 27/11 à 10 h 30** : **version à donner scarlettport `1f0cbd4`**, même commande
 (`meilleure.cmd series-x performance`), shaders déjà prêts. Depuis `d86412a` :
 - la course des textures est corrigée (`d2e2383`, détail dans le CHANGELOG). Sous charge, plus
