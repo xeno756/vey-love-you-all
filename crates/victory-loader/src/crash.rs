@@ -379,10 +379,28 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
 /// (base 0), so the miss's allocation is an offset taken for an address,
 /// and the title stops at once after, writing it (title+0x55aa4f5, write
 /// 0x1f6010, diagnostics run of 26/11 23:50). The command must not reach
-/// this path on the main context at all; why it does is not known.
+/// this path on the main context at all.
+///
+/// (27/11) What 0x144dbd700 is, read in the image: the second half of a
+/// resource state transition. The replay (0x144e3b090) first asks whether
+/// a subresource needs a transition (0x144dbd6c0 with its last byte 1); if
+/// so it prepares the main context (0x140036bc0, which raises the flag at
+/// 0x1475deff0) and records it (the same call with 0). Recording takes the
+/// context's batch record for the resource (cached at its index, made from
+/// its allocator on a miss), appends the transition (tail call to
+/// 0x144dbd920) and returns nothing its callers read. So by default
+/// (`VICTORY_MAIN_CONTEXT_SLOT` unset or `skip`) the read at index -1 makes
+/// the function return at once, as if the transition had been recorded:
+/// that transition is left out (the title's own tracking already counts it
+/// done), instead of the title stopping. `=1`: the empty cache above; `=0`:
+/// neither, the title stops as before.
 unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     static TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // The prologue of 0x144dbd700: push r15, r14, r13, r12, rsi, rdi, rbp,
+    // rbx; sub rsp, 38h. The read at index -1 is 0x4d bytes into it.
+    const PROLOGUE: [u8; 16] = [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38];
+    const READ_AT: u64 = 0x4d;
     // (instruction and what follows it, length, store, displacement)
     const SITES: [(&[u8], u64, bool, u64); 3] = [
         // mov r12,[r13+rdi*8]; test r12,r12; je; cmp ebx,esi; je
@@ -397,11 +415,12 @@ unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
     unsafe {
         let record = &*(*info).ExceptionRecord;
         let context = &mut *(*info).ContextRecord;
-        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION
-            || context.Rdi != 0xFFFF_FFFF
-            || record.NumberParameters < 2
-            || !*ON.get_or_init(|| std::env::var_os("VICTORY_MAIN_CONTEXT_SLOT").is_some_and(|v| v == "1"))
-        {
+        let mode = *MODE.get_or_init(|| match std::env::var("VICTORY_MAIN_CONTEXT_SLOT").ok().as_deref().map(str::trim) {
+            Some("0") => 0,
+            Some("1") => 1,
+            _ => 2,
+        });
+        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || context.Rdi != 0xFFFF_FFFF || record.NumberParameters < 2 || mode == 0 {
             return false;
         }
         // The signatures are 14 bytes: inside the page, or not ours.
@@ -416,6 +435,34 @@ unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
         // ExceptionInformation[0]: 0 read, 1 write; [1]: the address.
         if record.ExceptionInformation[1] as u64 != at || (record.ExceptionInformation[0] == 1) != store {
             return false;
+        }
+        if mode == 2 {
+            // Only the read, at the start of the function whose prologue is
+            // the one expected: the return as its epilogue does it.
+            let entry = context.Rip.wrapping_sub(READ_AT);
+            if store || disp != 0 || 0x1000 - (entry as usize & 0xfff) < PROLOGUE.len() || std::slice::from_raw_parts(entry as *const u8, PROLOGUE.len()) != PROLOGUE {
+                return false;
+            }
+            let frame = context.Rsp + 0x38;
+            let slot = |k: u64| ((frame + 8 * k) as *const u64).read();
+            context.Rbx = slot(0);
+            context.Rbp = slot(1);
+            context.Rdi = slot(2);
+            context.Rsi = slot(3);
+            context.R12 = slot(4);
+            context.R13 = slot(5);
+            context.R14 = slot(6);
+            context.R15 = slot(7);
+            context.Rip = slot(8);
+            context.Rsp = frame + 8 * 9;
+            let n = TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n <= 4 || n.is_power_of_two() {
+                tracing::warn!(
+                    times = n,
+                    "the title's main render context recorded a resource transition through its per-context cache at index -1:                      left out, the title goes on (VICTORY_MAIN_CONTEXT_SLOT=0: it stops as before)"
+                );
+            }
+            return true;
         }
         if !store {
             context.R12 = 0;
@@ -866,6 +913,45 @@ mod tests {
         assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0x38])), None); // clflushopt, /7
         assert_eq!(clwb_len(pad(&[0x0f, 0xae, 0x30])), None); // xsaveopt, no 66
         assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0xf0])), None); // register form
+    }
+
+    /// A copy of 0x144dbd700's prologue and of its read at index -1, in code
+    /// of a test's: the read returns from the function as its epilogue does,
+    /// the caller's registers as they were.
+    #[test]
+    fn the_main_contexts_transition_at_index_minus_one_returns() {
+        use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc};
+        report_crashes();
+        // push r15, r14, r13, r12, rsi, rdi, rbp, rbx; sub rsp, 38h
+        let mut code: Vec<u8> = vec![0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38];
+        code.extend([0xBF, 0xFF, 0xFF, 0xFF, 0xFF]); // mov edi, 0xffffffff
+        code.extend([0x41, 0xBD, 0x00, 0x10, 0x00, 0x00]); // mov r13d, 0x1000
+        code.extend([0xBB, 1, 0, 0, 0, 0xBD, 2, 0, 0, 0, 0xBE, 3, 0, 0, 0]); // mov ebx/ebp/esi, 1/2/3
+        code.extend([0x41, 0xBC, 4, 0, 0, 0, 0x41, 0xBE, 5, 0, 0, 0, 0x41, 0xBF, 6, 0, 0, 0]); // mov r12d/r14d/r15d, 4/5/6
+        code.resize(0x4d, 0x90);
+        // mov r12,[r13+rdi*8]; test r12,r12; je; cmp ebx,esi; je ...
+        code.extend([0x4D, 0x8B, 0x64, 0xFD, 0x00, 0x4D, 0x85, 0xE4, 0x74, 0x08, 0x39, 0xF3, 0x0F, 0x84]);
+        code.extend([0xCC; 8]);
+        // SAFETY: fresh memory for code, run once below.
+        unsafe {
+            let place = VirtualAlloc(std::ptr::null(), 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
+            assert!(!place.is_null());
+            std::ptr::copy_nonoverlapping(code.as_ptr(), place.add(0x100), code.len());
+            let (mut a, mut b, mut c, mut d, mut e, mut f) = (0x11u64, 0x22u64, 0x33u64, 0x44u64, 0x55u64, 0x66u64);
+            // rbx, rbp (through rax, rdx), rsi, rdi, r12, r15: callee-saved, all overwritten by the copy.
+            // Callee-saved registers the copy overwrites, held in them across the call.
+            std::arch::asm!(
+                "push rbx", "push rbp",
+                "mov rbx, rax", "mov rbp, rdx",
+                "call r11",
+                "mov rax, rbx", "mov rdx, rbp",
+                "pop rbp", "pop rbx",
+                inout("rax") a, inout("rdx") b, inout("rsi") c, inout("rdi") d, inout("r12") e, inout("r15") f,
+                in("r11") place.add(0x100),
+                clobber_abi("system"),
+            );
+            assert_eq!([a, b, c, d, e, f], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        }
     }
 
     #[test]
