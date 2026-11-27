@@ -525,6 +525,21 @@ pub(crate) static HEAP_VIEWS_ELSEWHERE: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_BUFFER_PASSES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_BUFFER_MICROS: AtomicU64 = AtomicU64::new(0);
 
+/// (PROJECT ONE) `VICTORY_DETAIL_TEXTURES=1`: a character's textures are
+/// made again with more of their levels (off by default since 26/11 19:50).
+fn detail_textures() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_DETAIL_TEXTURES").is_some_and(|v| v == "1"))
+}
+
+/// (PROJECT ONE) Placed texture views picked by index for which no texture
+/// object was found or made (their slots stay null), since the start.
+static HEAP_TEXTURES_NO_OBJECT: AtomicU64 = AtomicU64::new(0);
+
+/// (PROJECT ONE) Slots from a table's start a character's draw may pick
+/// textures from (`State::hurry_textures`).
+const TEXTURE_SET: u32 = 16;
+
 /// (PROJECT ONE) `VICTORY_TABLE_SLOTS=1`: a draw's table notes all its
 /// slots but buffer views with an address as a table's (`State::tables`).
 /// Off by default: faster (sync 70-110 -> 13 ms a frame), but the card was
@@ -1642,6 +1657,59 @@ impl State {
         Some(gpu)
     }
 
+    /// (PROJECT ONE) For a character's draw (`crate::pipeline::is_detail`):
+    /// the textures its shaders pick by index from the tables its user data
+    /// name are served first in the queue of textures picked by index
+    /// (`HostHeap::texture_slots_hurry`, [`TEXTURE_SET`] slots from each
+    /// table's start). `VICTORY_HURRY_TEXTURES=0`: not done.
+    fn hurry_textures(&self, compute: bool) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !DETAIL_DRAW.get() || !*ON.get_or_init(|| std::env::var_os("VICTORY_HURRY_TEXTURES").is_none_or(|v| v != "0")) {
+            return;
+        }
+        let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
+            return;
+        };
+        let Some(host) = (self.heaps[0] != 0).then(|| crate::descriptor::heap(self.heaps[0] as This).host()).flatten() else {
+            return;
+        };
+        for stage in &p.stages {
+            for u in &stage.translated().host.user_data {
+                if u.root == RootType::Table {
+                    let v = self.user_value(compute, u.slot, u.root, u.dword);
+                    host.texture_slots_hurry(v / 32, TEXTURE_SET);
+                    // (Diagnostics) What the title has in the first slots of
+                    // such a table, raw: our view records, or other words.
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        static SAID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        if SAID.fetch_add(1, Ordering::Relaxed) % 64 < 6
+                            && let Some(heap) = (self.heaps[0] != 0).then(|| crate::descriptor::heap(self.heaps[0] as This))
+                        {
+                            let words: Vec<String> = (0..4u32)
+                                .filter_map(|k| heap.handle(v / 32 + k))
+                                .map(|h| {
+                                    // SAFETY: a descriptor slot in title memory.
+                                    let w = unsafe { (h as *const [u32; 8]).read_unaligned() };
+                                    let mapped = match crate::descriptor::view(h) {
+                                        Some(View::Placed(false, resource, desc)) => {
+                                            let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
+                                            let len = crate::resource::placed_bytes_from(&resource, crate::resource::first_mip(&desc)).unwrap_or(1);
+                                            format!("placed {address:#x} {}/{len} bytes mapped", crate::texture::mapped_bytes(address as *const u8, len as usize))
+                                        }
+                                        other => format!("{:?}", other.map(|_| "a view")),
+                                    };
+                                    format!("{:08x?} {mapped} ; {}", &w[..3], host.describe_slot(((h - heap.start) / 32) as u32).unwrap_or_default().chars().take(60).collect::<String>())
+                                })
+                                .collect();
+                            tracing::info!(stage = %stage.shader.hash, slot = v / 32, ?words, "a character's draw picks textures from this table (raw words, then our view)");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn heap_buffers(&self, list: &HostList) -> Option<u64> {
         let heap = self
             .heaps
@@ -2038,7 +2106,17 @@ impl State {
             let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
             let resource = match placed.as_ref().or(view.as_ref()) {
                 Some(&View::Shader(resource, _)) => resource as This,
-                _ => {
+                other => {
+                    // (PROJECT ONE) A placed texture view no texture object
+                    // could be found or made for: the slot stays null.
+                    if let Some(View::Placed(false, resource, desc)) = other
+                        && resource[0] != 1
+                    {
+                        let n = HEAP_TEXTURES_NO_OBJECT.fetch_add(1, Ordering::Relaxed);
+                        if n < 24 || n.is_power_of_two() {
+                            tracing::warn!(slot = index, ?resource, view = ?&desc[..12], "a placed texture view picked by index: no texture object for it, its slot stays null");
+                        }
+                    }
                     host.texture_slot_done(index, write, None);
                     continue;
                 }
@@ -2383,6 +2461,7 @@ impl State {
             return;
         }
         let _detail = DetailDraw::set(crate::pipeline::is_detail(self.pipeline as This));
+        self.hurry_textures(false);
         #[cfg(feature = "diagnostics")]
         self.trace("mesh", x, 0);
         if let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This)
@@ -2964,6 +3043,7 @@ impl State {
             return;
         }
         let _detail = DetailDraw::set(crate::pipeline::is_detail(self.pipeline as This));
+        self.hurry_textures(false);
         let ready = self.prepare(list, false);
         // A pipeline with the rectangle geometry stage draws the title's
         // vertices as they are; any other gets its rectangles expanded.
@@ -3075,6 +3155,7 @@ impl State {
             return;
         }
         let _detail = DetailDraw::set(crate::pipeline::is_detail(self.pipeline as This));
+        self.hurry_textures(false);
         // Indexed rectangles are drawn by the rectangle geometry stage
         // alone (nothing expands them on the CPU).
         let lost = self.topology == RECTANGLES && !self.completes_rects();
@@ -3219,6 +3300,9 @@ impl State {
             return true;
         }
         let _detail = DetailDraw::set(kind != 2 && crate::pipeline::is_detail(self.pipeline as This));
+        if kind != 2 {
+            self.hurry_textures(false);
+        }
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             return false;
         }
@@ -3744,8 +3828,11 @@ fn readable(list: &HostList, kind: ResourceType, view: &View) {
                 }
             }
             // (PROJECT ONE) A character's draw: its textures keep more of
-            // their levels (`crate::pipeline::detail_draws`).
-            if !aliased && DETAIL_DRAW.get() {
+            // their levels (`crate::pipeline::detail_draws`), with
+            // `VICTORY_DETAIL_TEXTURES=1` only: the copies made again finer
+            // showed as white speckles over black skin in the opening
+            // cutscene (captures of 26/11 19:20 and 19:45, gone without).
+            if !aliased && DETAIL_DRAW.get() && detail_textures() {
                 let _ = crate::resource::host_resource_detail(*resource as This);
             }
             if !aliased

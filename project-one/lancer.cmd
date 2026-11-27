@@ -585,7 +585,13 @@ call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
 call :card_copies
 call :steady_textures
-call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+eclairage-indirect"
+rem (PROJECT ONE, 26/11 19 h 15) VICTORY_KEEP_INDIRECT=1 avant le lancement : la
+rem lumiere indirecte gardee (sans elle les visages sont noirs en cinematique).
+if "%VICTORY_KEEP_INDIRECT%"=="1" (
+    call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals"
+) else (
+    call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+eclairage-indirect"
+)
 call :without_draws "ombres"
 call :quality_s
 goto :eof
@@ -729,5 +735,8 @@ rem gardaient ce que la memoire du jeu contenait, la pate bleue des murs et des
 rem visages (captures du 25/11, 18 h 48, 19 h 25, 20 h 26). Remplies d'une
 rem lumiere faible et constante, elle ne revient plus (20 h 34, 20 h 37).
 rem VICTORY_AMBIENT_FILL=off avant le lancement : sans.
-if "%~1"=="eclairage-indirect" if not defined VICTORY_AMBIENT_FILL set "VICTORY_AMBIENT_FILL=0.02"
+rem (26/11, 19 h 50) 0.15 au lieu de 0.02 : la cellule eclairee naturellement au lieu
+rem de presque noire (captures de 19 h 20 et 20 h 00) ; la peau des personnages reste
+rem noire en cinematique (leurs textures choisies par index ne sont pas faites).
+if "%~1"=="eclairage-indirect" if not defined VICTORY_AMBIENT_FILL set "VICTORY_AMBIENT_FILL=0.15"
 goto :eof

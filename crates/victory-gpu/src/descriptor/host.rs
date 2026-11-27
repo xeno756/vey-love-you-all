@@ -486,6 +486,11 @@ pub(crate) fn remapped(at: usize, len: usize) {
     ranges.push((start, end));
 }
 
+/// (PROJECT ONE) Slots of textures picked by index put first in their queue
+/// because a character's draw reads them ([`HostHeap::texture_slots_hurry`]),
+/// since the start.
+pub(crate) static HURRIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// (PROJECT ONE) Records the title copied in as bytes that were left to the
 /// draws reading them through tables ([`HostHeap::mirror_copied_page`]),
 /// since the start.
@@ -608,6 +613,9 @@ struct Waiting {
 pub(crate) struct TextureQueue {
     slots: std::collections::BTreeMap<u32, Waiting>,
     writes: u64,
+    /// (PROJECT ONE) Slots a draw on screen picks textures from
+    /// ([`TextureQueue::hurry`]): served before the others when due.
+    urgent: std::collections::BTreeSet<u32>,
 }
 
 impl TextureQueue {
@@ -626,6 +634,20 @@ impl TextureQueue {
 
     fn remove(&mut self, index: u32) {
         self.slots.remove(&index);
+        self.urgent.remove(&index);
+    }
+
+    /// (PROJECT ONE) A draw on screen reads textures by index from slot
+    /// `index` on: served first, and due now unless it was looked at in
+    /// vain twice already (memory not there yet: its backoff stands).
+    fn hurry(&mut self, index: u32, frame: u64) -> bool {
+        let Some(w) = self.slots.get_mut(&index) else {
+            return false;
+        };
+        if w.looks < 2 {
+            w.due = w.due.min(frame);
+        }
+        self.urgent.insert(index)
     }
 
     /// Up to `max` slots due at `frame`, each with its write number, in
@@ -639,9 +661,19 @@ impl TextureQueue {
     ///   (run 52: 98% of the drawn pixels had no colour texture in the
     ///   first 3D frames).
     fn due(&self, frame: u64, max: usize) -> Vec<(u32, u64)> {
+        // (PROJECT ONE) First the slots draws on screen read ([`hurry`]).
+        let mut urgent: Vec<(u32, u64)> = Vec::new();
+        for &index in &self.urgent {
+            if let Some(w) = self.slots.get(&index).filter(|w| w.due <= frame) {
+                urgent.push((index, w.write));
+                if urgent.len() >= max {
+                    return urgent;
+                }
+            }
+        }
         let mut again: Vec<(u64, u32, u64)> = Vec::new();
         let mut fresh: Vec<(u64, u32, u64)> = Vec::new();
-        for (&index, w) in self.slots.iter().filter(|(_, w)| w.due <= frame) {
+        for (&index, w) in self.slots.iter().filter(|(i, w)| w.due <= frame && !self.urgent.contains(*i)) {
             let class = if w.looks > 0 || w.mapped > 0 { &mut again } else { &mut fresh };
             class.push((w.written, index, w.write));
         }
@@ -649,7 +681,8 @@ impl TextureQueue {
         let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
         again.sort_unstable_by(newest_first);
         fresh.sort_unstable_by(newest_first);
-        let mut order: Vec<(u32, u64)> = again.iter().map(|&(_, index, write)| (index, write)).collect();
+        let mut order: Vec<(u32, u64)> = urgent;
+        order.extend(again.iter().map(|&(_, index, write)| (index, write)));
         let (mut new, mut old) = (0, fresh.len());
         while new < old && order.len() < max {
             order.push((fresh[new].1, fresh[new].2));
@@ -672,6 +705,7 @@ impl TextureQueue {
     fn done(&mut self, index: u32, write: u64) {
         if self.same(index, write).is_some() {
             self.slots.remove(&index);
+            self.urgent.remove(&index);
         }
     }
 
@@ -1629,6 +1663,22 @@ impl HostHeap {
     /// with its write number, in the order to serve them
     /// ([`TextureQueue::due`]), and the queue's counts
     /// ([`TextureQueue::census`]).
+    /// (PROJECT ONE) A draw of a character reads textures by index from
+    /// the `count` title slots from `first` on (a table its shader indexes):
+    /// those waiting in the queue of textures picked by index are served
+    /// first. In the opening cutscene the faces' textures waited behind
+    /// 20,000 to 56,000 others (their slots null: black skin), run of 26/11
+    /// 19:26.
+    pub(crate) fn texture_slots_hurry(&self, first: u32, count: u32) {
+        let frame = crate::frame::current();
+        let mut textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
+        let mut n = 0u64;
+        for index in first..first.saturating_add(count) {
+            n += u64::from(textures.hurry(index, frame));
+        }
+        HURRIED.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) fn texture_slots_due(&self, frame: u64, max: usize) -> (Vec<(u32, u64)>, [u64; 5]) {
         let textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
         (if max == 0 { Vec::new() } else { textures.due(frame, max) }, textures.census(frame))
@@ -2581,7 +2631,6 @@ impl HostHeap {
                 KEPT_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(view);
             }
-            self.keys[host as usize].store(if later { 0 } else { key }, std::sync::atomic::Ordering::Release);
             let kept = if later {
                 None
             } else {
@@ -2591,6 +2640,9 @@ impl HostHeap {
                 null_for(&view, self.cpu(host));
             }
             self.keep(host, kept.flatten());
+            // (PROJECT ONE) Last: `mirror`'s way past the lock takes a slot
+            // with this key as made from this record.
+            self.keys[host as usize].store(if later { 0 } else { key }, std::sync::atomic::Ordering::Release);
             if taken {
                 self.publish(made, index);
                 #[cfg(feature = "diagnostics")]
