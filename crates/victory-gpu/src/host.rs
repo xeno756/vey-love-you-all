@@ -206,10 +206,16 @@ pub(crate) fn references(object: &impl Interface) -> u32 {
 /// `VICTORY_SWEEP=0` keeps everything, as before.
 /// (PROJECT ONE) With the present sent ahead (relay stage 3): how many
 /// presents the card may still have to run when a present comes back
-/// (`VICTORY_PRESENT_LAG`, unset: no bound, as before).
+/// (`VICTORY_PRESENT_LAG`; unset or 0: no bound, as before). The
+/// title seems to keep its per-frame data for no more lag than the
+/// console's pacing allows: unbounded, the card was lost within minutes
+/// wherever the runtime was faster (see `late_stage`).
 fn present_lag() -> Option<usize> {
     static LAG: OnceLock<Option<usize>> = OnceLock::new();
-    *LAG.get_or_init(|| std::env::var("VICTORY_PRESENT_LAG").ok().and_then(|v| v.trim().parse().ok()))
+    *LAG.get_or_init(|| {
+        let lag = std::env::var("VICTORY_PRESENT_LAG").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        (lag > 0).then_some(lag)
+    })
 }
 
 /// (PROJECT ONE) Whether a submission's descriptor work (the records the
@@ -2548,13 +2554,14 @@ fn late_stage() -> u8 {
             Ok("2") => 2,
             Ok("3") => 3,
             // The relay alone: on top of stage 2 (PROJECT ONE; it was stage
-            // 3). With the present sent ahead too (stage 3) the card was
-            // lost again and again where it held with the present settled:
-            // the same settings (VICTORY_SYNC_THREADS=4, VICTORY_SYNC_AHEAD)
-            // lost it at 3, 4, 4 and 6 min at stage 3, held 15 min at stage
-            // 2, at 5.05 fps (runs of 26/11 23:45 - 27/11 2:07). Why the
-            // present sent ahead does it is not found yet.
-            // `VICTORY_LATE_WAIT=3`: as before.
+            // 3, the present sent ahead). Unbounded, the same settings
+            // (VICTORY_SYNC_THREADS=4, VICTORY_SYNC_AHEAD) lost the card at
+            // 3, 4, 4 and 6 min; with the present settled (stage 2,
+            // `VICTORY_LATE_WAIT=2`) they held 15 and 20 min at 5.05 fps;
+            // bounded to one present (stage 3, `VICTORY_PRESENT_LAG=1`) they
+            // held 15 min at 5.5 fps, then two runs stopped short of memory
+            // (runs of 26/11 23:45 - 27/11 2:55). `VICTORY_LATE_WAIT=3`: the
+            // present sent ahead.
             Err(_) if crate::shadow::relay() => 2,
             _ => 0,
         }
