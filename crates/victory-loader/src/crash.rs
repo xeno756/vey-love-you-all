@@ -374,7 +374,12 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
 /// context's own ring, as on a miss) and the two stores of the cache entry
 /// are dropped. Only those three instructions, byte for byte, only with
 /// the index register at 0xffffffff and the faulting address the one the
-/// instruction computes. `VICTORY_MAIN_CONTEXT_SLOT=0`: left to crash.
+/// instruction computes. Off by default (`VICTORY_MAIN_CONTEXT_SLOT=1` turns
+/// it on): it does not help. The main context has no upload ring of its own
+/// (base 0), so the miss's allocation is an offset taken for an address,
+/// and the title stops at once after, writing it (title+0x55aa4f5, write
+/// 0x1f6010, diagnostics run of 26/11 23:50). The command must not reach
+/// this path on the main context at all; why it does is not known.
 unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     static TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -395,7 +400,7 @@ unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
         if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION
             || context.Rdi != 0xFFFF_FFFF
             || record.NumberParameters < 2
-            || !*ON.get_or_init(|| std::env::var_os("VICTORY_MAIN_CONTEXT_SLOT").is_none_or(|v| v != "0"))
+            || !*ON.get_or_init(|| std::env::var_os("VICTORY_MAIN_CONTEXT_SLOT").is_some_and(|v| v == "1"))
         {
             return false;
         }
@@ -420,7 +425,7 @@ unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
             tracing::warn!(
                 address = format_args!("{at:#x}"),
                 "the title's main render context used its per-context upload cache at index -1: taken as an empty \
-                 cache (VICTORY_MAIN_CONTEXT_SLOT=0: left to crash)"
+                 cache (VICTORY_MAIN_CONTEXT_SLOT=1; the title is expected to stop soon after)"
             );
         }
         true

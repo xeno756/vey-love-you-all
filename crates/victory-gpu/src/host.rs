@@ -5865,6 +5865,10 @@ impl Host {
                     }
                     if !names.is_empty() {
                         text.push_str(&format!("; {what} {names:?}"));
+                        #[cfg(feature = "diagnostics")]
+                        if what == "inside freed" {
+                            text.push_str(&crate::resource::let_go_note(&names.join(" ")));
+                        }
                     }
                 }
                 text.push_str(&crate::shadow::near(va));

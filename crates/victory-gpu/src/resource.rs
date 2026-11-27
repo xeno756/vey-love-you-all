@@ -1330,6 +1330,8 @@ fn hosted_as(this: This, make: bool, whole: bool) -> Option<Made> {
                 // The slots that show it are made again of the whole one
                 // before the next submission runs.
                 crate::descriptor::texture_replaced(&host.texture);
+                #[cfg(feature = "diagnostics")]
+                note_let_go(&host.texture, this as usize, "made again whole");
                 crate::host::retire(host);
             }
         }
@@ -1595,6 +1597,47 @@ pub(crate) fn texture_floor(budget: Option<u64>) -> u64 {
 /// Called before a submission starts, by the thread that submits.
 /// `VICTORY_TEXTURE_SWEEP=0` lets nothing go.
 #[cfg(windows)]
+/// (PROJECT ONE, diagnostics) Host copies of textures let go, newest last:
+/// the host object, the title texture, why, when (`now_ms`). A page fault
+/// in a texture DRED names freed is matched here by the host address its
+/// name carries ([`let_go_note`]).
+#[cfg(feature = "diagnostics")]
+static LET_GO: std::sync::Mutex<std::collections::VecDeque<(usize, usize, &'static str, u64)>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+#[cfg(feature = "diagnostics")]
+fn note_let_go(texture: &windows::Win32::Graphics::Direct3D12::ID3D12Resource, title: usize, why: &'static str) {
+    let mut let_go = LET_GO.lock().unwrap_or_else(|e| e.into_inner());
+    if let_go.len() >= 1 << 16 {
+        let_go.pop_front();
+    }
+    let_go.push_back((windows::core::Interface::as_raw(texture) as usize, title, why, crate::host::now_ms()));
+}
+
+/// (PROJECT ONE, diagnostics) For each host address in `names` (DRED's
+/// freed allocations, named "... host 0x..."), when and why its copy was
+/// let go, if it was ([`LET_GO`]).
+#[cfg(feature = "diagnostics")]
+pub(crate) fn let_go_note(names: &str) -> String {
+    let Ok(let_go) = LET_GO.try_lock() else {
+        return "; textures let go: not looked at (busy)".to_owned();
+    };
+    let now = crate::host::now_ms();
+    let found: Vec<String> = names
+        .split("host 0x")
+        .skip(1)
+        .filter_map(|rest| usize::from_str_radix(rest.split(|c: char| !c.is_ascii_hexdigit()).next()?, 16).ok())
+        .map(|host| match let_go.iter().rev().find(|e| e.0 == host) {
+            Some((_, title, why, at)) => format!(
+                "{host:#x}: {why}, title texture {title:#x}, {:.2} s ago",
+                now.saturating_sub(*at) as f64 / 1000.0
+            ),
+            None => format!("{host:#x}: not let go by the four ways noted"),
+        })
+        .collect();
+    format!("; textures let go (of the last {}): {found:?}", let_go.len())
+}
+
 pub(crate) fn let_go_idle() {
     use std::sync::atomic::Ordering::Relaxed;
     const IDLE_FRAMES: u64 = 4;
@@ -1639,6 +1682,8 @@ pub(crate) fn let_go_idle() {
             if first.is_none() {
                 first = Some(at);
             }
+            #[cfg(feature = "diagnostics")]
+            note_let_go(&host.texture, at, "idle (sweep)");
             crate::host::retire(host);
         }
     }
@@ -1833,6 +1878,8 @@ pub(crate) fn host_resource_detail<'a>(
             if let Some((host, _)) = made.take() {
                 DETAILED.fetch_add(1, Relaxed);
                 crate::descriptor::texture_replaced(&host.texture);
+                #[cfg(feature = "diagnostics")]
+                note_let_go(&host.texture, this as usize, "made again finer (a character's)");
                 crate::host::retire(host);
             }
         }
@@ -2098,7 +2145,14 @@ fn host_texture(
     }
     if let Some(t) = &texture {
         crate::host::name(t, || {
-            format!("texture {}x{} f{} flags {:#x}", d.width, d.height, d.format, d.flags)
+            format!(
+                "texture {}x{} f{} flags {:#x} host {:#x}",
+                d.width,
+                d.height,
+                d.format,
+                d.flags,
+                windows::core::Interface::as_raw(t) as usize
+            )
         });
         if d.flags & (TARGET | DEPTH | UNORDERED) != 0 {
             note_target_size(&d);
@@ -2293,6 +2347,8 @@ impl Drop for Resource {
         // A running submission may still read the host copy (and a depth
         // texture's colour twin).
         if let Some((host, twin)) = made {
+            #[cfg(feature = "diagnostics")]
+            note_let_go(&host.texture, std::ptr::from_ref::<Resource>(self) as usize, "title texture released");
             crate::host::retire(host);
             if let Some(twin) = twin {
                 crate::host::retire(twin);
