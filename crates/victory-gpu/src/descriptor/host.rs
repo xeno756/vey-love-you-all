@@ -156,8 +156,19 @@ struct Made {
 const RUN: usize = 16;
 const RUNS: usize = 1 << 12;
 
+/// (PROJECT ONE) Whether constant and buffer views are made when the title
+/// writes them (`VICTORY_EAGER_BUFFERS=1`; see `HostHeap::mirror_with`).
+fn eager_buffers() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_EAGER_BUFFERS").is_some_and(|v| v == "1"))
+}
+
 /// Whether heaps without a heap map lock their slots by runs
 /// (`VICTORY_SLOT_LOCKS=0`: one lock for the heap, as before).
+pub(crate) fn slots_locked_by_runs() -> bool {
+    slot_locks()
+}
+
 fn slot_locks() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_SLOT_LOCKS").is_none_or(|v| v != "0"))
@@ -2735,7 +2746,18 @@ impl HostHeap {
             if let Some(texture) = waiting {
                 super::wait_for(texture, handle);
             }
-            let later = !for_draw && (view.is_buffer() || waiting.is_some());
+            // (PROJECT ONE) With `VICTORY_EAGER_BUFFERS=1` constant and buffer
+            // views are made here, when the title has just written the slot
+            // (no submission can be reading it: the title writes a slot only
+            // once its earlier work is done), instead of left null for a draw
+            // or the pass over buffer views to make later: that later write
+            // may land while a submission sent ahead reads the slot, and a
+            // descriptor read half old (null), half new gives a base of 0
+            // and the new view's offsets (the card lost at addresses of
+            // 56-75 MB, runs of 26/11). Placed textures still wait for their
+            // host copy.
+            let lazy = view.is_buffer() && !(eager_buffers() && !matches!(view, View::Placed(..)));
+            let later = !for_draw && (lazy || waiting.is_some());
             // Another view of the placed texture the slot shows already (a
             // title that streams a texture in writes its view again with
             // more mips each time some arrive): the slot goes on showing

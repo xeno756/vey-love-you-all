@@ -204,19 +204,27 @@ pub(crate) fn references(object: &impl Interface) -> u32 {
 /// names any more (copies of windows of title memory, staging buffers,
 /// host copies of textures the title fills).
 /// `VICTORY_SWEEP=0` keeps everything, as before.
+/// (PROJECT ONE) With the present sent ahead (relay stage 3): how many
+/// presents the card may still have to run when a present comes back
+/// (`VICTORY_PRESENT_LAG`, unset: no bound, as before).
+fn present_lag() -> Option<usize> {
+    static LAG: OnceLock<Option<usize>> = OnceLock::new();
+    *LAG.get_or_init(|| std::env::var("VICTORY_PRESENT_LAG").ok().and_then(|v| v.trim().parse().ok()))
+}
+
 /// (PROJECT ONE) Whether a submission's descriptor work (the records the
 /// title copied into its heaps, the slots waiting for a texture's host copy,
 /// those showing a replaced one) runs on a thread of its own while the
-/// submitting thread prepares the lists (`VICTORY_SYNC_AHEAD=1`; by default
-/// on the submitting thread first, as before: not measured yet, and every
-/// faster variant so far lost the card sooner or later). The two touch
+/// submitting thread prepares the lists (on by default; `VICTORY_SYNC_AHEAD=0`:
+/// on the submitting thread first, as before; with the present sent ahead,
+/// relay stage 3, it lost the card, at stage 2 it held). The two touch
 /// different things: the slots of the view heaps against the host copies
 /// of title memory; each slot is made under its run's lock as on the
 /// recording threads. On the submitting thread the sync was 45 ms a frame
 /// ahead of 65 ms of preparing (run of 26/11 22:47).
 fn sync_ahead() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_SYNC_AHEAD").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SYNC_AHEAD").is_none_or(|v| v != "0"))
 }
 
 /// (PROJECT ONE) [`descriptors_start`]'s asks and the thread's answers, and
@@ -2539,8 +2547,15 @@ fn late_stage() -> u8 {
             Ok("1") => 1,
             Ok("2") => 2,
             Ok("3") => 3,
-            // The relay alone: on top of stage 3.
-            Err(_) if crate::shadow::relay() => 3,
+            // The relay alone: on top of stage 2 (PROJECT ONE; it was stage
+            // 3). With the present sent ahead too (stage 3) the card was
+            // lost again and again where it held with the present settled:
+            // the same settings (VICTORY_SYNC_THREADS=4, VICTORY_SYNC_AHEAD)
+            // lost it at 3, 4, 4 and 6 min at stage 3, held 15 min at stage
+            // 2, at 5.05 fps (runs of 26/11 23:45 - 27/11 2:07). Why the
+            // present sent ahead does it is not found yet.
+            // `VICTORY_LATE_WAIT=3`: as before.
+            Err(_) if crate::shadow::relay() => 2,
             _ => 0,
         }
     })
@@ -8178,6 +8193,19 @@ impl Host {
                 Some(i) => {
                     let flown = self.execute_own(copy);
                     p.ahead[i].1 = flown;
+                    // (PROJECT ONE) `VICTORY_PRESENT_LAG=n`: the present comes
+                    // back only once the presents before the last n have
+                    // run, so the card is never more than n frames behind
+                    // the title (the console's frame pacing keeps it
+                    // close; the relay at stage 3 bounded nothing).
+                    if let Some(lag) = present_lag() {
+                        let mut sent: Vec<u64> = p.ahead.iter().map(|(_, f)| *f).filter(|&f| f > 0 && f < flown).collect();
+                        sent.sort_unstable();
+                        // `lag` 1: the present before this one has run.
+                        if let Some(&due) = sent.len().checked_sub(lag).and_then(|n| sent.get(n)) {
+                            relay_wait(WHY_SYNC, |_| FINISHED.load(Ordering::Acquire) >= due);
+                        }
+                    }
                     if sampled
                         && let Some(s) = p.sampler.as_mut() {
                             s.sent(flown);
