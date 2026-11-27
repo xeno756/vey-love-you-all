@@ -763,15 +763,49 @@ pub(crate) fn sync_heaps() {
             continue;
         };
         let last = heap.asked.swap(now, Relaxed);
-        for (page, asked) in written {
-            if asked <= last {
-                continue;
-            }
-            let from = (page * crate::watch::PAGE).max(start as usize);
-            let to = ((page + 1) * crate::watch::PAGE).min(end as usize);
-            if from >= to {
-                continue;
-            }
+        let jobs: Vec<(usize, usize)> = written
+            .into_iter()
+            .filter(|&(_, asked)| asked > last)
+            .map(|(page, _)| {
+                let from = (page * crate::watch::PAGE).max(start as usize);
+                (from, ((page + 1) * crate::watch::PAGE).min(end as usize))
+            })
+            .filter(|&(from, to)| from < to)
+            .collect();
+        let threads = sync_threads();
+        if threads > 1 && jobs.len() >= SYNC_SPREAD {
+            // (PROJECT ONE) Pages on several threads: a slot is made under
+            // its run's lock (`HostHeap::lock_slot`), so pages apart wait
+            // for each other only where they meet the same slots' locks.
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let counts = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+            std::thread::scope(|s| {
+                for _ in 0..threads.min(jobs.len()) {
+                    s.spawn(|| {
+                        let mut bytes = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, Relaxed);
+                            let Some(&(from, to)) = jobs.get(i) else {
+                                break;
+                            };
+                            if let Some((seen, n)) =
+                                sync_range(host, (start, step), (from, to), &[page_slots(from, to)], &mut bytes)
+                            {
+                                for (count, n) in counts.iter().zip([1, seen, n]) {
+                                    count.fetch_add(n, Relaxed);
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            pages += counts[0].load(Relaxed);
+            looked += counts[1].load(Relaxed);
+            made += counts[2].load(Relaxed);
+            SYNC_SPREAD_PAGES.fetch_add(jobs.len() as u64, Relaxed);
+            continue;
+        }
+        for (from, to) in jobs {
             if let Some((seen, n)) = sync_range(host, (start, step), (from, to), &[page_slots(from, to)], &mut bytes) {
                 pages += 1;
                 looked += seen;
@@ -788,6 +822,31 @@ pub(crate) fn sync_heaps() {
 /// are read in one go ([`sync_heaps`]).
 #[cfg(windows)]
 const GROUP_GAP: u64 = 64;
+
+/// (PROJECT ONE) Changed pages of a heap from which [`sync_heaps`] spreads
+/// them over [`sync_threads`] threads: fewer are not worth the threads.
+#[cfg(windows)]
+const SYNC_SPREAD: usize = 8;
+
+/// (PROJECT ONE) Pages [`sync_heaps`] spread over threads, since the start.
+#[cfg(windows)]
+pub(crate) static SYNC_SPREAD_PAGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) Threads the pass over changed heap pages uses
+/// (`VICTORY_SYNC_THREADS`, 1 by default: on the submitting thread alone).
+/// Only with slots locked by runs (`VICTORY_SLOT_LOCKS`): under one lock
+/// for the heap they would only wait for each other.
+#[cfg(windows)]
+fn sync_threads() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("VICTORY_SYNC_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(1usize)
+            .clamp(1, 8)
+    })
+}
 
 /// (PROJECT ONE) Reads title bytes `from..to` of a heap whose slot `i` is at
 /// `start + i * step`, and makes again the records of `slots` there whose

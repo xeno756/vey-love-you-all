@@ -44,6 +44,15 @@ pub(crate) struct HostHeap {
     /// without it by [`HostHeap::mirror`]'s way past the lock.
     keys: Box<[std::sync::atomic::AtomicU64]>,
     made: Mutex<Made>,
+    /// (PROJECT ONE) In a heap without a heap map: one lock per run of
+    /// [`RUN`] host slots, taken in `made`'s place to make a slot
+    /// ([`HostHeap::lock_slot`]). `made` there guards nothing but the
+    /// making of a slot, and one lock for all of them was the frame's
+    /// bottleneck: the pass over the records the title copies into its
+    /// heap waited 87.5 ms a frame for it on the submitting thread, the
+    /// recording threads 123 ms (run of 26/11 21:20, 221 ms a frame).
+    /// `None` with a heap map, or with `VICTORY_SLOT_LOCKS=0`.
+    runs: Option<Box<[Mutex<()>]>>,
     /// The heap map of a view heap capped below the title's slots
     /// ([`MapLayout`]); `None` for the others.
     map: Option<HeapMap>,
@@ -134,6 +143,50 @@ struct Made {
     /// Which pool slot each title slot past the identity window holds (a
     /// view heap with a heap map).
     map: Option<SlotMap>,
+    /// (PROJECT ONE) Under a run's lock ([`HostHeap::lock_slot`]): the
+    /// slots of other runs found stale, with the key each showed, made
+    /// null once the run's lock is let go ([`HostHeap::unmake_later`]); a
+    /// thread never holds two runs' locks. `None` under `made` itself.
+    later: Option<Vec<(u32, u64)>>,
+}
+
+/// (PROJECT ONE) Host slots per lock of [`HostHeap::runs`], and how many
+/// locks: neighbouring slots share one (the title copies its records in
+/// runs), and runs far apart share one only every `RUNS * RUN` slots.
+const RUN: usize = 16;
+const RUNS: usize = 1 << 12;
+
+/// Whether heaps without a heap map lock their slots by runs
+/// (`VICTORY_SLOT_LOCKS=0`: one lock for the heap, as before).
+fn slot_locks() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SLOT_LOCKS").is_none_or(|v| v != "0"))
+}
+
+/// What [`HostHeap::lock_slot`] holds: the heap's lock, or a run's with a
+/// `Made` of its own (no heap map: nothing in it is shared).
+enum Locked<'a> {
+    Heap(std::sync::MutexGuard<'a, Made>),
+    Run(#[allow(dead_code)] std::sync::MutexGuard<'a, ()>, Made),
+}
+
+impl std::ops::Deref for Locked<'_> {
+    type Target = Made;
+    fn deref(&self) -> &Made {
+        match self {
+            Locked::Heap(made) => made,
+            Locked::Run(_, made) => made,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Locked<'_> {
+    fn deref_mut(&mut self) -> &mut Made {
+        match self {
+            Locked::Heap(made) => made,
+            Locked::Run(_, made) => made,
+        }
+    }
 }
 
 impl Made {
@@ -1344,7 +1397,9 @@ impl HostHeap {
                 map: map
                     .is_some()
                     .then(|| SlotMap::new(count, title_count, count, pool)),
+                later: None,
             }),
+            runs: (map.is_none() && slot_locks()).then(|| (0..RUNS).map(|_| Mutex::new(())).collect()),
             map,
             title_start: AtomicU64::new(0),
             reclaimed: AtomicU64::new(u64::MAX),
@@ -1827,7 +1882,15 @@ impl HostHeap {
         // The slots whose host slot does not show what the title's says.
         let mut unmade = Vec::new();
         {
-            let made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+            // (PROJECT ONE) Keys are read, nothing is made: with runs' locks
+            // ([`HostHeap::runs`]) none is taken.
+            let locked = self.runs.is_none().then(|| self.made.lock().unwrap_or_else(|e| e.into_inner()));
+            let own = Made {
+                len: self.keys.len(),
+                map: None,
+                later: None,
+            };
+            let made: &Made = locked.as_deref().unwrap_or(&own);
             // The memory is the title's, and a heap may be larger than what
             // of it is there: asked once per page.
             let mut page = (u64::MAX, false);
@@ -1921,7 +1984,7 @@ impl HostHeap {
     /// (With a heap map, a title slot past the window keeps its pool slot:
     /// it still holds the view, made again once its memory is mapped.)
     pub(crate) fn texture_slot_gone(&self, index: u32) -> bool {
-        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        let mut made = self.lock_slot(index);
         if made
             .host(index)
             .and_then(|host| self.keys.get(host as usize))
@@ -1977,8 +2040,10 @@ impl HostHeap {
         if showing.is_empty() {
             return;
         }
-        let _made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        // (PROJECT ONE) With runs' locks, each slot under its run's.
+        let _made = self.runs.is_none().then(|| self.made.lock().unwrap_or_else(|e| e.into_inner()));
         for index in showing {
+            let _run = self.runs.is_some().then(|| self.lock_slot(index));
             // (By host slot: the title's own, and a heap map's pool slots.)
             let key = self.keys.get(index as usize).map_or(0, |k| k.load(std::sync::atomic::Ordering::Acquire));
             let Some(view) = (key != 0).then(|| view_at(key as u32, (key >> 32) as u32)).flatten() else {
@@ -2511,13 +2576,69 @@ impl HostHeap {
             }
         }
         let waited = std::time::Instant::now();
-        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        let mut made = self.lock_slot(index);
         if !for_draw {
             COPIED_NS[5].fetch_add(waited.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         }
         stage(for_draw, 0, waited);
         MIRROR_NS[usize::from(for_draw)][7].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.mirror_with(&mut made, index, handle, for_draw)
+        let view = self.mirror_with(&mut made, index, handle, for_draw);
+        let later = made.later.take();
+        drop(made);
+        if let Some(later) = later {
+            self.unmake_later(later);
+        }
+        view
+    }
+
+    /// (PROJECT ONE) The lock under which title slot `index`'s host slot is
+    /// made: its run's ([`HostHeap::runs`]), or the heap's.
+    fn lock_slot(&self, index: u32) -> Locked<'_> {
+        match &self.runs {
+            Some(runs) => Locked::Run(
+                runs[(index as usize / RUN) % RUNS].lock().unwrap_or_else(|e| e.into_inner()),
+                Made {
+                    len: self.keys.len(),
+                    map: None,
+                    later: Some(Vec::new()),
+                },
+            ),
+            None => Locked::Heap(self.made.lock().unwrap_or_else(|e| e.into_inner())),
+        }
+    }
+
+    /// (PROJECT ONE) Makes title slot `index` null as stale (another view's
+    /// memory is now this one's): now under the heap's lock; under a run's
+    /// lock once it is let go, if the slot still shows what it shows now.
+    fn unmake_stale(&self, made: &mut Made, index: u32) {
+        let shown = made
+            .host(index)
+            .and_then(|host| self.keys.get(host as usize))
+            .map_or(0, |key| key.load(std::sync::atomic::Ordering::Acquire));
+        match made.later.as_mut() {
+            Some(later) => {
+                if shown != 0 {
+                    later.push((index, shown));
+                }
+            }
+            None => self.unmake(made, index),
+        }
+    }
+
+    /// (PROJECT ONE) The stale slots a run's lock left for later, each
+    /// under its own run's lock: one made from another record since is
+    /// left as it is (it was looked at on its own).
+    fn unmake_later(&self, later: Vec<(u32, u64)>) {
+        for (index, shown) in later {
+            let mut made = self.lock_slot(index);
+            let still = made
+                .host(index)
+                .and_then(|host| self.keys.get(host as usize))
+                .is_some_and(|key| key.load(std::sync::atomic::Ordering::Acquire) == shown);
+            if still {
+                self.unmake(&mut made, index);
+            }
+        }
     }
 
     /// [`HostHeap::mirror`] with this heap's made slots locked by the caller
@@ -2570,7 +2691,7 @@ impl HostHeap {
             if !for_draw {
                 for stale in self.note_buffer(index, Some(&view), false) {
                     if stale != index {
-                        self.unmake(made, stale);
+                        self.unmake_stale(made, stale);
                     }
                 }
             }
@@ -2603,7 +2724,7 @@ impl HostHeap {
             // let go of the host copies they held.
             for stale in self.note_buffer(index, Some(&view), for_draw) {
                 if stale != index {
-                    self.unmake(made, stale);
+                    self.unmake_stale(made, stale);
                 }
             }
             // A view of a texture object that has no host copy yet waits
@@ -2657,7 +2778,7 @@ impl HostHeap {
     /// host copy that is brought up to date for it).
     #[cfg(feature = "diagnostics")]
     pub(crate) fn shows(&self, index: u32, buffer: &ID3D12Resource) -> Option<bool> {
-        let host = self.made.lock().unwrap_or_else(|e| e.into_inner()).host(index)?;
+        let host = self.lock_slot(index).host(index)?;
         let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
         let shown = kept.get(host as usize)?.as_ref()?;
         Some(windows::core::Interface::as_raw(shown) == windows::core::Interface::as_raw(buffer))

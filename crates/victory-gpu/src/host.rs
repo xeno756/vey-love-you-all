@@ -3703,7 +3703,8 @@ fn late_line(frames: f64) {
                 "descriptor records the title copied into its heaps as bytes, per frame (VICTORY_HEAP_SYNC): \
                  {:.1} changed heap pages read, {:.0} records looked at, {:.1} made again (empty or stale before), \
                  {:.0} left to the draws reading them through tables; {:.1} ms; slots written with the view they \
-                 show already, kept (VICTORY_SAME_VIEWS): {:.0}; made again by kind: {}; ms making them by kind, then ms waiting for the made slots' lock (not for draws): {}",
+                 show already, kept (VICTORY_SAME_VIEWS): {:.0}; made again by kind: {}; ms making them by kind, then ms waiting for the made slots' lock (not for draws): {}; \
+                 pages spread over threads (VICTORY_SYNC_THREADS): {:.1}",
                 d[0],
                 d[1],
                 d[2],
@@ -3737,6 +3738,11 @@ fn late_line(frames: f64) {
                         })
                         .collect::<Vec<_>>()
                         .join(" / ")
+                },
+                {
+                    static SPREAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    let n = crate::descriptor::SYNC_SPREAD_PAGES.load(Ordering::Relaxed);
+                    (n - SPREAD.swap(n, Ordering::Relaxed)) as f64 / frames
                 }
             );
         }
@@ -5743,7 +5749,23 @@ impl Host {
                         p.BreadcrumbCount, history[done as usize].0
                     ));
                     let list = p.pCommandList.as_ref().map(|l| l.as_raw());
-                    let run = runs.iter().find(|r| Some(r.list.as_raw()) == list);
+                    // (PROJECT ONE) Or a list of a flight still in the line
+                    // (sent ahead, not among `runs`): the run of 26/11 21:47
+                    // stopped in one, and nothing said what it ran. Not
+                    // looked for if this thread holds the line.
+                    let flying = LINE.try_lock().ok();
+                    let run: Option<&HostList> = runs.iter().copied().find(|r| Some(r.list.as_raw()) == list).or_else(|| {
+                        flying
+                            .as_ref()?
+                            .line
+                            .iter()
+                            .filter_map(|l| match l {
+                                Late::Run(f) => Some(f),
+                                _ => None,
+                            })
+                            .flat_map(|f| f.lists.iter().map(|d| d.host()))
+                            .find(|r| Some(r.list.as_raw()) == list)
+                    });
                     // The k-th marker command is the k-th note.
                     #[cfg(feature = "diagnostics")]
                     let markers: Vec<(u32, String)> = run.map_or_else(Vec::new, |r| {
