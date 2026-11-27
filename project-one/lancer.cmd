@@ -637,6 +637,11 @@ rem dans la memoire du PC partagee avec la carte). Mesure : 5,8 Go partages au l
 rem 1,5 Go de RAM libre au lieu de 1,3, temps d'image 221 ms au lieu de 217 (256 Kio :
 rem 5,4 Go mais 241 ms). VICTORY_WINDOW_KB=4096 : comme avant.
 if /i "%CONSOLE%"=="series-s" if not defined VICTORY_WINDOW_KB set "VICTORY_WINDOW_KB=1024"
+rem (27/11, 12 h) Series S : ce que les shaders ecrivent dans des plages de plus de 1 Mio
+rem reste sur la carte, sans recopie (limite de scarlet-fps). Mesure : recopie 45 ms par
+rem image au lieu de 106, 4,59 images/s au lieu de 4,38, image et jeu corrects (cellule,
+rem consignes suivantes). VICTORY_GPU_BACK_MAX_KB= (vide) : tout est recopie, comme avant.
+if /i "%CONSOLE%"=="series-s" if not defined VICTORY_GPU_BACK_MAX_KB set "VICTORY_GPU_BACK_MAX_KB=1024"
 goto :eof
 
 rem Retire de SANS_GROUPES (chaque nom precede de +) les groupes de VICTORY_KEEP_GROUPS.
