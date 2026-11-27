@@ -4,6 +4,48 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (5 h 50 – 7 h 30) — mission « restauration des shaders » : audit, rendu complet, marche en jeu
+
+- Point de restauration : tag `restore/2026-11-27-0550` (scarlettport `906f7f0`). Travail de
+  DeepSeek conservé (`df9a3a5` : rapport et scripts ; ses longues sorties copiées dans
+  `..\diagnostics\logs`). Dossier `..\diagnostics\` (baseline, cinematics, characters…).
+- **Couverture réelle des shaders** (journaux de diagnostic de la nuit, moyenne par image) :
+  aucun dessin n'est jeté faute de pipeline. Ce qui est écarté l'est par choix :
+  - 1 000 à 1 700 calculs du constructeur de lancer de rayons (pas de DXR sur la RX 5600 XT) ;
+  - environ 900 calculs des groupes d'effets coupés ;
+  - environ 1 400 dessins d'ombres des cascades lointaines du soleil.
+
+  Le « dropped ~280 » de la barre de titre compte tous ces abandons volontaires.
+- **Rendu complet hors lancer de rayons** (5 min chacun) :
+  - tous les groupes et toutes les ombres : 4,12 images/s, 4 489 dessins par image. Mais les
+    reflets en espace écran (`sr_tracing`, `sr_denoising`) font des yeux des disques bleu-blanc
+    et virent les papiers des murs au violet (captures `diagnostics\cinematics\yeux-zoom.png`,
+    `violet-zoom.png`) ;
+  - sans les reflets : 4,34 images/s, 4 385 dessins, yeux et murs normaux.
+- `b1059bd` : `performance` garde par défaut les particules, le vent, les décalques et toutes les
+  ombres (`VICTORY_KEEP_SHADOWS`, nouveau). `VICTORY_KEEP_SHADOWS=0` et `VICTORY_KEEP_GROUPS=none`
+  remettent les coupes d'avant.
+- **FSR** : celui du jeu (Series S) tourne sur des passes qu'on ne traduit pas ; `ffx.rs` le
+  remplace par un étirement simple. `performance` force l'agrandisseur temporel du jeu, à
+  l'échelle 1 de la sortie 1280×720. DLSS : impossible sur AMD.
+- **Marche en jeu** : le fichier de touches du runtime (`VICTORY_PRESS_FILE` : `LS_UP`…, `RS_LEFT`…)
+  fait marcher Lucia dans la prison ; 24 captures dans `diagnostics\characters\prison-marche-*`.
+  Une codétenue garde le visage noir longtemps après son apparition.
+- Cause trouvée : le balayage des vues de textures « que rien ne charge » (5 000 à 8 000 avec leur
+  mémoire présente) ne les remettait en file que si la file comptait moins de 4 000 entrées. Dans le
+  monde elle en compte 19 000 à 25 000 qui attendent leur mémoire, donc « 0 remise en file depuis le
+  début ». Correctif : compter les entrées dues, pas la longueur.
+- `145bde0` (ce correctif, test unitaire étendu) : 8 730 vues remises en file en 6 min, 1 800 à
+  2 000 orphelines restantes à chaque relevé au lieu de 5 000-8 000.
+- **Validations** (15 min dans le monde, sans variable) :
+  - `b1059bd` (rendu complet par défaut) : 4,53 images/s, médiane 215 ms, 95 % sous 272 ms,
+    4 523 dessins par image, ni plantage ni perte de carte ;
+  - `145bde0` avec une promenade de 5 min (60 captures, `diagnostics\open_world	our-*`) :
+    4,72 images/s, médiane 206 ms, 95 % sous 280 ms, ni plantage ni perte de carte. Les
+    textures dues passent sous 200 en 22 s au lieu de 97-101 s. Lucia a parlé à la codétenue
+    et l'histoire est passée à « Accompagnez le gardien de prison ». Le gardien et les
+    détenues sont texturés : `diagnosticsefore_after\prison-0342-vs-0719.jpg`.
+
 ## 27/11/2026 (5 h – 5 h 40) — vidéo et captures de l'utilisateur : textures, lumière, horloge de la carte
 
 Ce que montraient la vidéo de 3 h 42 et les quatre captures :

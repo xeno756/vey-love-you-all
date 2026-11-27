@@ -3,6 +3,17 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 7 h 30** : **version à donner scarlettport `145bde0`**, même commande. Par rapport à
+5 h 45 :
+- tout le rendu est gardé hors lancer de rayons (pas de DXR sur la carte) et reflets en espace
+  écran (cassés : yeux bleu-blanc, murs violets) ;
+- les vues de textures orphelines sont remises en file (visages des PNJ).
+
+15 min dans le monde avec promenade : 4,72 images/s, 95 % sous 280 ms, ni plantage ni perte de
+carte. Point de restauration `restore/2026-11-27-0550`. Diagnostics et captures dans
+`..\diagnostics\`. Les touches du runtime (`VICTORY_PRESS_FILE`, `LS_UP`…) font jouer le
+personnage : scripts `..\victory-logs\outils\promenade.ps1` et `promenade2.ps1`.
+
 **Au 27/11 à 5 h 45** : **version à donner scarlettport `906f7f0`**, commande inchangée
 `meilleure.cmd series-x performance`. Elle ajoute trois réglages par défaut :
 - la carte gardée éveillée ;
