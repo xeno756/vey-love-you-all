@@ -3,6 +3,15 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 22 h 15 (heure locale ; l'entrée suivante dit 22 h 35 par erreur, elle date de
+20 h 50)** : version à donner `f5fc552` (branche fusionnée) : un verrou par groupe de 16 cases
+du tas de vues ; 4,91 images/s, médiane 200 ms, 10 min sans perte de carte. Plantage
+`title+0x4dbd74d` expliqué (doc 14, réglages où le jeu prend de l'avance seulement). Pertes de
+carte des variantes rapides : aucune faute côté processeur selon la couche de débogage ;
+adresses dans aucun objet connu. Puis `c9cd850` : la synchronisation sur 4 fils par défaut, 5,29
+images/s, médiane 183 ms, carte gardée (22 h 11). Suite : l'attente du fil d'envoi sur les
+remplissages de constantes (45 ms par image ; le journal note leur mémoire) et la recopie (80 ms).
+
 **Au 26/11 à 22 h 35 (fin de soirée de travail seul)** : version stable de la branche
 fusionnée `e7a7f9e` : 4,41 images/s, médiane 224 ms, 10 min sans perte de carte. Rapport
 complet : [docs/technical/14-nuit-26-11.md](docs/technical/14-nuit-26-11.md). Objectifs (15

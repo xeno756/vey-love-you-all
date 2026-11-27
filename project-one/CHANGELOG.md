@@ -4,6 +4,20 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (21 h – 22 h 15) — un verrou par groupe de cases
+
+- `f5fc552` (branche fusionnée) : les cases du tas de vues se font sous le verrou de leur
+  groupe de 16 cases (4 096 verrous) au lieu d'un seul verrou pour tout le tas. La
+  synchronisation des descripteurs l'attendait 87,5 ms par image sur le fil d'envoi ; elle
+  l'attend 12 ms. Partie de 10 min (21 h 58) : **4,91 images/s** au lieu de 4,41, médiane
+  200 ms au lieu de 224, 99 % sous 309 ms, carte gardée. `VICTORY_SLOT_LOCKS=0` : l'ancien
+  verrou.
+- `c9cd850` : les pages changées des tas réparties sur 4 fils par défaut
+  (`VICTORY_SYNC_THREADS`, 1 : le fil d'envoi seul) : la synchronisation prend 45 ms par image
+  au lieu de 93. Partie de 7 min (22 h 11) : **5,29 images/s**, médiane 183 ms, carte gardée.
+- Le plantage du jeu `title+0x4dbd74d` est expliqué (doc 14) ; la couche de débogage de
+  Direct3D ne trouve aucune faute côté processeur dans les pertes de carte.
+
 ## 26/11/2026 (17 h 25 – 21 h 35) — nuit de travail seul, parties lancées par moi
 
 Une quarantaine de parties (`banc.ps1`), captures de la fenêtre et une capture de diagnostic
