@@ -49,6 +49,8 @@ pub use crash::{
 };
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use crash::save_on_crash;
+#[cfg(windows)]
+pub use hooks::series_s_console;
 pub use prepare::{PrepareError, PreparedImage, prepare};
 pub use resolve::{ImportResolver, Provenance, Resolution};
 #[cfg(all(windows, feature = "diagnostics"))]

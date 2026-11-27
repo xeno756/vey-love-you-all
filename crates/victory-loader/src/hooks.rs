@@ -81,12 +81,33 @@ const SERIES_S_QUALITY: Patch<'static> = Patch {
     new: &[0x83, 0xF8, 0x07],
 };
 
+/// (PROJECT ONE) Whether the title runs as a Series S ([`series_s_console`]).
+static SERIES_S_CONSOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// (PROJECT ONE) The console the title runs as is a Series S: patches meant
+/// for a Series X (as [`SERIES_S_QUALITY`]) are left out. Set before the
+/// title's image is loaded.
+pub fn series_s_console(on: bool) {
+    SERIES_S_CONSOLE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Applies [`SERIES_S_QUALITY`] if [`SERIES_S_QUALITY_ENV`] asks for it.
 ///
 /// # Safety
 /// As `disarm_watchdog`.
 pub(crate) unsafe fn series_s_quality(base: usize, hash: &blake3::Hash) -> bool {
     if std::env::var_os(SERIES_S_QUALITY_ENV).is_none_or(|v| v == "0") || !hash.to_hex().starts_with(BUILD_1_0_2_1) {
+        return false;
+    }
+    // (PROJECT ONE, 27/11) On a Series S the title's type is 6 (Lockhart):
+    // compared with 7 it would answer "not a Series S", and the title took
+    // its Series X choices (Anaconda preset, the 70 settings) inside the
+    // Series S's memory (runs of 27/11 10:48-11:10, PC memory spent). The
+    // title takes its Series S choices there by itself.
+    if SERIES_S_CONSOLE.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!(
+            "{SERIES_S_QUALITY_ENV} left out: the console is a Series S, which takes its Series S choices by itself"
+        );
         return false;
     }
     // SAFETY: forwarded from this function's contract.

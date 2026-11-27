@@ -94,6 +94,9 @@ pub fn run(
         Console::SeriesS => victory_hle::console::Console::SeriesS,
     });
     println!("console        {}", victory_hle::console::current().name());
+    // (PROJECT ONE) Patches meant for a Series X are left out on a Series S.
+    #[cfg(windows)]
+    victory_loader::series_s_console(matches!(console, Console::SeriesS));
     set_phase(BootPhase::Dlls);
     let dlls = victory_loader::load_title_dlls(image.info(), title_dir, &images, &wanted)?;
     for (name, dll) in &dlls {

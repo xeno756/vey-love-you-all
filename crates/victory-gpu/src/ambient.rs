@@ -456,6 +456,11 @@ void raise(uint3 at : SV_DispatchThreadID) {
     found = clamp(found, 0.2 * all, 2.5 * all);
     found = lerp(found, cells[CELLS].rgb, 0.2) * level * open;
     float3 was = unpack(light[p]);
+#ifdef NO_LEFTOVER
+    // (PROJECT ONE) `VICTORY_AMBIENT_LEFTOVER=0`: only the estimate, nothing
+    // of what the title's program left (Yaekai/victory-scarlett-3070's line).
+    was = float3(0.0, 0.0, 0.0);
+#endif
     // Filter magenta garbage probes left by uninitialized/corrupted memory on AMD.
     if (was.g < 0.5 * min(was.r, was.b) && max(was.r, was.b) > 0.02) was = 0.0;
     float left = dot(was, LUMA);
@@ -468,6 +473,15 @@ void raise(uint3 at : SV_DispatchThreadID) {
     float top = max(dot(found, LUMA) * bound, 1e-6);
     float has = dot(was, LUMA);
     was *= min(1.0, top / max(has, 1e-6));
+#ifdef HUE
+    // (PROJECT ONE, from scarlet-fps 77a4df7, GPL-3.0) Kept only where its
+    // colour can be the light's here: memory the program never wrote is of
+    // other hues (blue and violet patches on walls and ceilings in the
+    // Series S cell, 27/11 10:52).
+    float3 hue_was = was / max(dot(was, LUMA), 1e-6);
+    float3 hue_now = found / max(dot(found, LUMA), 1e-6);
+    was *= saturate((2.0 - length(hue_was - hue_now)) / 0.8);
+#endif
     float3 written = max(was, found * least);
     light[p] = pack(written);
     if (probe != 0 && (at.x & 15) == 0 && (at.y & 15) == 0) {
@@ -506,7 +520,13 @@ unsafe impl Sync for Pass {}
 fn make(device: &ID3D12Device, buffer: impl Fn(u64) -> Option<ID3D12Resource>) -> windows::core::Result<Pass> {
     let mut root: Option<ID3D12RootSignature> = None;
     let mut pipeline = |part: &str, entry| -> windows::core::Result<ID3D12PipelineState> {
-        let code = crate::host::compile(&format!("#define {part}\n{SOURCE}"), entry, s!("cs_5_1"))?;
+        // (PROJECT ONE) `VICTORY_AMBIENT_HUE=1`: the title's leftover light is
+        // kept only where its colour can be the light's (unset: whatever its
+        // colour, as before; the Series S's violet patches came from its
+        // profile, S-005, not from here).
+        let hue = if std::env::var_os("VICTORY_AMBIENT_HUE").is_some_and(|v| v == "1") { "#define HUE\n" } else { "" };
+        let leftover = if std::env::var_os("VICTORY_AMBIENT_LEFTOVER").is_some_and(|v| v == "0") { "#define NO_LEFTOVER\n" } else { "" };
+        let code = crate::host::compile(&format!("#define {part}\n{hue}{leftover}{SOURCE}"), entry, s!("cs_5_1"))?;
         // SAFETY: the root signature is inside the shader; plain creations.
         unsafe {
             if root.is_none() {

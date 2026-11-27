@@ -626,7 +626,12 @@ if defined SANS_GROUPES call :without "%SANS_GROUPES%"
 rem (27/11, 6 h) VICTORY_KEEP_SHADOWS=1 avant le lancement : toutes les ombres (les
 rem cascades lointaines du soleil, 1 400 dessins par image, et celles des lampes).
 if not "%VICTORY_KEEP_SHADOWS%"=="1" call :without_draws "ombres"
-call :quality_s
+rem (27/11, 11 h 20) Sur une Series S, le jeu prend de lui-meme ses choix Series S : le
+rem crochet qualite-s (7 au lieu de 6) lui faisait prendre ceux de la Series X.
+if /i not "%CONSOLE%"=="series-s" call :quality_s
+rem Son propre agrandisseur temporel aussi sur la Series S (sinon le FSR de la console,
+rem remplace ici par un simple etirement).
+if /i "%CONSOLE%"=="series-s" set "VICTORY_OWN_UPSCALER=1"
 goto :eof
 
 rem Retire de SANS_GROUPES (chaque nom precede de +) les groupes de VICTORY_KEEP_GROUPS.
