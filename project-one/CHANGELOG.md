@@ -4,6 +4,41 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (5 h – 5 h 40) — vidéo et captures de l'utilisateur : textures, lumière, horloge de la carte
+
+Ce que montraient la vidéo de 3 h 42 et les quatre captures :
+- **visages noirs** (gardien, codétenues, premier plan de la cinématique) ;
+- **pièces noires hors du soleil**, taches de soleil brûlées ;
+- jusqu'à 22 000 « textures en attente ».
+
+Ce que disent les journaux :
+- **Pendant les menus et le chargement, la file est vide** : le jeu n'écrit ses textures choisies
+  par index qu'au début de la scène, d'un coup (28 000 puis 46 000 dues en 20 s). Il n'y a rien à
+  précharger avant. Les 20 000 « en attente » de la barre de titre sont surtout des textures
+  dont le jeu n'a pas encore chargé la mémoire (19 000) ; notre vrai retard est de 1 000 à 2 000.
+- **La carte tournait à 784-810 MHz en moyenne sur 1 740** : elle attend entre deux envois et
+  le pilote baisse son horloge.
+
+Changé (`372911d` et le lanceur, dans `performance` par défaut) :
+- **20 s de rattrapage au début des scènes** (`VICTORY_TEXTURE_GATE_S=20`, 0 avant) : les
+  textures dues passent de 27 500 à 6 800 en 22 s au lieu d'une minute environ, les visages se
+  texturent plus tôt. Quelques images lentes à ce moment-là.
+- **La carte gardée éveillée** (`awake.rs` d'avatarmanz, `VICTORY_CARD_AWAKE=1`) : 1 745 MHz,
+  médiane 185 ms au lieu de 200, 5,08 images/s au lieu de 4,76 ; carte à 74-76 °C.
+- **La lumière indirecte du jeu gardée, sa sortie remplacée** par une estimation tirée de la
+  lumière visible (`ambient.rs` d'avatarmanz, `VICTORY_AMBIENT=0.8`, `VICTORY_KEEP_INDIRECT=1`) :
+  pièces éclairées par le rebond au lieu de noires ou voilées. Coût : 196 ms au lieu de 185.
+- Rapport de DeepSeek (`14-rapport-27-11-shaders-textures-cinematiques.md` et `work/`, non
+  suivis dans scarlettport) : shaders et pipelines tous faits, d'accord. Ses « 751,6 ms » de
+  synchronisation des descripteurs ne correspondent pas à nos mesures (37 à 60 ms par image) ;
+  l'idée d'interner les vues par contenu reste à évaluer.
+- **Validation, `906f7f0`, sans aucune variable, 15 min dans le monde (5 h 20)** : 5,04 images/s,
+  médiane 192 ms, 95 % sous 229 ms, 99 % sous 274 ms (les meilleurs centiles du jour). Ni
+  plantage ni perte de carte ; carte à 1 747 MHz, 78 °C, point chaud 85 °C.
+- Essayé puis annulé : déclencher le rattrapage sur les textures dues seulement, avec un crédit
+  rechargé toutes les 90 s. Carte perdue à 2 min (défaut de page à 0x5de4ad000, hors de tout
+  objet) : plus de chargement de textures expose encore la course connue des textures.
+
 ## 27/11/2026 (3 h – 5 h) — le port n°1 s'ouvre chez nous (repris d'avatarmanz), pas encore de gain sûr
 
 Lecture de portwatch-vi.xyz et des dépôts qu'il cite. Le fork d'avatarmanz (VIctory-7900XTX,

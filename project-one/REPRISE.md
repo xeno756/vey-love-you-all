@@ -3,6 +3,22 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 5 h 45** : **version à donner scarlettport `906f7f0`**, commande inchangée
+`meilleure.cmd series-x performance`. Elle ajoute trois réglages par défaut :
+- la carte gardée éveillée ;
+- la lumière indirecte du jeu gardée, avec l'estimation d'avatarmanz à la place de sa sortie ;
+- 20 s de rattrapage des textures au début des scènes.
+
+15 min dans le monde : 5,04 images/s, médiane 192 ms, 95 % sous 229 ms, ni plantage ni perte de
+carte. La qualité progresse : pièces éclairées par le rebond, visages texturés plus tôt. Restent
+des visages sans texture aux premiers plans d'une scène (un rouge, un noir).
+
+Suite :
+- la course des textures, qui perd la carte dès qu'on en charge plus vite (adresses hors de tout
+  objet) ;
+- le plantage du jeu `title+0x4dbd74d` ;
+- la préparation des envois sur un fil à nous.
+
 **Au 27/11 à 5 h** : version à donner inchangée (commande `meilleure.cmd series-x performance`,
 5,05 images/s). scarlettport `271fc42` n'y change rien par défaut, en partie à vérifier (5 h). Le
 matin a porté depuis avatarmanz/VIctory-7900XTX le rangement des pages du port n°1, la commande
