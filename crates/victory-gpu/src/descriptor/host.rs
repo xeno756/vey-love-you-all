@@ -158,10 +158,6 @@ const RUNS: usize = 1 << 12;
 
 /// Whether heaps without a heap map lock their slots by runs
 /// (`VICTORY_SLOT_LOCKS=0`: one lock for the heap, as before).
-pub(crate) fn slots_locked_by_runs() -> bool {
-    slot_locks()
-}
-
 fn slot_locks() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_SLOT_LOCKS").is_none_or(|v| v != "0"))

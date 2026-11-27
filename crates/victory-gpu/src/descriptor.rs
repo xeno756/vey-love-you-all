@@ -833,8 +833,9 @@ const SYNC_SPREAD: usize = 8;
 pub(crate) static SYNC_SPREAD_PAGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// (PROJECT ONE) Threads the pass over changed heap pages uses
-/// (`VICTORY_SYNC_THREADS`, 4 by default; 1: on the submitting thread
-/// alone). With one thread the pass took 93 ms a frame, with four 45 ms
+/// (`VICTORY_SYNC_THREADS`, 1 by default: on the submitting thread
+/// alone; 4 lost the card once in 26 minutes, at 14 min of the run of
+/// 26/11 22:47, where 1 kept it for 30). With one thread the pass took 93 ms a frame, with four 45 ms
 /// (runs of 26/11 21:58 and 22:11: 4.91 then 5.29 fps, median 200 then
 /// 183 ms). Only with slots locked by runs (`VICTORY_SLOT_LOCKS`): under
 /// one lock for the heap they would only wait for each other.
@@ -845,7 +846,7 @@ fn sync_threads() -> usize {
         std::env::var("VICTORY_SYNC_THREADS")
             .ok()
             .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(if crate::descriptor::host::slots_locked_by_runs() { 4 } else { 1 })
+            .unwrap_or(1usize)
             .clamp(1, 8)
     })
 }

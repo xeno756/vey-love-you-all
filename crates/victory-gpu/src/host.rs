@@ -204,6 +204,81 @@ pub(crate) fn references(object: &impl Interface) -> u32 {
 /// names any more (copies of windows of title memory, staging buffers,
 /// host copies of textures the title fills).
 /// `VICTORY_SWEEP=0` keeps everything, as before.
+/// (PROJECT ONE) Whether a submission's descriptor work (the records the
+/// title copied into its heaps, the slots waiting for a texture's host copy,
+/// those showing a replaced one) runs on a thread of its own while the
+/// submitting thread prepares the lists (`VICTORY_SYNC_AHEAD=1`; by default
+/// on the submitting thread first, as before: not measured yet, and every
+/// faster variant so far lost the card sooner or later). The two touch
+/// different things: the slots of the view heaps against the host copies
+/// of title memory; each slot is made under its run's lock as on the
+/// recording threads. On the submitting thread the sync was 45 ms a frame
+/// ahead of 65 ms of preparing (run of 26/11 22:47).
+fn sync_ahead() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SYNC_AHEAD").is_some_and(|v| v == "1"))
+}
+
+/// (PROJECT ONE) [`descriptors_start`]'s asks and the thread's answers, and
+/// microseconds the submitting thread waited for them since the start.
+static AHEAD: Mutex<(u64, u64)> = Mutex::new((0, 0));
+static AHEAD_MOVED: std::sync::Condvar = std::sync::Condvar::new();
+pub(crate) static AHEAD_WAITED_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Set if the thread could not be started: the work is done in place.
+static AHEAD_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn descriptors_due() {
+    crate::descriptor::sync_heaps();
+    crate::descriptor::make_waiting();
+    crate::descriptor::remake_replaced();
+}
+
+/// (PROJECT ONE) Starts a submission's descriptor work ([`sync_ahead`]).
+fn descriptors_start() {
+    static THREAD: std::sync::Once = std::sync::Once::new();
+    if sync_ahead() {
+        THREAD.call_once(|| {
+            let started = std::thread::Builder::new().name("victory-descriptors".into()).spawn(|| loop {
+                let asked = {
+                    let mut ahead = AHEAD.lock().unwrap_or_else(|e| e.into_inner());
+                    while ahead.1 >= ahead.0 {
+                        ahead = AHEAD_MOVED.wait(ahead).unwrap_or_else(|e| e.into_inner());
+                    }
+                    ahead.0
+                };
+                // Answered even if it panics: the submitting thread waits.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(descriptors_due));
+                AHEAD.lock().unwrap_or_else(|e| e.into_inner()).1 = asked;
+                AHEAD_MOVED.notify_all();
+            });
+            if let Err(e) = started {
+                tracing::warn!(error = %e, "no thread for the descriptor work: done by the submitting thread");
+                AHEAD_OFF.store(true, Ordering::Relaxed);
+            }
+        });
+    }
+    if !sync_ahead() || AHEAD_OFF.load(Ordering::Relaxed) {
+        descriptors_due();
+        return;
+    }
+    AHEAD.lock().unwrap_or_else(|e| e.into_inner()).0 += 1;
+    AHEAD_MOVED.notify_all();
+}
+
+/// (PROJECT ONE) Waits until the descriptor work asked for is done.
+fn descriptors_wait() {
+    if !sync_ahead() || AHEAD_OFF.load(Ordering::Relaxed) {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let mut ahead = AHEAD.lock().unwrap_or_else(|e| e.into_inner());
+    while ahead.1 < ahead.0 {
+        ahead = AHEAD_MOVED.wait(ahead).unwrap_or_else(|e| e.into_inner());
+    }
+    drop(ahead);
+    AHEAD_WAITED_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+}
+
 fn sweep() {
     // The in-place probe and census, if asked for (`VICTORY_INPLACE_PROBE`).
     crate::inplace::tick();
@@ -3722,7 +3797,7 @@ fn late_line(frames: f64) {
                  {:.1} changed heap pages read, {:.0} records looked at, {:.1} made again (empty or stale before), \
                  {:.0} left to the draws reading them through tables; {:.1} ms; slots written with the view they \
                  show already, kept (VICTORY_SAME_VIEWS): {:.0}; made again by kind: {}; ms making them by kind, then ms waiting for the made slots' lock (not for draws): {}; \
-                 pages spread over threads (VICTORY_SYNC_THREADS): {:.1}",
+                 pages spread over threads (VICTORY_SYNC_THREADS): {:.1}; the submitting thread waited for it after preparing (VICTORY_SYNC_AHEAD): {:.1} ms",
                 d[0],
                 d[1],
                 d[2],
@@ -3761,6 +3836,11 @@ fn late_line(frames: f64) {
                     static SPREAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                     let n = crate::descriptor::SYNC_SPREAD_PAGES.load(Ordering::Relaxed);
                     (n - SPREAD.swap(n, Ordering::Relaxed)) as f64 / frames
+                },
+                {
+                    static WAITED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    let n = AHEAD_WAITED_US.load(Ordering::Relaxed);
+                    (n - WAITED.swap(n, Ordering::Relaxed)) as f64 / 1000.0 / frames
                 }
             );
         }
@@ -5400,13 +5480,12 @@ impl Host {
         }
         let behind = late && flying();
         // (PROJECT ONE) The records the title copied into its view heaps as
-        // plain bytes since the last submission (`VICTORY_HEAP_SYNC`).
-        crate::descriptor::sync_heaps();
-        // The slots that waited for a texture's host copy, before the
-        // lists that may read them run.
-        crate::descriptor::make_waiting();
-        // And those that showed a host copy replaced since.
-        crate::descriptor::remake_replaced();
+        // plain bytes since the last submission (`VICTORY_HEAP_SYNC`), the
+        // slots that waited for a texture's host copy and those that showed
+        // a host copy replaced since: on a thread of their own while this
+        // one prepares the lists ([`descriptors_start`]), waited for before
+        // the lists go to the card.
+        descriptors_start();
         let this_submission = STARTED.fetch_add(1, Ordering::AcqRel) + 1;
         // The ranges shaders write are counted for it (with the relay).
         crate::shadow::preparing(this_submission);
@@ -5494,6 +5573,8 @@ impl Host {
         if let Some(check) = card.as_ref().and_then(|c| c.check.clone()) {
             lists.push(Some(check));
         }
+        // The descriptor slots the lists read are made.
+        descriptors_wait();
         let prepared = std::time::Instant::now();
         if late {
             for list in runs {
