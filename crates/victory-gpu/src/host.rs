@@ -5672,6 +5672,7 @@ impl Host {
                 self.queue.ExecuteCommandLists(&lists);
                 self.queue.Signal(&self.fence, *submitted)
             };
+            awake::sent(&self.device);
             self.card_sent();
             if let Err(e) = signalled {
                 fail(format_args!("a submission sent ahead could not be followed by a signal ({e})"));
@@ -8827,6 +8828,8 @@ fn pump() {
         }
     }
 }
+
+pub(crate) mod awake;
 
 #[cfg(test)]
 mod trail {
