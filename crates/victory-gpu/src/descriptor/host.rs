@@ -132,6 +132,80 @@ pub(crate) struct HostHeap {
     /// other memory there makes stale, and which to look at again when the
     /// runtime maps, unmaps or writes memory ([`remapped`]).
     placed: Mutex<Spans>,
+    /// (PROJECT ONE) Changes of title slots' host slots left for a moment
+    /// with none of the title's lists on the card ([`quiet_slots`]).
+    quiet: Mutex<QuietSlots>,
+}
+
+/// (PROJECT ONE) Changes of host slots left for a quiet moment, in the order
+/// they were left, each once.
+#[derive(Default)]
+struct QuietSlots {
+    order: Vec<(u32, Quiet)>,
+    /// By title slot: 0 for [`Quiet::Mirror`], 1 for [`Quiet::Remake`], the
+    /// key for [`Quiet::Unmake`] (never 0 or 1: generations start at 1).
+    seen: std::collections::HashSet<(u32, u64)>,
+}
+
+/// (PROJECT ONE) A change of a title slot's host slot left for a quiet
+/// moment.
+#[derive(Clone, Copy)]
+enum Quiet {
+    /// Made from the title's record at this handle, as `mirror` for a draw.
+    Mirror(u64),
+    /// Made null, if it still shows the view of this key.
+    Unmake(u64),
+    /// Made again from the view it shows (its host copy was replaced).
+    Remake,
+}
+
+/// (PROJECT ONE, 27/11) Whether we change a host slot a shader may read by
+/// index (not on the title's own write of its record: then nothing of the
+/// title's reads it) only while none of the title's lists is on the card
+/// (`VICTORY_QUIET_SLOTS`, on; 0: at once, as before).
+///
+/// The card reads a slot that a shader picks by index when the shader runs,
+/// not when the list was sent. The title writes a slot only once its work
+/// that read it is done; we change slots later on our own: the texture pass
+/// and the textures that get their host copy make the views of textures
+/// picked by index, slots made stale or whose memory went are made null, the
+/// slots of a replaced host copy made again. A descriptor read while it is
+/// written is half old, half new: half null, a base of 0 with the new
+/// view's offsets, a page fault at a low address in nothing (the card lost
+/// at 53-78 MB in runs of 26/11 18:07-21:18 and 27/11 4:43 and 8:04). And a
+/// texture made a moment ago is not in the card's page tables for lists
+/// sent before it (avatarmanz 4cd2d13: a page fault at the first byte of a
+/// texture made that very millisecond). So such a change waits for a
+/// moment with nothing on the card (at relay stage 2 the present settles
+/// every flight: the next submission's sync) and the slot shows what it
+/// showed until then, a frame at most for a texture. Textures only (and
+/// every slot made null): a buffer view the title makes anew each frame
+/// would always be late.
+pub(crate) fn quiet_slots() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_QUIET_SLOTS").is_none_or(|v| v != "0"))
+}
+
+/// (PROJECT ONE) Since the last line: changes left for later, made at a
+/// quiet moment, found out of date by then; and the most left at once.
+static QUIET_STATS: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+
+/// (PROJECT ONE) For the frame line: [`QUIET_STATS`], and of `waits` the
+/// sendings that waited for a change under way, the microseconds they
+/// waited and the ones that went after 2 ms.
+pub(crate) fn quiet_line(frames: f64, waits: [u64; 3]) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let frames = frames.max(1e-9);
+    let [left, made, dropped] = [0, 1, 2].map(|i| QUIET_STATS[i].swap(0, Relaxed) as f64 / frames);
+    tracing::info!(
+        "host slots we change only with none of the title's lists on the card (VICTORY_QUIET_SLOTS) per frame: \
+         {left:.1} left for later, {made:.1} made then, {dropped:.1} out of date by then ({} waiting at most); \
+         sendings that waited for a change under way: {:.2} a frame, {:.0} us each, {} after 2 ms",
+        QUIET_STATS[3].swap(0, Relaxed),
+        waits[0] as f64 / frames,
+        waits[1] as f64 / waits[0].max(1) as f64,
+        waits[2],
+    );
 }
 
 /// Host-slot state behind one lock: every write of a host slot for a title
@@ -1449,6 +1523,7 @@ impl HostHeap {
                 .map(|_| std::sync::atomic::AtomicU32::new(0))
                 .collect(),
             placed: Mutex::default(),
+            quiet: Mutex::default(),
         };
         // A slot never written is undefined: shaders reading one (a slot
         // the title wrote in a way we do not know, or a table entry no
@@ -2044,6 +2119,22 @@ impl HostHeap {
         let Some(host) = made.host(index) else {
             return;
         };
+        // (PROJECT ONE) With lists of the title's on the card: at a quiet
+        // moment ([`quiet_slots`]); the slot shows what it shows till then.
+        let _quiet = if quiet_slots() {
+            match crate::host::quiet_write() {
+                Some(quiet) => Some(quiet),
+                None => {
+                    let shown = self.keys.get(host as usize).map_or(0, |k| k.load(std::sync::atomic::Ordering::Acquire));
+                    if shown != 0 {
+                        self.quiet_later(index, Quiet::Unmake(shown));
+                    }
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let Some(key) = self.keys.get(host as usize).map(|k| k.swap(0, std::sync::atomic::Ordering::AcqRel)) else {
             return;
         };
@@ -2085,16 +2176,105 @@ impl HostHeap {
         let _made = self.runs.is_none().then(|| self.made.lock().unwrap_or_else(|e| e.into_inner()));
         for index in showing {
             let _run = self.runs.is_some().then(|| self.lock_slot(index));
-            // (By host slot: the title's own, and a heap map's pool slots.)
-            let key = self.keys.get(index as usize).map_or(0, |k| k.load(std::sync::atomic::Ordering::Acquire));
-            let Some(view) = (key != 0).then(|| view_at(key as u32, (key >> 32) as u32)).flatten() else {
-                continue;
+            // (PROJECT ONE) With lists of the title's on the card: at a quiet
+            // moment ([`quiet_slots`]); the slot holds the old copy till then.
+            let _quiet = if quiet_slots() {
+                match crate::host::quiet_write() {
+                    Some(quiet) => Some(quiet),
+                    None => {
+                        self.quiet_later(index, Quiet::Remake);
+                        continue;
+                    }
+                }
+            } else {
+                None
             };
-            let kept = make(&view, self.cpu(index));
-            if kept.is_none() {
-                null_for(&view, self.cpu(index));
+            self.remake(index);
+        }
+    }
+
+    /// Makes host slot `index` again from the view it was made from (the
+    /// slot's lock held by the caller).
+    fn remake(&self, index: u32) -> bool {
+        // (By host slot: the title's own, and a heap map's pool slots.)
+        let key = self.keys.get(index as usize).map_or(0, |k| k.load(std::sync::atomic::Ordering::Acquire));
+        let Some(view) = (key != 0).then(|| view_at(key as u32, (key >> 32) as u32)).flatten() else {
+            return false;
+        };
+        let kept = make(&view, self.cpu(index));
+        if kept.is_none() {
+            null_for(&view, self.cpu(index));
+        }
+        self.keep(index, kept.flatten());
+        true
+    }
+
+    /// (PROJECT ONE) Leaves a change of title slot `index`'s host slot for a
+    /// quiet moment ([`quiet_slots`]), once.
+    fn quiet_later(&self, index: u32, what: Quiet) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let seen = match what {
+            Quiet::Mirror(_) => 0,
+            Quiet::Remake => 1,
+            Quiet::Unmake(shown) => shown,
+        };
+        let mut quiet = self.quiet.lock().unwrap_or_else(|e| e.into_inner());
+        if quiet.seen.insert((index, seen)) {
+            quiet.order.push((index, what));
+            QUIET_STATS[0].fetch_add(1, Relaxed);
+            QUIET_STATS[3].fetch_max(quiet.order.len() as u64, Relaxed);
+        }
+    }
+
+    /// (PROJECT ONE) With none of the title's lists on the card, makes the
+    /// changes of this heap's host slots left for a quiet moment
+    /// ([`quiet_slots`]), in the order they were left: a slot is made from
+    /// the title's record as it is now, one made null only if it still shows
+    /// what it showed. Lists sent meanwhile leave the rest for the next one.
+    pub(crate) fn quiet_now(&self) {
+        use std::sync::atomic::Ordering::{Acquire, Relaxed};
+        if !quiet_slots() || crate::host::in_the_air() {
+            return;
+        }
+        let left = {
+            let mut quiet = self.quiet.lock().unwrap_or_else(|e| e.into_inner());
+            if quiet.order.is_empty() {
+                return;
             }
-            self.keep(index, kept.flatten());
+            quiet.seen.clear();
+            std::mem::take(&mut quiet.order)
+        };
+        let mut left = left.into_iter();
+        while let Some((index, what)) = left.next() {
+            let Some(_quiet) = crate::host::quiet_write() else {
+                for (index, what) in std::iter::once((index, what)).chain(left) {
+                    self.quiet_later(index, what);
+                }
+                return;
+            };
+            let done = match what {
+                Quiet::Mirror(handle) => {
+                    let _ = self.mirror(index, handle, true);
+                    true
+                }
+                Quiet::Unmake(shown) => {
+                    let mut made = self.lock_slot(index);
+                    let still = made
+                        .host(index)
+                        .and_then(|host| self.keys.get(host as usize))
+                        .is_some_and(|key| key.load(Acquire) == shown);
+                    if still {
+                        self.unmake(&mut made, index);
+                    }
+                    still
+                }
+                Quiet::Remake => {
+                    let _made = self.runs.is_none().then(|| self.made.lock().unwrap_or_else(|e| e.into_inner()));
+                    let _run = self.runs.is_some().then(|| self.lock_slot(index));
+                    self.remake(index)
+                }
+            };
+            QUIET_STATS[if done { 1 } else { 2 }].fetch_add(1, Relaxed);
         }
     }
 
@@ -2740,6 +2920,26 @@ impl HostHeap {
             return Some(view);
         };
         if taken || self.keys[host as usize].load(std::sync::atomic::Ordering::Acquire) != key {
+            // (PROJECT ONE) A texture's slot made for a draw, the texture pass
+            // or a host copy just made, with lists of the title's on the
+            // card: at a quiet moment ([`quiet_slots`]). (Not on the title's
+            // own write of the record: nothing of the title's reads it.)
+            let _quiet = if for_draw && !taken && !self.sampler && quiet_slots() && is_texture_view(&view) {
+                // The host copy first, without the leave: its making may
+                // take milliseconds, and a sending waits for a change under
+                // way (2 ms at most). Made now, it is also in the card's
+                // page tables well before its slot shows it.
+                host_copy_first(&view);
+                match crate::host::quiet_write() {
+                    Some(quiet) => Some(quiet),
+                    None => {
+                        self.quiet_later(index, Quiet::Mirror(handle));
+                        return Some(view);
+                    }
+                }
+            } else {
+                None
+            };
             // (PROJECT ONE) The same view under a new record: the title makes
             // its views again (a new number and generation each time) and
             // copies the records into its heap as bytes (`super::sync_heaps`).
@@ -3758,6 +3958,20 @@ fn written_description(resource: &[u32; 14]) -> [u32; 14] {
         r[FORMAT] = 41;
     }
     r
+}
+
+/// (PROJECT ONE) Makes the host copy of the texture a shader view of a
+/// texture shows, if it has none yet ([`make`] makes it then otherwise).
+fn host_copy_first(view: &View) {
+    let resource = match view {
+        View::Placed(false, ..) => match placed_texture(view) {
+            Some(View::Shader(resource, _)) => resource,
+            _ => return,
+        },
+        &View::Shader(resource, _) => resource,
+        _ => return,
+    };
+    let _ = crate::resource::host_resource(resource as crate::object::This);
 }
 
 /// A shader view of a texture the title placed in memory itself, as a view

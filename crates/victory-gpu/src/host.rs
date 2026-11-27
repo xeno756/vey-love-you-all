@@ -242,6 +242,7 @@ pub(crate) static AHEAD_WAITED_US: std::sync::atomic::AtomicU64 = std::sync::ato
 static AHEAD_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn descriptors_due() {
+    crate::descriptor::quiet_heaps();
     crate::descriptor::sync_heaps();
     crate::descriptor::make_waiting();
     crate::descriptor::remake_replaced();
@@ -339,6 +340,71 @@ pub(crate) fn retire<T: 'static>(object: T) {
 /// drops objects.
 pub(crate) fn submissions() -> (u64, u64) {
     (STARTED.load(Ordering::Acquire), FINISHED.load(Ordering::Acquire))
+}
+
+/// (PROJECT ONE) The number of the last submission whose lists went to the
+/// card ([`STARTED`]'s numbering): one begun and still being prepared is
+/// not on the card yet.
+static LAST_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) Whether lists of the title's are on the card and may run
+/// now: a submission was sent that has not finished. Without a lock (the
+/// recording threads ask it at every slot they would change).
+pub(crate) fn in_the_air() -> bool {
+    LAST_SENT.load(Ordering::SeqCst) > FINISHED.load(Ordering::SeqCst)
+}
+
+/// (PROJECT ONE) Changes of title slots' host slots under way that need
+/// nothing of the title's on the card ([`quiet_write`]).
+static WRITING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (PROJECT ONE) Sendings that found such a change under way and waited for
+/// it (microseconds in all), and ones that waited 2 ms and went all the same.
+pub(crate) static QUIET_WAITS: [std::sync::atomic::AtomicU64; 3] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+
+/// (PROJECT ONE) Held while we change a host slot that a shader of the
+/// title's may read by index (`descriptor::host::quiet_slots`).
+pub(crate) struct QuietWrite;
+
+impl Drop for QuietWrite {
+    fn drop(&mut self) {
+        WRITING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// (PROJECT ONE) Leave to change such a slot now: none of the title's lists
+/// is on the card, and none goes to it before the change is done (the
+/// sending waits for it, [`before_sending`]). `None` with lists on the card.
+/// The note of the change and the look at the card are each other's mirror
+/// (both sequentially consistent): either the change sees the sending, or
+/// the sending sees the change under way.
+pub(crate) fn quiet_write() -> Option<QuietWrite> {
+    WRITING.fetch_add(1, Ordering::SeqCst);
+    let write = QuietWrite;
+    (!in_the_air()).then_some(write)
+}
+
+/// (PROJECT ONE) Right before submission `number`'s lists go to the card:
+/// from now on slot changes wait for a quiet moment, and one under way is
+/// waited for (2 ms at most: a change that waits for the card itself must
+/// not hold the sending forever).
+fn before_sending(number: u64) {
+    LAST_SENT.fetch_max(number, Ordering::SeqCst);
+    if WRITING.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let waited = std::time::Instant::now();
+    let limit = std::time::Duration::from_millis(2);
+    while WRITING.load(Ordering::SeqCst) != 0 {
+        if waited.elapsed() > limit {
+            QUIET_WAITS[2].fetch_add(1, Ordering::Relaxed);
+            break;
+        }
+        std::thread::yield_now();
+    }
+    QUIET_WAITS[0].fetch_add(1, Ordering::Relaxed);
+    QUIET_WAITS[1].fetch_add(waited.elapsed().as_micros() as u64, Ordering::Relaxed);
 }
 
 /// Drops what waited for submissions up to `finished`.
@@ -3846,6 +3912,10 @@ fn late_line(frames: f64) {
     crate::port_descriptors::line(frames);
     crate::port_constants::log(frames);
     crate::draw::in_place_indirect_line(frames);
+    if crate::descriptor::host::quiet_slots() {
+        let [sent, us, gone] = [0, 1, 2].map(|i| QUIET_WAITS[i].swap(0, Ordering::Relaxed));
+        crate::descriptor::host::quiet_line(frames, [sent, us, gone]);
+    }
     {
         // (PROJECT ONE) Where the making of host slots from title records goes.
         static SEEN: [[std::sync::atomic::AtomicU64; 8]; 2] = [const { [const { std::sync::atomic::AtomicU64::new(0) }; 8] }; 2];
@@ -5667,6 +5737,7 @@ impl Host {
                 }
             }
             *submitted += 1;
+            before_sending(this_submission);
             // SAFETY: closed lists; the fence is ours.
             let signalled = unsafe {
                 self.queue.ExecuteCommandLists(&lists);
@@ -5725,6 +5796,7 @@ impl Host {
         for (i, group) in groups.iter().enumerate() {
             *submitted += 1;
             let started = std::time::Instant::now();
+            before_sending(this_submission);
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
                 self.queue.ExecuteCommandLists(group);

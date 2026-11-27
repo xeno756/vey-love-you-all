@@ -881,6 +881,31 @@ fn sync_range(
     Some((looked, made))
 }
 
+/// (PROJECT ONE) Makes the changes of host slots left for a moment with none
+/// of the title's lists on the card (`host::quiet_slots`), if this is one.
+/// Called before a submission runs, by the thread that submits (or its
+/// descriptor thread).
+#[cfg(windows)]
+pub(crate) fn quiet_heaps() {
+    if !host::quiet_slots() || crate::host::in_the_air() {
+        return;
+    }
+    let heaps: Vec<usize> = SHADER_HEAPS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|&(_, _, at)| at)
+        .collect();
+    for at in heaps {
+        // SAFETY: registered heaps are live (removed when dropped); the
+        // title drops none while it submits (as `remake_replaced`).
+        let heap = unsafe { &*(at as *const Heap) };
+        if let Some(Some(host)) = heap.host.get() {
+            host.quiet_now();
+        }
+    }
+}
+
 /// Makes again the host slots that show a host texture replaced since the
 /// last call. Called before a submission runs, by the thread that submits.
 #[cfg(windows)]
