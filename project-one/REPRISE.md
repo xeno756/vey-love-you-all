@@ -13,7 +13,13 @@ images/s, médiane 183 ms, carte gardée (22 h 11) ; **mais la partie de 20 min 
 perdu la carte vers la 14e minute** (5,4 images/s jusque-là, adresse dans aucun objet connu) :
 pas encore livrable tel quel. Partie de 20 min avec `VICTORY_SYNC_THREADS=1` (le niveau de
 `f5fc552`) à 23 h 20 : 4,95 images/s, médiane 200 ms, carte gardée. **Version à donner :
-`b9764f5`** (un fil par défaut ; `VICTORY_SYNC_THREADS=4` et `VICTORY_SYNC_AHEAD=1` en option). Suite : l'attente du fil d'envoi sur les
+`b9764f5`** (un fil par défaut ; `VICTORY_SYNC_THREADS=4` et `VICTORY_SYNC_AHEAD=1` en option ;
+`bfa2b73` n'y change que du diagnostic). Restent : le plantage du jeu `title+0x4dbd74d` (vu une
+fois en neuf parties par défaut, 23 h 32 ; le prendre comme un cache vide déplace le plantage) ;
+la cinématique d'ouverture surexposée (presque blanche) sans les halos, sombre avec visages noirs
+avec eux (`VICTORY_KEEP_BLOOM=1`, 4,71 images/s, carte gardée 7 min) ; plus de temps pour les
+textures (`VICTORY_TEXTURE_SPAN_MS=400`) texture les visages mais perd la carte (3,5 min).
+Planches : `..\victory-logs\captures\planche-ctx400.png`, `planche-halos.png`. Suite : l'attente du fil d'envoi sur les
 remplissages de constantes (45 ms par image ; le journal note leur mémoire) et la recopie (80 ms).
 
 **Au 26/11 à 22 h 35 (fin de soirée de travail seul)** : version stable de la branche

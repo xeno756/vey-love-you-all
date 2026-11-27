@@ -19,6 +19,10 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `b9764f5` : retour à un fil par défaut ; 20 min à 23 h 20 : **4,95 images/s**, médiane
   200 ms, carte gardée. Option `VICTORY_SYNC_AHEAD=1` (la synchronisation pendant la
   préparation des listes, non mesurée).
+- `9829e33` puis `bfa2b73` : essai de prendre le plantage du jeu `title+0x4dbd74d` (vu à 23 h 32
+  avec la version par défaut) comme un cache vide : le jeu s'arrête juste après ailleurs (le
+  contexte principal n'a pas d'anneau d'envoi) ; éteint par défaut. Le plantage reste possible
+  (doc 14).
 - Écarté : constantes des tables lues dans la copie sur la carte (carte perdue), copies et
   instantanés sur plusieurs fils du fork amont (rien), 8 fils (carte perdue à 3 min).
 - Le plantage du jeu `title+0x4dbd74d` est expliqué (doc 14) ; la couche de débogage de
