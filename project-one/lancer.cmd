@@ -515,6 +515,7 @@ rem Les ombres du soleil pour ses N cascades les plus proches (1 par defaut ;
 rem VICTORY_SHADOW_CASCADES). Les ombres des lampes restent non dessinees
 rem quand le profil laisse les ombres de cote (groupe ombres-locales).
 :sun_shadows
+if "%VICTORY_KEEP_SHADOWS%"=="1" goto :eof
 set "OMBRES_SOLEIL=%~1"
 if not defined OMBRES_SOLEIL set "OMBRES_SOLEIL=1"
 goto :eof
@@ -587,6 +588,9 @@ goto :eof
 
 :performance_base
 set "PROFIL=performance"
+rem (27/11, 6 h 45) Toutes les ombres par defaut (VICTORY_KEEP_SHADOWS=0 : celles d'avant,
+rem la cascade la plus proche du soleil seulement).
+if not defined VICTORY_KEEP_SHADOWS set "VICTORY_KEEP_SHADOWS=1"
 call :size 1280x720
 if not defined TEXTURES set "TEXTURES=3"
 call :card_copies
@@ -597,6 +601,13 @@ rem (27/11, 3 h 10) flou-et-halos garde par defaut : il porte l'exposition de la
 rem cinematique (sans lui elle est blanche, brulee). VICTORY_KEEP_BLOOM=0 : coupe.
 rem (27/11, 4 h) VICTORY_KEEP_GROUPS=particules+vent+... avant le lancement : ces groupes
 rem sont gardes (la qualite d'origine du jeu, a mesurer groupe par groupe).
+rem (27/11, 6 h 45) Par defaut les particules, le vent et les decalques sont gardes, avec
+rem toutes les ombres (VICTORY_KEEP_SHADOWS) : 4 385 dessins par image au lieu de 2 867, plus
+rem rien d'ecarte, 4,34 images/s au lieu de 5,04 (parties de 6 h 30 et 6 h 37). Les reflets
+rem en espace ecran restent coupes : gardes, les yeux deviennent des disques bleu-blanc et
+rem les papiers des murs virent au violet. VICTORY_KEEP_GROUPS=none : tout coupe comme avant.
+if not defined VICTORY_KEEP_GROUPS set "VICTORY_KEEP_GROUPS=particules+vent+decals"
+if /i "%VICTORY_KEEP_GROUPS%"=="none" set "VICTORY_KEEP_GROUPS="
 set "SANS_GROUPES=+particules+vent+reflets+lancer-de-rayons+decals"
 if "%VICTORY_KEEP_BLOOM%"=="0" set "SANS_GROUPES=%SANS_GROUPES%+flou-et-halos"
 rem (27/11, 5 h 20) La lumiere indirecte du jeu gardee, sa sortie remplacee par une
@@ -612,7 +623,9 @@ if not "%VICTORY_KEEP_INDIRECT%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+eclairage
 if defined VICTORY_KEEP_GROUPS call :keep_groups
 if defined SANS_GROUPES set "SANS_GROUPES=%SANS_GROUPES:~1%"
 if defined SANS_GROUPES call :without "%SANS_GROUPES%"
-call :without_draws "ombres"
+rem (27/11, 6 h) VICTORY_KEEP_SHADOWS=1 avant le lancement : toutes les ombres (les
+rem cascades lointaines du soleil, 1 400 dessins par image, et celles des lampes).
+if not "%VICTORY_KEEP_SHADOWS%"=="1" call :without_draws "ombres"
 call :quality_s
 goto :eof
 
