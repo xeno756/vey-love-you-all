@@ -500,7 +500,10 @@ goto :eof
 call :performance_base
 call :relay
 call :windows
-if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=80"
+rem (27/11, 3 h 10) 400 ms par image pour les textures (au lieu de 80) : les
+rem visages de la cinematique d'ouverture ont leurs textures (avec les halos,
+rem partie de 7 min sans perte de carte, 4,48 images/s).
+if not defined VICTORY_TEXTURE_SPAN_MS set "VICTORY_TEXTURE_SPAN_MS=400"
 if not defined VICTORY_LATE_WAIT_LISTS set "VICTORY_LATE_WAIT_LISTS=256"
 if not defined VICTORY_WINDOW_PAST_BUFFER_WRITES set "VICTORY_WINDOW_PAST_BUFFER_WRITES=1"
 goto :eof
@@ -587,10 +590,10 @@ call :card_copies
 call :steady_textures
 rem (PROJECT ONE, 26/11 19 h 15) VICTORY_KEEP_INDIRECT=1 avant le lancement : la
 rem lumiere indirecte gardee (sans elle les visages sont noirs en cinematique).
-rem (26/11, 23 h 20) VICTORY_KEEP_BLOOM=1 : flou-et-halos garde (halos, flou de
-rem mouvement, reflets d'objectif : la carte n'est occupee qu'a 50-60 %).
+rem (27/11, 3 h 10) flou-et-halos garde par defaut : il porte l'exposition de la
+rem cinematique (sans lui elle est blanche, brulee). VICTORY_KEEP_BLOOM=0 : coupe.
 set "SANS_GROUPES=particules+vent+reflets+lancer-de-rayons+decals"
-if not "%VICTORY_KEEP_BLOOM%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+flou-et-halos"
+if "%VICTORY_KEEP_BLOOM%"=="0" set "SANS_GROUPES=%SANS_GROUPES%+flou-et-halos"
 if not "%VICTORY_KEEP_INDIRECT%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+eclairage-indirect"
 call :without "%SANS_GROUPES%"
 call :without_draws "ombres"
