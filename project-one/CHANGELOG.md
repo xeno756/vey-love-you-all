@@ -4,6 +4,68 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (3 h – 5 h) — le port n°1 s'ouvre chez nous (repris d'avatarmanz), pas encore de gain sûr
+
+Lecture de portwatch-vi.xyz et des dépôts qu'il cite. Le fork d'avatarmanz (VIctory-7900XTX,
+GPL-3.0-or-later, à jour au 26/11 22 h 33 UTC) et celui de Belobug (rx9070xt) atteignent 45 à
+53 ms par image sur leur carte grâce à des « ports » du moteur de rendu. Leur exécutable ne
+démarre pas sur la RX 5600 XT : il exige les mesh shaders (perte de la carte 0x887A0007,
+pipelines refusés). On reprend donc leurs pièces dans notre code.
+
+- `0d53275` (scarlettport) :
+  - **port n°1** : notre `xmem` range maintenant les pages du tas de 185 Mo du jeu dans
+    l'ordre de leurs adresses (`4b82f6c` et `9c23e8d` d'avatarmanz, adaptés à notre table de
+    pages : seules des pages jamais montrées ni écrites sont échangées). C'était le blocage
+    noté le 26/11 (« pas un seul morceau de section »).
+  - Partie de 3 h 37 avec `VICTORY_PORT_CONSTANTS=1`, 8 min, carte gardée : une région de
+    185 Mo lue sur place par la carte. Le tampon de 174 Mo des constantes n'a plus de copie.
+    Les remplissages n'attendent plus la carte (38 à 45 ms par image avant). Médiane 196 ms,
+    4,86 images/s : le temps gagné part dans l'attente de la présentation (70 ms par image au
+    niveau 2).
+  - Exécutions indirectes dont les arguments sont lus sur place : jamais préparées en avance
+    dans une fenêtre (`631400f`, `15c3d0e` ; leurs arbres et palmiers clignotaient sans ça).
+  - **Port n°2** : les copies de tables du jeu (son `memcpy`, la copie de 128 octets)
+    marquent toutes les cases qu'elles écrivent, y compris les cases vidées (`4da7c0b`,
+    `8eaf2dc`). C'est ce qui laissait 150 à 450 descripteurs périmés par image chez nous le
+    26/11. Actif avec le port n°2 (`VICTORY_PORT_COPIES=0` : sans).
+- Mesures avec le port n°1 (parties de 5 min dans le monde, le banc s'arrête là par défaut) :
+  - étage 2 + `vitesse:2` : 203 ms, la recopie tombe de 24 Mo à 0,5 Mo, mais la présentation
+    attend toujours la fin du travail de la carte (70 ms) ;
+  - étage 3 + `vitesse:2` : **médiane 155-165 ms, 5,96 images/s**, puis le plantage du jeu
+    `title+0x4dbd74d` à 5 min ;
+  - même chose avec `VICTORY_PRESENT_LAG=1` : médiane 163 ms, 5,07 images/s, ni plantage ni
+    perte de carte en 5 min, mais 42 images de plus de 0,8 s (RAM du PC à 0 Mo libres) ;
+  - port n°2 en plus : synchronisation 73 ms au lieu de 37, 238 cases non signalées par image,
+    médiane 206 ms. Écarté.
+- `fef9e05` puis `271fc42` : essai sur le plantage `title+0x4dbd74d`. Lu dans le code du jeu,
+  `0x144dbd700` enregistre la seconde moitié d'une transition d'état de ressource. Le contexte
+  principal (index −1) n'a pas de case pour cela. Faire revenir la fonction à la lecture
+  fautive (prologue vérifié, test unitaire dans `crash.rs`) **ne suffit pas**. Partie de
+  4 h 19 : 4 transitions sautées au chargement, puis le jeu s'arrête aussitôt à
+  `title+0x55aa4e6`, lecture à −1. Laissé en option (`VICTORY_MAIN_CONTEXT_SLOT=skip`), éteint
+  par défaut.
+- Port n°1 + `vitesse:2` + étage 3 + `VICTORY_PRESENT_LAG=1`, 15 min prévues : médiane 175 ms,
+  5,55 images/s, puis plantage du jeu `title+0x34bce9` à 6 min. Juste avant, un contrôle de taille
+  du jeu est sauté ; même chose avant celui de 4 h 19. Soupçon : `vitesse:2` laisse le jeu relire
+  des données que la carte a écrites et qu'on n'a pas recopiées.
+- `VICTORY_INPLACE=1` (fenêtres de mémoire du jeu lues sur place : 77 fenêtres, 380 Mo ;
+  1 090 refusées car en mémoire de pages) :
+  - avec le port n°1, à l'étage 2 : médiane 179 ms, 5,27 images/s, 95 % sous 237 ms (5 min) ;
+    puis, dans la partie de validation, plantage `title+0x4dbd74d` dès l'entrée dans le monde ;
+  - seul : **carte perdue** à 1 min (défaut de page à l'adresse basse 0x4579000). Écarté.
+- Bilan du matin : le plantage `title+0x4dbd74d` sort dans 4 parties sur 10 avec le port n°1,
+  contre 1 sur 9 la nuit sans lui. **Aucun de ces réglages ne va dans `performance`** : la
+  version à donner reste celle de la nuit (5,05 images/s, 20 min sans perte de carte).
+- Vérification de `271fc42` sans aucune variable (5 h, 7 min dans le monde) : 4,76 images/s,
+  médiane 200 ms, 95 % sous 258 ms, ni plantage ni perte de carte (horloge moyenne de la carte
+  810 MHz pendant cette partie).
+- `f9a76a1` : `VICTORY_KEEP_GROUPS=particules+vent+...` garde ces groupes d'effets dans
+  `performance` (pour remettre la qualité d'origine groupe par groupe).
+- Pas repris pour l'instant : leur port n°5 (constantes lues en octets bruts par les shaders).
+  Il demande les « jumeaux bruts » des cases, que notre arbre n'a pas, et une retraduction de
+  tous les shaders. Leurs ports n°6 et 7 (verrous des gardes, journal) sont gros pour 2 ms
+  chacun chez eux.
+
 ## 27/11/2026 (0 h – 2 h 35) — la cause des pertes de carte rapides : la présentation en avance
 
 - `6f3bdc8` : le relais s'arrête au niveau 2 par défaut (`VICTORY_LATE_WAIT=3` : comme avant).

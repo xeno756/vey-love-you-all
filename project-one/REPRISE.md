@@ -3,6 +3,32 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 5 h** : version à donner inchangée (commande `meilleure.cmd series-x performance`,
+5,05 images/s). scarlettport `271fc42` n'y change rien par défaut, en partie à vérifier (5 h). Le
+matin a porté depuis avatarmanz/VIctory-7900XTX le rangement des pages du port n°1, la commande
+indirecte « seule » et les copies de tables du port n°2. Le port n°1 s'ouvre maintenant
+(`VICTORY_PORT_CONSTANTS=1`). Leur exécutable exige les mesh shaders et ne tourne pas sur la
+RX 5600 XT.
+
+Mesures (5 min dans le monde chacune ; le banc s'arrête à 300 s, `-Monde 1200` pour 20 min) :
+- port n°1 + `vitesse:2` + étage 3 : 155-175 ms, mais le jeu plante (`0x4dbd74d`, `0x34bce9`) ;
+- port n°1 + `VICTORY_INPLACE=1` à l'étage 2 : 179 ms, puis le même plantage dans la partie
+  suivante ;
+- `VICTORY_INPLACE=1` seul : carte perdue ;
+- port n°2 : plus lent.
+
+Le plantage du jeu `title+0x4dbd74d` est lu dans son code (doc 14, fin) : le contexte principal
+enregistre une transition d'état de ressource. Le faire revenir déplace le plantage
+(`VICTORY_MAIN_CONTEXT_SLOT=skip`). Il sort plus souvent avec le port n°1.
+
+Suite :
+- trouver pourquoi le jeu demande une transition sur le contexte principal (la date
+  `[ctx+0x12194]`, l'état par case de `0x144dbe690`) ;
+- la préparation des envois sur un fil à nous (`VICTORY_ASYNC_SUBMIT` d'avatarmanz,
+  `queue/behind.rs`, 103 → 75 ms chez eux), qui demande l'étage 3 ;
+- la recopie à la demande : protéger les pages que la carte a écrites et ne recopier qu'à la
+  lecture du jeu, pour un `vitesse:2` sans données périmées.
+
 **Au 27/11 à 2 h 35** : **version à donner `6f3bdc8`** (branche fusionnée), commande
 inchangée `meilleure.cmd series-x performance` : **5,05 images/s, médiane 193 ms, 99 % sous
 277 ms, 20 min sans perte de carte** (partie de 2 h 10, sans aucune variable). Ce qui a changé :
