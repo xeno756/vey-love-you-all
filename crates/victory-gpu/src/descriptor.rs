@@ -990,7 +990,7 @@ pub(crate) fn make_waiting() {
                 _ => false,
             };
             if same && let Some(Some(host)) = heap.host.get() {
-                host.mirror(index, handle, true);
+                host.mirror_quiet(index, handle);
             }
         }
     }

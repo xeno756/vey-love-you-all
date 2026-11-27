@@ -2208,8 +2208,15 @@ impl State {
                 let mapped = crate::texture::mapped_bytes(address as *const u8, len as usize);
                 if mapped == 0 {
                     HEAP_TEXTURES_AWAY.fetch_add(1, Ordering::Relaxed);
-                    // Streamed out: what the slot showed is let go.
-                    host.texture_slot_gone(index);
+                    // Streamed out: what the slot showed is let go. (PROJECT
+                    // ONE) Not when it shows an older texture kept until
+                    // this one is made (a title writes the view of a texture
+                    // streaming in before its pages are mapped): made null,
+                    // it read zeros until they were.
+                    let kept_older = heap.handle(index).is_some_and(|h| !host.shows_record(index, h));
+                    if !kept_older {
+                        host.texture_slot_gone(index);
+                    }
                     host.texture_slot_later(index, write, frame, most);
                     continue;
                 }
@@ -2257,7 +2264,7 @@ impl State {
                     continue;
                 }
             }
-            let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
+            let view = heap.handle(index).and_then(|handle| host.mirror_quiet(index, handle));
             let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
             let resource = match placed.as_ref().or(view.as_ref()) {
                 Some(&View::Shader(resource, _)) => resource as This,
@@ -3201,7 +3208,7 @@ impl State {
                         {
                             host.texture_slot_tabled(title + k, kind.is_some());
                             if kind.is_some() {
-                                host.mirror(title + k, table + u64::from(k) * 32, true);
+                                host.mirror_quiet(title + k, table + u64::from(k) * 32);
                             }
                         }
                     }

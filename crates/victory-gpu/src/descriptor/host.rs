@@ -2100,6 +2100,23 @@ impl HostHeap {
     /// (With a heap map, a title slot past the window keeps its pool slot:
     /// it still holds the view, made again once its memory is mapped.)
     pub(crate) fn texture_slot_gone(&self, index: u32) -> bool {
+        self.texture_slot_gone_now(index)
+    }
+
+    /// (PROJECT ONE) Whether title slot `index`'s host slot shows the view
+    /// the title's record at `handle` names, or nothing: false while it
+    /// shows an older view kept until this one is made (`keep_views`).
+    pub(crate) fn shows_record(&self, index: u32, handle: u64) -> bool {
+        use std::sync::atomic::Ordering::Acquire;
+        // SAFETY: the handle is a descriptor slot in title memory.
+        let [tag, i, generation] = unsafe { (handle as *const [u32; 3]).read_unaligned() };
+        let key = u64::from(generation) << 32 | u64::from(i);
+        let host = if index < self.count { Some(index) } else { self.lock_slot(index).host(index) };
+        let shown = host.and_then(|h| self.keys.get(h as usize)).map_or(0, |k| k.load(Acquire));
+        shown == 0 || (tag == VIEW_TAG && shown == key)
+    }
+
+    fn texture_slot_gone_now(&self, index: u32) -> bool {
         let mut made = self.lock_slot(index);
         if made
             .host(index)
@@ -2254,7 +2271,7 @@ impl HostHeap {
             };
             let done = match what {
                 Quiet::Mirror(handle) => {
-                    let _ = self.mirror(index, handle, true);
+                    let _ = self.mirror_quiet(index, handle);
                     true
                 }
                 Quiet::Unmake(shown) => {
@@ -2772,6 +2789,20 @@ impl HostHeap {
     /// there. Buffer views are made only for draws (`for_draw`), which also
     /// copy their data: a host copy of a buffer is made on first use.
     pub(crate) fn mirror(&self, index: u32, handle: u64, for_draw: bool) -> Option<View> {
+        self.mirror_as(index, handle, for_draw, false)
+    }
+
+    /// (PROJECT ONE) [`HostHeap::mirror`] for a draw, of a slot only shaders
+    /// that pick it by index read: the texture pass, a texture's host copy
+    /// just made, a table's slot made in place. A texture's slot changed so
+    /// waits for a moment with nothing of the title's on the card
+    /// ([`quiet_slots`]). Not for a draw that reads the title's slots
+    /// through its table: it reads the slot itself, and must find it made.
+    pub(crate) fn mirror_quiet(&self, index: u32, handle: u64) -> Option<View> {
+        self.mirror_as(index, handle, true, true)
+    }
+
+    fn mirror_as(&self, index: u32, handle: u64, for_draw: bool, quiet: bool) -> Option<View> {
         // (PROJECT ONE) A slot of its own (no pool slot to find) already made
         // from this very record: nothing to make, and the lock is not taken
         // (138,000 calls a frame took it, most for slots made already, and
@@ -2804,7 +2835,7 @@ impl HostHeap {
         }
         stage(for_draw, 0, waited);
         MIRROR_NS[usize::from(for_draw)][7].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let view = self.mirror_with(&mut made, index, handle, for_draw);
+        let view = self.mirror_with(&mut made, index, handle, for_draw, quiet);
         let later = made.later.take();
         drop(made);
         if let Some(later) = later {
@@ -2865,7 +2896,7 @@ impl HostHeap {
 
     /// [`HostHeap::mirror`] with this heap's made slots locked by the caller
     /// (`made`).
-    fn mirror_with(&self, made: &mut Made, index: u32, handle: u64, for_draw: bool) -> Option<View> {
+    fn mirror_with(&self, made: &mut Made, index: u32, handle: u64, for_draw: bool, quiet: bool) -> Option<View> {
         let mirrored = if self.map.is_some() { self.title_count } else { self.count };
         if index >= mirrored {
             // Diagnostic (NVIDIA heap cap): the highest title slot past the
@@ -2920,11 +2951,14 @@ impl HostHeap {
             return Some(view);
         };
         if taken || self.keys[host as usize].load(std::sync::atomic::Ordering::Acquire) != key {
-            // (PROJECT ONE) A texture's slot made for a draw, the texture pass
-            // or a host copy just made, with lists of the title's on the
-            // card: at a quiet moment ([`quiet_slots`]). (Not on the title's
-            // own write of the record: nothing of the title's reads it.)
-            let _quiet = if for_draw && !taken && !self.sampler && quiet_slots() && is_texture_view(&view) {
+            // (PROJECT ONE) A texture's slot only shaders that pick it by
+            // index read, made by the texture pass, for a host copy just
+            // made or for a table's slot in place ([`HostHeap::mirror_quiet`]),
+            // with lists of the title's on the card: at a quiet moment
+            // ([`quiet_slots`]). (Not on the title's own write of the record:
+            // nothing of the title's reads it; nor for a draw that reads the
+            // slot through its table: it must find it made.)
+            let _quiet = if for_draw && quiet && !taken && !self.sampler && quiet_slots() && is_texture_view(&view) {
                 // The host copy first, without the leave: its making may
                 // take milliseconds, and a sending waits for a change under
                 // way (2 ms at most). Made now, it is also in the card's
@@ -2997,13 +3031,31 @@ impl HostHeap {
             // read as nothing for as long as it waited in the queue, every
             // time it got sharper.
             let old = self.keys[host as usize].load(std::sync::atomic::Ordering::Acquire);
-            if later
-                && keep_views()
-                && view_at(old as u32, (old >> 32) as u32)
-                    .is_some_and(|old| same_placed_texture(&old, &view))
-            {
+            let old_view = if later { view_at(old as u32, (old >> 32) as u32) } else { None };
+            if keep_views() && old_view.as_ref().is_some_and(|old| same_placed_texture(old, &view)) {
                 KEPT_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(view);
+            }
+            // (PROJECT ONE, 27/11) A view of another placed texture of the
+            // same make (kind, format, layers, proportions: the same picture
+            // at another size, or with other levels at another address, as
+            // a title that streams a face in writes it): the slot also goes
+            // on showing the old one until the new one is made with what it
+            // shows. Made null, the texture read zeros meanwhile: a face red
+            // or black the first frames of a shot, textures gone and back
+            // (rafales of 27/11 9:36: a waitress's face red for a frame
+            // between two textured ones). The old host copy is ours and
+            // held by the slot; the queue makes the new one.
+            // `VICTORY_KEEP_LIKE_VIEWS=0`: made null, as before.
+            if keep_views()
+                && keep_like_views()
+                && old_view.as_ref().is_some_and(|old| like_placed_texture(old, &view))
+            {
+                KEPT_LIKE_VIEWS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Some(view);
+            }
+            if old_view.as_ref().is_some_and(is_texture_view) {
+                KEPT_LIKE_VIEWS[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             let kept = if later {
                 None
@@ -3920,6 +3972,44 @@ fn same_placed_texture(a: &View, b: &View) -> bool {
     match (a, b) {
         (View::Placed(false, resource, desc), View::Placed(false, other, other_desc)) => {
             resource[0] != 1 && resource == other && desc[10..12] == other_desc[10..12]
+        }
+        _ => false,
+    }
+}
+
+/// (PROJECT ONE) Writes of a slot showing a placed texture with a view of
+/// another placed texture of the same make, which kept the old one until
+/// the new was made ([`like_placed_texture`]); and writes that made a slot
+/// showing a texture null for a new view, since the start.
+pub(crate) static KEPT_LIKE_VIEWS: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// (PROJECT ONE) `VICTORY_KEEP_LIKE_VIEWS=0`: a slot written with a view of
+/// another placed texture of the same make is made null at once, as before.
+fn keep_like_views() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_KEEP_LIKE_VIEWS").is_none_or(|v| v != "0"))
+}
+
+/// (PROJECT ONE) Whether two placed texture views are of textures of the
+/// same make: kind (1D, 2D, 3D), format, layers (or depth) and proportions
+/// alike, whatever their size, levels and address; the views of the same
+/// format and dimension. (The rule of scarlet-fps d1c412c, `Kin::Moved` and
+/// `Kin::Sized`, GPL-3.0.) Resource words: kind 0, width 4-5, height 6,
+/// layers in the low half of 7, format 8; view words: format 0, dimension 1.
+fn like_placed_texture(a: &View, b: &View) -> bool {
+    match (a, b) {
+        (View::Placed(false, old, from), View::Placed(false, new, to)) => {
+            let width = |r: &[u32; 14]| u64::from(r[4]) | u64::from(r[5]) << 32;
+            old[0] != 1
+                && from[0] == to[0]
+                && from[1] == to[1]
+                && old[0] == new[0]
+                && old[8] == new[8]
+                && old[7] & 0xffff == new[7] & 0xffff
+                && width(old) > 0
+                && width(new) > 0
+                && width(old) * u64::from(new[6]) == width(new) * u64::from(old[6])
         }
         _ => false,
     }

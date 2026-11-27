@@ -2954,6 +2954,16 @@ mod tests {
             assert_ne!(whole, raw(&low));
             // Not before: the slot holds the copy it shows.
             assert_eq!(heap.shown(3), Some(raw(&low)));
+            // (PROJECT ONE) With lists on the card the slot is made again
+            // only at a quiet moment (`descriptor::host::quiet_slots`).
+            crate::host::TEST_AIR.with(|a| a.set(Some(true)));
+            heap.remake_showing(&[raw(&low)]);
+            assert_eq!(heap.shown(3), Some(raw(&low)));
+            heap.quiet_now();
+            assert_eq!(heap.shown(3), Some(raw(&low)));
+            crate::host::TEST_AIR.with(|a| a.set(Some(false)));
+            heap.quiet_now();
+            assert_eq!(heap.shown(3), Some(whole));
             heap.remake_showing(&[raw(&low)]);
             assert_eq!(heap.shown(3), Some(whole));
             assert_eq!(levels_left_out(other, host_resource(other).expect("a host copy")), 0);

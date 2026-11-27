@@ -351,7 +351,18 @@ static LAST_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// now: a submission was sent that has not finished. Without a lock (the
 /// recording threads ask it at every slot they would change).
 pub(crate) fn in_the_air() -> bool {
+    #[cfg(test)]
+    if let Some(air) = TEST_AIR.with(std::cell::Cell::get) {
+        return air;
+    }
     LAST_SENT.load(Ordering::SeqCst) > FINISHED.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: what [`in_the_air`] says on this thread (never, unless a test
+    /// says so: other tests' submissions run beside it); `None`: the truth.
+    pub(crate) static TEST_AIR: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(Some(false)) };
 }
 
 /// (PROJECT ONE) Changes of title slots' host slots under way that need
@@ -7861,8 +7872,11 @@ impl Meter {
         if self.logged.elapsed() >= std::time::Duration::from_secs(5) {
             self.logged = std::time::Instant::now();
             tracing::info!(
-                "placed texture views: {} writes of another view of the texture a slot showed (it kept the old view until the new was made)",
-                crate::descriptor::host::KEPT_VIEWS.load(Ordering::Relaxed)
+                "placed texture views: {} writes of another view of the texture a slot showed (it kept the old view until the new was made); \
+                 {} of a texture of the same make (kept likewise, VICTORY_KEEP_LIKE_VIEWS), {} of another texture that made a slot showing one null",
+                crate::descriptor::host::KEPT_VIEWS.load(Ordering::Relaxed),
+                crate::descriptor::host::KEPT_LIKE_VIEWS[0].load(Ordering::Relaxed),
+                crate::descriptor::host::KEPT_LIKE_VIEWS[1].load(Ordering::Relaxed)
             );
             {
                 // (PROJECT ONE) Where the texture pass's time goes, over
