@@ -320,7 +320,7 @@ if defined PREREGLAGE echo   prereglage : %PREREGLAGE% sur la base %VICTORY_PRES
 if defined OMBRES_SOLEIL echo   soleil  : ombres des %VICTORY_SHADOW_CASCADES% cascades les plus proches, pas plus loin
 if defined ATTENTES_TEXTURES echo   attentes: une texture n'attend que la soumission qui lit encore son tampon d'envoi (mesure une fois : +22 %%)
 if defined MARQUES echo   marques: le jeu signale lui-meme les cases de descripteurs qu'il ecrit (VICTORY_PORT_DESCRIPTORS, port #2 d'avatarmanz)
-if defined PERSONNAGES echo   personnages: leurs textures gardent plus de niveaux de detail (au plus %VICTORY_DETAIL_SKIP% retire)
+if defined PERSONNAGES echo   personnages: leurs textures choisies par index passent en tete de file (plus fines : VICTORY_DETAIL_TEXTURES=1)
 if defined CADENCE echo   cadence : ESSAI, l'horloge du jeu bat a %CADENCE% au lieu de 30 images par seconde
 if defined VICTORY_PRESENT_SYNC echo   vsync   : intervalle de presentation %VICTORY_PRESENT_SYNC%
 if "%RELAIS%"=="1" echo   relais  : les soumissions partent vers la carte sans attendre chacune

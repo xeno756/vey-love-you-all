@@ -1192,6 +1192,7 @@ mod tests {
     /// the bytes in our address order: what renderer port #1 needs where the
     /// title's views of its heap are not in the section's order.
     #[test]
+    #[ignore = "run alone: it shares the software adapter with the other warp tests"]
     fn warp_two_views_out_of_order_open_as_one_heap() {
 
         let Some(device) = warp() else { return };

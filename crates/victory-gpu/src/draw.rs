@@ -701,6 +701,18 @@ pub(crate) fn dropped_now() -> u64 {
 /// memory is looked at again, each counted from the look before.
 const RECHECK_FRAMES: [u64; 5] = [4, 12, 40, 120, 400];
 
+/// (PROJECT ONE) Frames until look `look` at an uploaded texture picked by
+/// index ([`RECHECK_FRAMES`]); with `VICTORY_RECHECK_LONG=1`, every 2, 4, 8,
+/// ... frames up to 60, for 80 looks (about 70 s at 4 frames a second): a
+/// texture the title streams in after its upload is uploaded again.
+fn recheck_after(look: u8) -> Option<u64> {
+    static LONG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *LONG.get_or_init(|| std::env::var_os("VICTORY_RECHECK_LONG").is_some_and(|v| v == "1")) {
+        return (look < 80).then(|| (2u64 << look.min(5)).min(60));
+    }
+    RECHECK_FRAMES.get(usize::from(look)).copied()
+}
+
 /// Looks at uploaded textures picked by index that found the memory as it
 /// was, and that found it changed (uploaded again), since the start.
 pub(crate) static HEAP_TEXTURES_RECHECKED: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
@@ -1727,7 +1739,7 @@ impl State {
     /// table's start). `VICTORY_HURRY_TEXTURES=0`: not done.
     fn hurry_textures(&self, compute: bool) {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if !DETAIL_DRAW.get() || !*ON.get_or_init(|| std::env::var_os("VICTORY_HURRY_TEXTURES").is_none_or(|v| v != "0")) {
+        if !DETAIL_DRAW.get() || !*ON.get_or_init(|| std::env::var_os("VICTORY_HURRY_TEXTURES").is_some_and(|v| v == "1")) {
             return;
         }
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
@@ -2096,7 +2108,7 @@ impl State {
             if let Some((at, len, print, looks, uploaded)) = host.texture_slot_checked(index) {
                 if crate::texture::fingerprint(at, len) == print {
                     HEAP_TEXTURES_RECHECKED[0].fetch_add(1, Ordering::Relaxed);
-                    match RECHECK_FRAMES.get(usize::from(looks) + 1) {
+                    match recheck_after(looks + 1) {
                         Some(wait) => {
                             host.texture_slot_recheck(index, write, frame + wait, (at, len), print, looks + 1, uploaded)
                         }
