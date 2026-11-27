@@ -3,6 +3,14 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 22 h 35 (fin de soirée de travail seul)** : version stable de la branche
+fusionnée `e7a7f9e` : 4,41 images/s, médiane 224 ms, 10 min sans perte de carte. Rapport
+complet : [docs/technical/14-nuit-26-11.md](docs/technical/14-nuit-26-11.md). Objectifs (15
+images/s constantes, cinématique parfaite) non atteints : une course du runtime fait perdre la
+carte dès qu'on accélère ; les visages noirs viennent du suivi du streaming des textures.
+Suite : la couche de débogage de Direct3D sur la variante rapide (en cours), puis le port #6
+(verrou des gardes).
+
 **Au 26/11 à 19 h 30** : version stable par défaut (marquage éteint) ~5 images/s ;
 `VICTORY_TABLE_SLOTS=1` donne 6,3 à 7 images/s mais 4 pertes de carte en 16 min (objets
 libérés encore lus, cause non trouvée) : en option seulement (`39f8fca`). Port #1 impossible
