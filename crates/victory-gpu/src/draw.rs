@@ -536,6 +536,69 @@ fn detail_textures() -> bool {
 /// object was found or made (their slots stay null), since the start.
 static HEAP_TEXTURES_NO_OBJECT: AtomicU64 = AtomicU64::new(0);
 
+/// (PROJECT ONE) Threads that make host copies of placed textures picked by
+/// index ahead of the texture pass (`VICTORY_TEXTURE_THREADS`, 4 by
+/// default; 0 or 1: none). In the opening cutscene the pass made 545 host
+/// textures a second, 89 % of its time in their making, one after another on
+/// the thread that records the frame, behind a queue of 58,000 (the faces
+/// stayed black all through it: runs of 26/11 19:37-20:11). The making is
+/// the host device's, which is free-threaded; each texture's own lock
+/// (`resource::host_resource`) keeps one copy per texture.
+fn texture_threads() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_TEXTURE_THREADS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4usize).min(16))
+}
+
+/// Due slots looked at ahead, at most, a pass ([`premake_textures`]).
+const PREMAKE_MOST: usize = 512;
+
+/// Makes the host copies of the placed textures the first [`PREMAKE_MOST`]
+/// of `due` show, whose memory is mapped, on [`texture_threads`] threads.
+fn premake_textures(heap: &crate::descriptor::Heap, due: &[(u32, u64)]) {
+    let threads = texture_threads();
+    if threads < 2 || due.is_empty() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let mut textures: Vec<usize> = Vec::new();
+    for &(index, _) in due.iter().take(PREMAKE_MOST) {
+        let Some(View::Placed(false, resource, desc)) = heap.handle(index).and_then(crate::descriptor::view) else {
+            continue;
+        };
+        if resource[0] == 1 {
+            continue;
+        }
+        let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
+        if crate::texture::mapped_bytes(address as *const u8, 1) == 0 {
+            continue;
+        }
+        if let Some(texture) = crate::resource::texture_at(address, &resource)
+            && !crate::resource::is_hosted(texture)
+        {
+            textures.push(texture as usize);
+        }
+    }
+    if textures.is_empty() {
+        return;
+    }
+    let chunk = textures.len().div_ceil(threads);
+    std::thread::scope(|s| {
+        for part in textures.chunks(chunk) {
+            s.spawn(move || {
+                for &t in part {
+                    let _ = crate::resource::host_resource(t as This);
+                }
+            });
+        }
+    });
+    PREMADE[0].fetch_add(textures.len() as u64, Ordering::Relaxed);
+    PREMADE[1].fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+}
+
+/// (PROJECT ONE) Host copies made by [`premake_textures`], and its
+/// microseconds, since the start.
+pub(crate) static PREMADE: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
 /// (PROJECT ONE) Slots from a table's start a character's draw may pick
 /// textures from (`State::hurry_textures`).
 const TEXTURE_SET: u32 = 16;
@@ -1695,7 +1758,12 @@ impl State {
                                         Some(View::Placed(false, resource, desc)) => {
                                             let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
                                             let len = crate::resource::placed_bytes_from(&resource, crate::resource::first_mip(&desc)).unwrap_or(1);
-                                            format!("placed {address:#x} {}/{len} bytes mapped", crate::texture::mapped_bytes(address as *const u8, len as usize))
+                                            let mapped = crate::texture::mapped_bytes(address as *const u8, len.max(4096) as usize);
+                                            // SAFETY: only what is mapped is read.
+                                            let nonzero = (mapped > 0)
+                                                .then(|| unsafe { std::slice::from_raw_parts(address as *const u8, mapped.min(4096) as usize) }.iter().filter(|&&b| b != 0).count())
+                                                .unwrap_or(0);
+                                            format!("placed {address:#x} {mapped}/{len} mapped, {nonzero} of the first 4096 bytes not zero")
                                         }
                                         other => format!("{:?}", other.map(|_| "a view")),
                                     };
@@ -1997,6 +2065,11 @@ impl State {
             (budget_per_frame, span_ordinary)
         };
         let began = std::time::Instant::now();
+        // (PROJECT ONE) The host copies of the first due placed textures
+        // made beforehand on threads of their own ([`premake_textures`]).
+        if room_now() {
+            premake_textures(heap, &due);
+        }
         for (index, write) in due {
             if SPENT.load(Ordering::Relaxed) >= per_frame || began.elapsed() > span {
                 break;

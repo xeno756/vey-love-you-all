@@ -1401,6 +1401,13 @@ fn hosted_as(this: This, make: bool, whole: bool) -> Option<Made> {
     made.clone()
 }
 
+/// (PROJECT ONE) Whether title texture `this` has its host copy, without
+/// making it or counting a use (`draw::premake_textures`).
+#[cfg(windows)]
+pub(crate) fn is_hosted(this: This) -> bool {
+    !this.is_null() && hosted(this, false).is_some()
+}
+
 /// The host copy of title texture `this` if it is made, without making it
 /// (for diagnostics, which must not count as a use).
 #[cfg(all(windows, feature = "diagnostics"))]
