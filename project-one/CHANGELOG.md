@@ -4,6 +4,17 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (0 h – 2 h 35) — la cause des pertes de carte rapides : la présentation en avance
+
+- `6f3bdc8` : le relais s'arrête au niveau 2 par défaut (`VICTORY_LATE_WAIT=3` : comme avant).
+  Les réglages rapides perdaient la carte au niveau 3 (3 à 6 min) et la tiennent au niveau 2.
+  Avec ça, synchronisation des descripteurs sur 4 fils et pendant la préparation des listes par
+  défaut. Partie de 20 min sans variable : **5,05 images/s**, médiane 193 ms, carte gardée.
+- Options : `VICTORY_PRESENT_LAG=n` (retard borné au niveau 3), `VICTORY_EAGER_BUFFERS=1` (vues
+  de constantes et de tampons faites dès l'écriture du jeu).
+- Écarté : couper la passe des textures, le balayage des textures, garder les objets retirés
+  10 ou 30 s (mémoire épuisée) ; la validation GPU n'atteint pas le monde en 70 min.
+
 ## 26/11/2026 (21 h – 22 h 15) — un verrou par groupe de cases
 
 - `f5fc552` (branche fusionnée) : les cases du tas de vues se font sous le verrou de leur

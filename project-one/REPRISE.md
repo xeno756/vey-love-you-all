@@ -3,6 +3,16 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 2 h 35** : **version à donner `6f3bdc8`** (branche fusionnée), commande
+inchangée `meilleure.cmd series-x performance` : **5,05 images/s, médiane 193 ms, 99 % sous
+277 ms, 20 min sans perte de carte** (partie de 2 h 10, sans aucune variable). Ce qui a changé :
+le relais s'arrête au niveau 2 (la présentation attend que tout ait tourné) au lieu du niveau 3
+(présentation envoyée en avance) : toutes les pertes de carte des réglages rapides venaient de
+là (niveau 3 : pertes à 3, 4, 4, 6 min ; niveau 2 : rien en 15 et 20 min ; relais coupé : rien
+en 16 min mais 3,78 images/s). Avec ça la synchronisation des descripteurs passe sur 4 fils et
+pendant la préparation des listes. Pourquoi la présentation en avance perd la carte n'est pas
+trouvé ; `VICTORY_PRESENT_LAG=1` (retard de la carte borné à une image au niveau 3) en essai.
+
 **Au 26/11 à 22 h 15 (heure locale ; l'entrée suivante dit 22 h 35 par erreur, elle date de
 20 h 50)** : version à donner `f5fc552` (branche fusionnée) : un verrou par groupe de 16 cases
 du tas de vues ; 4,91 images/s, médiane 200 ms, 10 min sans perte de carte. Plantage
