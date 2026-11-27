@@ -388,12 +388,13 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
 /// 0x1475deff0) and records it (the same call with 0). Recording takes the
 /// context's batch record for the resource (cached at its index, made from
 /// its allocator on a miss), appends the transition (tail call to
-/// 0x144dbd920) and returns nothing its callers read. So by default
-/// (`VICTORY_MAIN_CONTEXT_SLOT` unset or `skip`) the read at index -1 makes
-/// the function return at once, as if the transition had been recorded:
-/// that transition is left out (the title's own tracking already counts it
-/// done), instead of the title stopping. `=1`: the empty cache above; `=0`:
-/// neither, the title stops as before.
+/// 0x144dbd920). `VICTORY_MAIN_CONTEXT_SLOT=skip`: the read at index -1
+/// makes the function return at once, as if the transition had been
+/// recorded. **That does not help either**: run of 27/11 04:19 (relay stage
+/// 3), four transitions left out while loading, then the title stopped at
+/// once at title+0x55aa4e6 reading 0xffffffffffffffff (the appending half
+/// fills in something its caller reads). Off by default; `=1`: the empty
+/// cache above.
 unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
     static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     static TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -415,12 +416,15 @@ unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
     unsafe {
         let record = &*(*info).ExceptionRecord;
         let context = &mut *(*info).ContextRecord;
+        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || context.Rdi != 0xFFFF_FFFF || record.NumberParameters < 2 {
+            return false;
+        }
         let mode = *MODE.get_or_init(|| match std::env::var("VICTORY_MAIN_CONTEXT_SLOT").ok().as_deref().map(str::trim) {
-            Some("0") => 0,
             Some("1") => 1,
-            _ => 2,
+            Some("skip") => 2,
+            _ => 0,
         });
-        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || context.Rdi != 0xFFFF_FFFF || record.NumberParameters < 2 || mode == 0 {
+        if mode == 0 {
             return false;
         }
         // The signatures are 14 bytes: inside the page, or not ours.
@@ -459,7 +463,7 @@ unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
             if n <= 4 || n.is_power_of_two() {
                 tracing::warn!(
                     times = n,
-                    "the title's main render context recorded a resource transition through its per-context cache at index -1:                      left out, the title goes on (VICTORY_MAIN_CONTEXT_SLOT=0: it stops as before)"
+                    "the title's main render context recorded a resource transition through its per-context cache at index -1:                      left out (VICTORY_MAIN_CONTEXT_SLOT=skip)"
                 );
             }
             return true;
@@ -922,6 +926,9 @@ mod tests {
     fn the_main_contexts_transition_at_index_minus_one_returns() {
         use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc};
         report_crashes();
+        // SAFETY: read once, by the handler, at this test's fault; no other
+        // test sets or reads it.
+        unsafe { std::env::set_var("VICTORY_MAIN_CONTEXT_SLOT", "skip") };
         // push r15, r14, r13, r12, rsi, rdi, rbp, rbx; sub rsp, 38h
         let mut code: Vec<u8> = vec![0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38];
         code.extend([0xBF, 0xFF, 0xFF, 0xFF, 0xFF]); // mov edi, 0xffffffff
