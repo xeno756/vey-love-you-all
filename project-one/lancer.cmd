@@ -592,12 +592,22 @@ rem (PROJECT ONE, 26/11 19 h 15) VICTORY_KEEP_INDIRECT=1 avant le lancement : la
 rem lumiere indirecte gardee (sans elle les visages sont noirs en cinematique).
 rem (27/11, 3 h 10) flou-et-halos garde par defaut : il porte l'exposition de la
 rem cinematique (sans lui elle est blanche, brulee). VICTORY_KEEP_BLOOM=0 : coupe.
-set "SANS_GROUPES=particules+vent+reflets+lancer-de-rayons+decals"
+rem (27/11, 4 h) VICTORY_KEEP_GROUPS=particules+vent+... avant le lancement : ces groupes
+rem sont gardes (la qualite d'origine du jeu, a mesurer groupe par groupe).
+set "SANS_GROUPES=+particules+vent+reflets+lancer-de-rayons+decals"
 if "%VICTORY_KEEP_BLOOM%"=="0" set "SANS_GROUPES=%SANS_GROUPES%+flou-et-halos"
 if not "%VICTORY_KEEP_INDIRECT%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+eclairage-indirect"
-call :without "%SANS_GROUPES%"
+if defined VICTORY_KEEP_GROUPS call :keep_groups
+if defined SANS_GROUPES set "SANS_GROUPES=%SANS_GROUPES:~1%"
+if defined SANS_GROUPES call :without "%SANS_GROUPES%"
 call :without_draws "ombres"
 call :quality_s
+goto :eof
+
+rem Retire de SANS_GROUPES (chaque nom precede de +) les groupes de VICTORY_KEEP_GROUPS.
+:keep_groups
+set "GARDES=%VICTORY_KEEP_GROUPS:+= %"
+for %%g in (%GARDES%) do call set "SANS_GROUPES=%%SANS_GROUPES:+%%g=%%"
 goto :eof
 
 rem Ajoute des groupes de passes (separes par +) dont les dessins sont laisses de cote.
