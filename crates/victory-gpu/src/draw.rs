@@ -210,8 +210,30 @@ fn light_restore() -> bool {
 /// Indirect ops in, host `ExecuteIndirect` calls out, runs by length.
 static BATCH: victory_core::batch::Stats = victory_core::batch::Stats::new();
 
+/// (PROJECT ONE) Whether constants in tables that lie in a title buffer kept
+/// in the card's memory are read there (`VICTORY_CARD_CONSTANTS=1`; by
+/// default copied into upload memory at submission, as before). Off: the
+/// run of 26/11 22:35 with it lost the card at 2 min (page fault at
+/// 0x3845000, a list of 4,381 stopped at its start) and the submitting
+/// thread waited 160 ms a frame for the card, not less.
+fn card_constants() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_CARD_CONSTANTS").is_some_and(|v| v == "1"))
+}
+
+/// (PROJECT ONE) Constants of tables read in the card's memory
+/// ([`card_constants`]), since the last frame-rate line.
+static CARD_CONSTANTS: AtomicU64 = AtomicU64::new(0);
+
 /// For the frame-rate line: indirect ops and the host calls that ran them.
 pub(crate) fn batch_line(frames: f64) {
+    let card = CARD_CONSTANTS.swap(0, Ordering::Relaxed);
+    if card > 0 {
+        tracing::info!(
+            "constants of tables read in the card's memory per frame (VICTORY_CARD_CONSTANTS): {:.0}",
+            card as f64 / frames
+        );
+    }
     let (ops, calls, runs) = BATCH.take();
     if ops == 0 {
         return;
@@ -3005,6 +3027,27 @@ impl State {
                 }
                 match view {
                     Some(View::Constant(address, size)) => {
+                        // (PROJECT ONE) Constants in a title buffer kept in
+                        // the card's memory: read there, brought up to date
+                        // ahead of the list, as a root view or a heap slot's
+                        // view is, not copied on the CPU at submission. The
+                        // title's 174 MB constant heap is such a buffer and
+                        // its shaders write part of it: every fill from it
+                        // waited for the flights in the air, 45 ms a frame of
+                        // the submitting thread (run of 26/11 22:25).
+                        // `VICTORY_CARD_CONSTANTS=1` only (see `card_constants`).
+                        let rounded = u64::from(size.min(64 << 10).next_multiple_of(256));
+                        if card_constants()
+                            && let Some(copy) = crate::shadow::find(address, rounded)
+                            && copy.on_card()
+                            && copy.gpu(address) % 256 == 0
+                            && copy.left(address) >= rounded
+                        {
+                            copy.refresh(list, address, u64::from(size));
+                            host.constant_at(index, copy.gpu(address), size);
+                            CARD_CONSTANTS.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
                         let Some((gpu, to)) = list.scratch(u64::from(size)) else {
                             host.make_null(index);
                             continue;

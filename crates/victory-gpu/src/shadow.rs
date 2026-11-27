@@ -2629,6 +2629,13 @@ impl Shadow {
         }
     }
 
+    /// (PROJECT ONE) Whether the copy is kept in the card's memory
+    /// ([`cards`]): what changed on its CPU side goes up ahead of each
+    /// submission's lists, and its shaders' writes stay there.
+    pub(crate) fn on_card(&self) -> bool {
+        self.card.is_some()
+    }
+
     /// Of a copy in the card's memory: the CPU's side (PC memory), the
     /// card side's bytes from before if made yet, and their size.
     pub(crate) fn card_sides(&self) -> Option<(&ID3D12Resource, Option<ID3D12Resource>, u64)> {
