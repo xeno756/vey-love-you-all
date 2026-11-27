@@ -307,6 +307,45 @@ struct Held {
 /// `true` once a correctness run with `=1` is clean.
 const WINDOW_DEFAULT: bool = false;
 
+/// (PROJECT ONE, from avatarmanz/VIctory-7900XTX 631400f and 15c3d0e,
+/// GPL-3.0-or-later.) Whether indirect executions whose arguments or count
+/// lie in title memory the card reads in place (renderer port 1,
+/// `VICTORY_PORT_CONSTANTS=1`) are clamped alone, right before they run
+/// (`VICTORY_PORT_CONSTANTS_ORDER=0`: in windows as any other).
+///
+/// A window clamps records ahead, in the pass recorded where it was opened.
+/// For a host copy that is fine, its bytes are the title's of the
+/// submission; where the card reads the title's memory in place, records the
+/// title's culling passes write in between are read before they are
+/// written: trees and palms came and went in the fork's runs.
+fn in_place_order() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PORT_CONSTANTS_ORDER").is_none_or(|v| v != "0"))
+}
+
+/// Since the last line: indirect executions with arguments in place, those
+/// clamped alone for it.
+static IN_PLACE_INDIRECT: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
+fn in_place_indirect(_arguments: u64, _kind: u32) {
+    IN_PLACE_INDIRECT[0].fetch_add(1, Ordering::Relaxed);
+    IN_PLACE_INDIRECT[1].fetch_add(u64::from(in_place_order()), Ordering::Relaxed);
+}
+
+/// With the frame line: indirect executions with arguments in place per
+/// frame over `frames`.
+pub(crate) fn in_place_indirect_line(frames: f64) {
+    let [all, alone] = [0, 1].map(|i| IN_PLACE_INDIRECT[i].swap(0, Ordering::Relaxed));
+    if all == 0 {
+        return;
+    }
+    tracing::info!(
+        "renderer port 1: indirect executions with arguments or count in place per frame: {:.0}, of them {:.0} clamped right before they ran (VICTORY_PORT_CONSTANTS_ORDER)",
+        all as f64 / frames,
+        alone as f64 / frames,
+    );
+}
+
 fn windows() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| match std::env::var_os("VICTORY_INDIRECT_WINDOW") {
@@ -3524,6 +3563,17 @@ impl State {
             why("mesh draws are switched off (VICTORY_MESH_TEST=skip)");
             return false;
         }
+        // Renderer port 1: arguments (or their count) in the title's memory
+        // read in place ([`in_place_order`]): clamped alone, right before
+        // their execution, never ahead in a window or joined.
+        let in_place = args.in_place() || counter.as_ref().is_some_and(|(s, _)| s.in_place());
+        if in_place {
+            in_place_indirect(arguments, kind);
+        }
+        let ordered = in_place && in_place_order();
+        if ordered {
+            self.window = None;
+        }
         // A window of records clamped in one pass (`windows`): for single
         // records without a count buffer, drawn by shaders that store to no
         // buffer. Anything else ends the window: it uses the scratch buffer
@@ -3538,6 +3588,7 @@ impl State {
             None
         };
         let windowed = windows()
+            && !ordered
             && kind != DISPATCH
             && max == 1
             && count.is_none()

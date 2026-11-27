@@ -163,6 +163,19 @@ pub fn run(
         let patched = done.iter().filter(|d| **d == Hooked::Done).count();
         println!("renderer port 2: {patched} of {} descriptor record stores of the title patched", SITES.len());
         victory_gpu::port_descriptors::hooked(image.base(), size, patched);
+        // (From avatarmanz/VIctory-7900XTX 4da7c0b.) The frame allocator's
+        // table copies the six stores miss (its own memcpy, a 128-byte copy)
+        // mark their slots too, null records included: on with the port here
+        // (VICTORY_PORT_COPIES=0: not), a slot a copy made null must not keep
+        // the view it showed before.
+        if std::env::var("VICTORY_PORT_COPIES").is_ok_and(|v| v.trim() != "0") || std::env::var_os("VICTORY_PORT_COPIES").is_none() {
+            use victory_loader::descriptor_sites::{TITLE_MEMCPY, apply_copies};
+            let hook = victory_gpu::port_descriptors::title_copy_hook(image.base() + TITLE_MEMCPY);
+            // SAFETY: as above; the hook is a function of ours.
+            let done = unsafe { apply_copies(image.base(), size, victory_gpu::port_descriptors::marks_address(), hook) };
+            let copies = done.iter().filter(|d| **d == Hooked::Done).count();
+            println!("renderer port 2: {copies} of {} table copies of the title patched", done.len());
+        }
     }
     if !execute {
         println!("not executing (pass --execute to start the title)");

@@ -3845,6 +3845,7 @@ fn late_line(frames: f64) {
     }
     crate::port_descriptors::line(frames);
     crate::port_constants::log(frames);
+    crate::draw::in_place_indirect_line(frames);
     {
         // (PROJECT ONE) Where the making of host slots from title records goes.
         static SEEN: [[std::sync::atomic::AtomicU64; 8]; 2] = [const { [const { std::sync::atomic::AtomicU64::new(0) }; 8] }; 2];

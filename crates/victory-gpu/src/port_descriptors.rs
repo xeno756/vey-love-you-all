@@ -147,6 +147,56 @@ pub(crate) fn let_go(start: u64) {
 pub(crate) fn adopted(start: u64) -> bool {
     ADOPTED.read().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|a| a.start == start)
 }
+/// (PROJECT ONE, from avatarmanz/VIctory-7900XTX 4da7c0b, GPL-3.0-or-later.)
+/// The title's own `memcpy`, whose calls in the frame allocator's two table
+/// copiers go to [`title_copy`] (`victory_loader::descriptor_sites::apply_copies`).
+static TITLE_MEMCPY: AtomicUsize = AtomicUsize::new(0);
+
+/// Since the last line: the title's table copies into the marked heap through
+/// its own `memcpy`, and the slots they marked.
+static TITLE_COPIES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
+/// The function the title's patched `memcpy` calls go to, with the title's
+/// `memcpy` at `real` behind it.
+pub fn title_copy_hook(real: usize) -> usize {
+    TITLE_MEMCPY.store(real, Relaxed);
+    title_copy as *const () as usize
+}
+
+/// The title's copy of a descriptor table (or of anything else) by its own
+/// `memcpy`: done by it, then every slot of the marked heap the copy wrote a
+/// byte of is marked, view record or not (a slot the title made null by a
+/// copy must be made again too).
+unsafe extern "system-unwind" fn title_copy(to: *mut u8, from: *const u8, n: usize) -> *mut u8 {
+    // SAFETY: the title's `memcpy`, noted before the title ran.
+    let real: Copy = unsafe { std::mem::transmute(TITLE_MEMCPY.load(Relaxed)) };
+    // SAFETY: the title's copy, by the function it asked for.
+    let out = unsafe { real(to, from, n) };
+    let marked = mark_range(to as u64, n as u64);
+    if marked > 0 {
+        TITLE_COPIES[0].fetch_add(1, Relaxed);
+        TITLE_COPIES[1].fetch_add(marked, Relaxed);
+    }
+    out
+}
+
+/// Marks every slot of the marked heap with a byte in `[to, to + n)`: how many.
+fn mark_range(to: u64, n: u64) -> u64 {
+    let len = MARKS.len.load(Acquire);
+    if len == 0 || n == 0 {
+        return 0;
+    }
+    let start = MARKS.start.load(Relaxed);
+    let (lo, hi) = (to.max(start), to.saturating_add(n).min(start + len));
+    if lo >= hi {
+        return 0;
+    }
+    let (first, last) = ((lo - start) / 32, (hi - 1 - start) / 32);
+    for slot in first..=last {
+        mark_slot(slot as usize);
+    }
+    last - first + 1
+}
 
 /// Marks the slot at `handle` (a record our own calls wrote), if it is in the
 /// marked heap.
@@ -248,8 +298,18 @@ struct Fallback {
 
 static FALLBACK: std::sync::Mutex<Fallback> = std::sync::Mutex::new(Fallback { pages: std::collections::BTreeSet::new(), asked: 0, looked: 0, next: 0 });
 
-/// Whether to ask the write watch of the marked heap this frame.
+/// Whether the fallback is whole: every written page, at every sync of the
+/// heaps (several a frame), as the layer looked before the port.
+fn whole() -> bool {
+    check_budget() == usize::MAX && check_every() == 1
+}
+
+/// Whether to ask the write watch of the marked heap now (whole: at every
+/// sync; else once in [`check_every`] frames).
 pub(crate) fn ask_due(frame: u64) -> bool {
+    if whole() {
+        return true;
+    }
     let mut f = FALLBACK.lock().unwrap_or_else(|e| e.into_inner());
     if check_budget() == 0 || f.asked != 0 && frame < f.asked + check_every() {
         return false;
@@ -409,6 +469,7 @@ pub(crate) fn line(frames: f64) {
     let ours = MARKED_BY_US.swap(0, Relaxed);
     let [pages, missed, other] = [0, 1, 2].map(|i| CHECKED[i].swap(0, Relaxed));
     let copies = [0, 1].map(|i| COPIES[i].swap(0, Relaxed));
+    let title_copies = [0, 1].map(|i| TITLE_COPIES[i].swap(0, Relaxed));
     if !working() {
         tracing::info!("renderer port 2 (VICTORY_PORT_DESCRIPTORS=1): not working, no store of the title's was patched");
         return;
@@ -421,7 +482,7 @@ pub(crate) fn line(frames: f64) {
     };
     tracing::info!(
         "renderer port 2 (VICTORY_PORT_DESCRIPTORS=1) per frame: {:.0} slots told ({:.0} marks by our calls, the rest by the title's {} patched stores and its copies) in {:.0} runs, {:.3} ms taking; \
-         the title's memcpy/memmove calls into the heap {:.0}, records they marked {:.0}; fallback: {:.1} pages looked at whole, {:.2} view records no mark told of, {:.0} other records changed; \
+         the title's memcpy/memmove calls into the heap {:.0}, records they marked {:.0}; its own memcpy's table copies {:.0}, slots they marked {:.0}; fallback: {:.1} pages looked at whole, {:.2} view records no mark told of, {:.0} other records changed; \
          since the start {} view records missed, their writers: {}",
         taken as f64 / frames,
         ours as f64 / frames,
@@ -430,6 +491,8 @@ pub(crate) fn line(frames: f64) {
         ns as f64 / 1e6 / frames,
         copies[0] as f64 / frames,
         copies[1] as f64 / frames,
+        title_copies[0] as f64 / frames,
+        title_copies[1] as f64 / frames,
         pages as f64 / frames,
         missed as f64 / frames,
         other as f64 / frames,
