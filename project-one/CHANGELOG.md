@@ -35,6 +35,12 @@ Mission de l'utilisateur : une Series S optimisée (dix phases). Dossiers `..\se
 - **`5056699`, Series S seulement : limite de recopie de scarlet-fps à 1 Mio.** Recopie 45 ms par
   image au lieu de 106, 4,59 images/s au lieu de 4,38 ; image et jeu corrects (la partie va
   jusqu'à « Approchez-vous d'une codétenue »).
+- **Validation (12 h 02) : carte perdue à 7 min** (0x4db6000, adresse basse) pendant un gros
+  changement de scène. `ba7b4c2` : la limite de recopie sort des réglages par défaut (une perte
+  en deux parties avec elle, aucune en trois sans).
+- `ba7b4c2` : `VICTORY_EAGER_PLACED=1` (avec `VICTORY_EAGER_BUFFERS=1`). Les vues des tampons
+  placés sont faites à l'écriture du jeu, et non plus par un dessin pendant que des envois partis
+  en avance les lisent. 15 min tenues (12 h 11), mais 3,91 images/s (médiane 254 ms) ; option.
 - La Series X n'est pas changée : ses réglages restent ceux de `1f0cbd4`/`150778a`.
 
 ## 27/11/2026 (8 h 30 – 10 h 30) — la course des textures corrigée, textures qui partent et reviennent
