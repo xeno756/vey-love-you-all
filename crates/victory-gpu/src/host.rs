@@ -1600,9 +1600,15 @@ pub(crate) fn name(object: &impl Interface, text: impl FnOnce() -> String) {
         // short and the runtime frees tens of thousands a second.
         #[cfg(feature = "diagnostics")]
         if let Ok(resource) = object.cast::<ID3D12Resource>() {
-            // SAFETY: plain queries on a live resource.
-            let (desc, gpu) = unsafe { (resource.GetDesc(), resource.GetGPUVirtualAddress()) };
-            if desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER && gpu != 0 {
+            // SAFETY: plain queries on a live resource (the address of a
+            // buffer only: the debug layer warns for every texture asked).
+            let desc = unsafe { resource.GetDesc() };
+            let gpu = if desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+                unsafe { resource.GetGPUVirtualAddress() }
+            } else {
+                0
+            };
+            if gpu != 0 {
                 let mut made = MADE_BUFFERS.lock().unwrap_or_else(|e| e.into_inner());
                 if made.len() < 1 << 20 || made.contains_key(&gpu) {
                     made.insert(gpu, (gpu + desc.Width, text.clone(), now_ms()));
