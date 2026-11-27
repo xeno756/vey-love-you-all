@@ -404,7 +404,10 @@ rem 0,8 s au lieu de 26 a 34 ; en echange 28 %% de textures en moins a 45 s de
 rem monde, 8 %% a 90 s, autant ensuite. VICTORY_TEXTURE_GATE_S=60 avant le
 rem lancement : le rattrapage d'avant.
 :steady_textures
-if not defined VICTORY_TEXTURE_GATE_S set "VICTORY_TEXTURE_GATE_S=0"
+rem (27/11, 5 h 20) 20 s de rattrapage au debut des scenes : la file des textures choisies
+rem par index (28 000 a 46 000 d'un coup au debut de la cinematique) se vide en 20 s au
+rem lieu d'une minute ; les visages se texturent plus tot, quelques images lentes alors.
+if not defined VICTORY_TEXTURE_GATE_S set "VICTORY_TEXTURE_GATE_S=20"
 goto :eof
 
 rem Les copies des tampons du jeu de 1 Mio et plus dans la memoire de la carte,
@@ -596,6 +599,15 @@ rem (27/11, 4 h) VICTORY_KEEP_GROUPS=particules+vent+... avant le lancement : ce
 rem sont gardes (la qualite d'origine du jeu, a mesurer groupe par groupe).
 set "SANS_GROUPES=+particules+vent+reflets+lancer-de-rayons+decals"
 if "%VICTORY_KEEP_BLOOM%"=="0" set "SANS_GROUPES=%SANS_GROUPES%+flou-et-halos"
+rem (27/11, 5 h 20) La lumiere indirecte du jeu gardee, sa sortie remplacee par une
+rem estimation tiree de la lumiere visible (ambient.rs d'avatarmanz, VICTORY_AMBIENT) :
+rem les pieces hors du soleil sont eclairees par le rebond au lieu d'etre noires.
+rem VICTORY_KEEP_INDIRECT=0 : coupee comme avant, avec la lumiere constante.
+if not defined VICTORY_KEEP_INDIRECT set "VICTORY_KEEP_INDIRECT=1"
+if "%VICTORY_KEEP_INDIRECT%"=="1" if not defined VICTORY_AMBIENT set "VICTORY_AMBIENT=0.8"
+rem (27/11, 5 h 20) La carte gardee eveillee entre les envois (awake.rs d'avatarmanz) :
+rem son horloge restait a 800 MHz sur 1 740. VICTORY_CARD_AWAKE=0 : sans.
+if not defined VICTORY_CARD_AWAKE set "VICTORY_CARD_AWAKE=1"
 if not "%VICTORY_KEEP_INDIRECT%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+eclairage-indirect"
 if defined VICTORY_KEEP_GROUPS call :keep_groups
 if defined SANS_GROUPES set "SANS_GROUPES=%SANS_GROUPES:~1%"
