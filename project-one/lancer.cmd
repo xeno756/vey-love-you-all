@@ -641,7 +641,8 @@ rem (27/11, 12 h) Series S : ce que les shaders ecrivent dans des plages de plus
 rem reste sur la carte, sans recopie (limite de scarlet-fps). Mesure : recopie 45 ms par
 rem image au lieu de 106, 4,59 images/s au lieu de 4,38, image et jeu corrects (cellule,
 rem consignes suivantes). VICTORY_GPU_BACK_MAX_KB= (vide) : tout est recopie, comme avant.
-if /i "%CONSOLE%"=="series-s" if not defined VICTORY_GPU_BACK_MAX_KB set "VICTORY_GPU_BACK_MAX_KB=1024"
+rem (12 h 20) Retire des reglages par defaut : une perte de carte en 2 parties avec (12 h 09,
+rem adresse basse 0x4db6000), aucune en 3 sans. VICTORY_GPU_BACK_MAX_KB=1024 pour l'essayer.
 goto :eof
 
 rem Retire de SANS_GROUPES (chaque nom precede de +) les groupes de VICTORY_KEEP_GROUPS.

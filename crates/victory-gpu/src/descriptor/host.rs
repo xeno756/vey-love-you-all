@@ -230,6 +230,13 @@ struct Made {
 const RUN: usize = 16;
 const RUNS: usize = 1 << 12;
 
+/// (PROJECT ONE) With [`eager_buffers`]: views of buffers the title placed
+/// in memory are made when it writes them too (`VICTORY_EAGER_PLACED=1`).
+fn eager_placed() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_EAGER_PLACED").is_some_and(|v| v == "1"))
+}
+
 /// (PROJECT ONE) Whether constant and buffer views are made when the title
 /// writes them (`VICTORY_EAGER_BUFFERS=1`; see `HostHeap::mirror_with`).
 fn eager_buffers() -> bool {
@@ -3021,7 +3028,13 @@ impl HostHeap {
             // and the new view's offsets (the card lost at addresses of
             // 56-75 MB, runs of 26/11). Placed textures still wait for their
             // host copy.
-            let lazy = view.is_buffer() && !(eager_buffers() && !matches!(view, View::Placed(..)));
+            // (PROJECT ONE, 27/11) `VICTORY_EAGER_PLACED=1` with it: views of
+            // buffers the title placed in memory too (most of this title's;
+            // the Series S lost the card at 0x4c23000 and 0x4db6000 when the
+            // world's streaming remade them in masse).
+            let placed_buffer = matches!(&view, View::Placed(false, resource, _) if resource[0] == 1);
+            let eager = eager_buffers() && (!matches!(view, View::Placed(..)) || (placed_buffer && eager_placed()));
+            let lazy = view.is_buffer() && !eager;
             let later = !for_draw && (lazy || waiting.is_some());
             // Another view of the placed texture the slot shows already (a
             // title that streams a texture in writes its view again with
