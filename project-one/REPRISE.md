@@ -3,6 +3,21 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 10 h 30** : **version à donner scarlettport `1f0cbd4`**, même commande
+(`meilleure.cmd series-x performance`), shaders déjà prêts. Depuis `d86412a` :
+- la course des textures est corrigée (`d2e2383`, détail dans le CHANGELOG). Sous charge, plus
+  aucune perte de carte en 26 min, dont le réglage qui la perdait avant ;
+- les cases ne se lisent plus comme des zéros quand le jeu change de texture (`1f0cbd4`) : fini
+  le visage rouge et la serviette noire d'une image ;
+- la rotation BC7 de BCPack est corrigée.
+
+Partie de 12 min : 4,07 images/s, carte gardée. Outils de rafales dans
+`..\victory-logs\outils\` : `rafale.ps1`, `clignote.py`, `rafales-banc.ps1`. Suite :
+- le chargement plus rapide en début de scène (4 fils, rattrapage plus long), maintenant sûr
+  à essayer ;
+- la limite de recopie de scarlet-fps (vitesse) ;
+- l'accès mémoire par adresse pour le lancer de rayons.
+
 **Au 27/11 à 8 h 30** : **version à donner scarlettport `d86412a`**, même commande, shaders
 retraduits (`meilleure.cmd series-x performance preparer` déjà fait). Ajoute à `145bde0` les
 correctifs de traduction d'avatarmanz, sans celui des cubes. Validations de 15 min : 4,36

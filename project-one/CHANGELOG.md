@@ -4,6 +4,51 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (8 h 30 – 10 h 30) — la course des textures corrigée, textures qui partent et reviennent
+
+- **`d2e2383` : la course des textures, cause des pertes de carte aux adresses basses.** Nos
+  écritures tardives de cases de textures (passe des textures, copies tout juste faites, cases
+  rendues nulles ou refaites) tombaient pendant que les listes envoyées en avance lisaient ces
+  cases. Un descripteur lu à moitié écrit donne une base 0 et les décalages de la nouvelle vue,
+  d'où les défauts de page à 53–78 Mo. Une telle écriture attend maintenant un moment où rien
+  du jeu n'est sur la carte. L'envoi attend une écriture en cours (2 ms au plus) ; la copie de
+  la texture est faite avant, hors de cette attente. `VICTORY_QUIET_SLOTS=0` : comme avant.
+  Essais de charge :
+  - `VICTORY_TEXTURE_THREADS=4`, qui perdait la carte avant : 15 min tenues, 4,34 images/s ;
+  - avec en plus `VICTORY_TEXTURE_GATE_S=900` (rattrapage permanent) : 11 min tenues (fenêtre
+    fermée à la main), 4,54 images/s.
+- **L'utilisateur voyait des textures qui apparaissent puis disparaissent.** Nouveaux outils
+  hors dépôt : `rafale.ps1` (images de la fenêtre en rafale), `clignote.py` (ce qui change le
+  temps d'une image), `rafales-banc.ps1` (trois rafales au même moment de chaque partie, la
+  dernière en marchant). Trouvé :
+  - le visage d'une serveuse rouge le temps d'une image ;
+  - une serviette noire deux fois juste après un changement de plan.
+
+  Cause : quand le jeu écrit la vue d'une autre texture dans une case (la même image en plus
+  grand, ailleurs, comme il la charge), la case devenait nulle jusqu'à ce que la passe la
+  refasse, et se lisait comme des zéros.
+- **`1f0cbd4`** :
+  - la case garde l'ancienne texture tant que la nouvelle, du même genre (format, vue, couches,
+    proportions), n'est pas faite. Règle de scarlet-fps `d1c412c`, GPL-3.0 ;
+    `VICTORY_KEEP_LIKE_VIEWS=0` : comme avant ;
+  - la passe ne vide plus une telle case quand la mémoire de la nouvelle texture n'est pas
+    encore là ;
+  - le moment calme ne vaut que pour les cases que les shaders choisissent par index : un dessin
+    qui lit les cases du jeu par sa table doit les trouver faites ;
+  - BCPack : rotation des canaux BC7 seulement dans les modes 4 et 5, les seuls qui en ont.
+    Repris de Vice-Tay `8d56dd9` (RVZO6), GPL-3.0 ; dans les autres modes, des canaux étaient
+    échangés.
+
+  Partie de 10 h 03 (12 min) : 4,07 images/s, 95 % sous 301 ms, carte gardée. Ni visage rouge
+  ni serviette noire dans les rafales ; 72 392 écritures ont gardé l'ancienne texture.
+- Reste visible : au début de chaque scène, 22 000 à 26 000 textures attendent. La tenue
+  passe du noir au rouge puis à l'orange, et des bâtiments restent blancs quelques secondes
+  dans la rue. C'est la vitesse de chargement.
+- Dépôts reçus : **Vice-Tay** (TaynanGT) et **scarlet-fps** (clankenjoyer), GPL-3.0 tous les
+  deux. Vice-Tay demande les mesh shaders (absents de la RX 5600 XT) : on n'en reprend que des
+  morceaux. À essayer : la limite de recopie de scarlet-fps (`VICTORY_GPU_BACK_MAX_KB`). Chez
+  nous, la recopie coûte 105 ms par image.
+
 ## 27/11/2026 (7 h 30 – 8 h 30) — traduction des shaders corrigée, lancer de rayons du jeu essayé
 
 - **Le lancer de rayons du jeu ne passe pas par DXR** (notes d'avatarmanz, `docs/fork-ray-tracing.md`).
