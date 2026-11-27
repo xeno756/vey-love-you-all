@@ -537,8 +537,9 @@ fn detail_textures() -> bool {
 static HEAP_TEXTURES_NO_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 /// (PROJECT ONE) Threads that make host copies of placed textures picked by
-/// index ahead of the texture pass (`VICTORY_TEXTURE_THREADS`, 4 by
-/// default; 0 or 1: none). In the opening cutscene the pass made 545 host
+/// index ahead of the texture pass (`VICTORY_TEXTURE_THREADS=4`; off by
+/// default since 26/11 21:30: every run that lost the card at a low
+/// unknown address had it, the same run without it kept the card). In the opening cutscene the pass made 545 host
 /// textures a second, 89 % of its time in their making, one after another on
 /// the thread that records the frame, behind a queue of 58,000 (the faces
 /// stayed black all through it: runs of 26/11 19:37-20:11). The making is
@@ -546,7 +547,7 @@ static HEAP_TEXTURES_NO_OBJECT: AtomicU64 = AtomicU64::new(0);
 /// (`resource::host_resource`) keeps one copy per texture.
 fn texture_threads() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *N.get_or_init(|| std::env::var("VICTORY_TEXTURE_THREADS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4usize).min(16))
+    *N.get_or_init(|| std::env::var("VICTORY_TEXTURE_THREADS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0usize).min(16))
 }
 
 /// Due slots looked at ahead, at most, a pass ([`premake_textures`]).

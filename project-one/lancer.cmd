@@ -587,11 +587,12 @@ call :card_copies
 call :steady_textures
 rem (PROJECT ONE, 26/11 19 h 15) VICTORY_KEEP_INDIRECT=1 avant le lancement : la
 rem lumiere indirecte gardee (sans elle les visages sont noirs en cinematique).
-if "%VICTORY_KEEP_INDIRECT%"=="1" (
-    call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals"
-) else (
-    call :without "particules+vent+flou-et-halos+reflets+lancer-de-rayons+decals+eclairage-indirect"
-)
+rem (26/11, 23 h 20) VICTORY_KEEP_BLOOM=1 : flou-et-halos garde (halos, flou de
+rem mouvement, reflets d'objectif : la carte n'est occupee qu'a 50-60 %).
+set "SANS_GROUPES=particules+vent+reflets+lancer-de-rayons+decals"
+if not "%VICTORY_KEEP_BLOOM%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+flou-et-halos"
+if not "%VICTORY_KEEP_INDIRECT%"=="1" set "SANS_GROUPES=%SANS_GROUPES%+eclairage-indirect"
+call :without "%SANS_GROUPES%"
 call :without_draws "ombres"
 call :quality_s
 goto :eof
