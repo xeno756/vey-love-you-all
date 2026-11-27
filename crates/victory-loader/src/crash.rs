@@ -356,9 +356,84 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
     Some(len)
 }
 
+/// (PROJECT ONE) The title's render code keeps, per resource class, one
+/// cached upload allocation per render context, at the context's slot
+/// index (`[ctx + 0x12300]`): five worker contexts take slots 0-4 of a
+/// five-bit mask; the main context is made without one, index -1 by design
+/// (0x14247b244 passes 1 to 0x141b4d9f0, which then skips the mask). When a
+/// chain of commands is replayed on the main context (0x142474f80), a
+/// second command 0x11C goes through 0x144dbd700, which reads and writes
+/// the cache at index -1 (zero-extended: 32 GiB past the class's table):
+/// nothing is mapped there and the title stops (runs of 26/11 14:01,
+/// 20:11, 21:30, and 23:32 with the default runtime, a minute into the
+/// world). How often that happens depends on timing (how much the worker
+/// threads recorded before the replay), not on anything of ours.
+///
+/// Here the three accesses at index -1 behave as an empty cache: the read
+/// gives 0 (the title then allocates the command's memory from the main
+/// context's own ring, as on a miss) and the two stores of the cache entry
+/// are dropped. Only those three instructions, byte for byte, only with
+/// the index register at 0xffffffff and the faulting address the one the
+/// instruction computes. `VICTORY_MAIN_CONTEXT_SLOT=0`: left to crash.
+unsafe fn main_context_slot(info: *mut EXCEPTION_POINTERS) -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // (instruction and what follows it, length, store, displacement)
+    const SITES: [(&[u8], u64, bool, u64); 3] = [
+        // mov r12,[r13+rdi*8]; test r12,r12; je; cmp ebx,esi; je
+        (&[0x4D, 0x8B, 0x64, 0xFD, 0x00, 0x4D, 0x85, 0xE4, 0x74, 0x08, 0x39, 0xF3, 0x0F, 0x84], 5, false, 0),
+        // mov [r13+rdi*8],r12; cmp ebx,esi; je; mov qword [r13+rdi*8+28h],0
+        (&[0x4D, 0x89, 0x64, 0xFD, 0x00, 0x39, 0xF3, 0x74, 0x0E, 0x49, 0xC7, 0x44, 0xFD, 0x28], 5, true, 0),
+        // mov qword [r13+rdi*8+28h],0; mov [r13+rbp*4+50h],esi
+        (&[0x49, 0xC7, 0x44, 0xFD, 0x28, 0x00, 0x00, 0x00, 0x00, 0x41, 0x89, 0x74, 0xAD, 0x50], 9, true, 0x28),
+    ];
+    // SAFETY: the system passes valid exception pointers; the faulting
+    // instruction's page is readable, the CPU just fetched it.
+    unsafe {
+        let record = &*(*info).ExceptionRecord;
+        let context = &mut *(*info).ContextRecord;
+        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION
+            || context.Rdi != 0xFFFF_FFFF
+            || record.NumberParameters < 2
+            || !*ON.get_or_init(|| std::env::var_os("VICTORY_MAIN_CONTEXT_SLOT").is_none_or(|v| v != "0"))
+        {
+            return false;
+        }
+        // The signatures are 14 bytes: inside the page, or not ours.
+        if 0x1000 - (context.Rip as usize & 0xfff) < 14 {
+            return false;
+        }
+        let code = std::slice::from_raw_parts(context.Rip as *const u8, 14);
+        let Some(&(_, len, store, disp)) = SITES.iter().find(|(sig, ..)| *sig == code) else {
+            return false;
+        };
+        let at = context.R13.wrapping_add(context.Rdi * 8).wrapping_add(disp);
+        // ExceptionInformation[0]: 0 read, 1 write; [1]: the address.
+        if record.ExceptionInformation[1] as u64 != at || (record.ExceptionInformation[0] == 1) != store {
+            return false;
+        }
+        if !store {
+            context.R12 = 0;
+        }
+        context.Rip += len;
+        if TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            tracing::warn!(
+                address = format_args!("{at:#x}"),
+                "the title's main render context used its per-context upload cache at index -1: taken as an empty \
+                 cache (VICTORY_MAIN_CONTEXT_SLOT=0: left to crash)"
+            );
+        }
+        true
+    }
+}
+
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     // SAFETY: the system passes valid exception pointers.
     if unsafe { emulate_amd_only(info) } {
+        return -1; // EXCEPTION_CONTINUE_EXECUTION
+    }
+    // SAFETY: as above.
+    if unsafe { main_context_slot(info) } {
         return -1; // EXCEPTION_CONTINUE_EXECUTION
     }
     // A check of the title's own, tripped by a size given to it in place

@@ -1594,9 +1594,62 @@ pub(crate) fn name(object: &impl Interface, text: impl FnOnce() -> String) {
     if dred_on()
         && let Ok(object) = object.cast::<ID3D12Object>()
     {
+        let text = text();
+        // (PROJECT ONE, diagnostics) Buffers by their card address, for a
+        // page fault DRED finds in no allocation: its list of freed ones is
+        // short and the runtime frees tens of thousands a second.
+        #[cfg(feature = "diagnostics")]
+        if let Ok(resource) = object.cast::<ID3D12Resource>() {
+            // SAFETY: plain queries on a live resource.
+            let (desc, gpu) = unsafe { (resource.GetDesc(), resource.GetGPUVirtualAddress()) };
+            if desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER && gpu != 0 {
+                let mut made = MADE_BUFFERS.lock().unwrap_or_else(|e| e.into_inner());
+                if made.len() < 1 << 20 || made.contains_key(&gpu) {
+                    made.insert(gpu, (gpu + desc.Width, text.clone(), now_ms()));
+                }
+            }
+        }
         // SAFETY: a plain call on a live object.
-        let _ = unsafe { object.SetName(&windows::core::HSTRING::from(text())) };
+        let _ = unsafe { object.SetName(&windows::core::HSTRING::from(text)) };
     }
+}
+
+/// (PROJECT ONE, diagnostics) Named buffers by card address: end, name and
+/// when made (`now_ms`), the last made at each address ([`name`]).
+#[cfg(feature = "diagnostics")]
+static MADE_BUFFERS: Mutex<std::collections::BTreeMap<u64, (u64, String, u64)>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// (PROJECT ONE, diagnostics) The named buffers that held card address
+/// `va` (alive or since freed: the last made at each start), nearest
+/// first, with how long ago each was made; and the nearest below.
+#[cfg(feature = "diagnostics")]
+fn buffers_at(va: u64) -> String {
+    let made = match MADE_BUFFERS.try_lock() {
+        Ok(made) => made,
+        Err(_) => return "; our buffers: not looked at (busy)".to_owned(),
+    };
+    let now = now_ms();
+    let holding: Vec<String> = made
+        .range(..=va)
+        .rev()
+        .take(4096)
+        .filter(|(_, (end, _, _))| va < *end)
+        .take(6)
+        .map(|(start, (end, what, at))| {
+            format!("{what} {start:#x}..{end:#x} made {:.1} s ago", now.saturating_sub(*at) as f64 / 1000.0)
+        })
+        .collect();
+    let below = made
+        .range(..=va)
+        .next_back()
+        .map(|(start, (end, what, at))| {
+            format!("{what} {start:#x}..{end:#x} made {:.1} s ago", now.saturating_sub(*at) as f64 / 1000.0)
+        });
+    format!(
+        "; our named buffers that held it (of {} recorded): {holding:?}; the nearest starting below: {below:?}",
+        made.len()
+    )
 }
 
 /// One in [`ALIVE`]`[0]` while it lives (a host list), and one in
@@ -5816,6 +5869,8 @@ impl Host {
                 }
                 text.push_str(&crate::shadow::near(va));
                 text.push_str(&crate::descriptor::host::near_heaps(va));
+                #[cfg(feature = "diagnostics")]
+                text.push_str(&buffers_at(va));
             }
             // The plain output: the extended one (with marker texts) came
             // back without stopped lists on this host.
