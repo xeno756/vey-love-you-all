@@ -632,6 +632,11 @@ if /i not "%CONSOLE%"=="series-s" call :quality_s
 rem Son propre agrandisseur temporel aussi sur la Series S (sinon le FSR de la console,
 rem remplace ici par un simple etirement).
 if /i "%CONSOLE%"=="series-s" set "VICTORY_OWN_UPSCALER=1"
+rem (27/11, 11 h 50) Series S : fenetres de memoire du jeu de 1 Mio au lieu de 4 (copies
+rem dans la memoire du PC partagee avec la carte). Mesure : 5,8 Go partages au lieu de 6,4,
+rem 1,5 Go de RAM libre au lieu de 1,3, temps d'image 221 ms au lieu de 217 (256 Kio :
+rem 5,4 Go mais 241 ms). VICTORY_WINDOW_KB=4096 : comme avant.
+if /i "%CONSOLE%"=="series-s" if not defined VICTORY_WINDOW_KB set "VICTORY_WINDOW_KB=1024"
 goto :eof
 
 rem Retire de SANS_GROUPES (chaque nom precede de +) les groupes de VICTORY_KEEP_GROUPS.
