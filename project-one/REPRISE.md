@@ -3,6 +3,17 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 27/11 à 8 h 30** : **version à donner scarlettport `d86412a`**, même commande, shaders
+retraduits (`meilleure.cmd series-x performance preparer` déjà fait). Ajoute à `145bde0` les
+correctifs de traduction d'avatarmanz, sans celui des cubes. Validations de 15 min : 4,36
+images/s, carte gardée (8 h 15) ; une perte de carte à 3,5 min (8 h 04, adresse basse,
+famille textures). Le lancer de rayons du jeu (`VICTORY_BVH_BUILDER=1`) fait planter le jeu
+au chargement. Suite :
+- la course des textures aux adresses basses ;
+- les visages des premiers plans de scène ;
+- l'accès mémoire par adresse pour le lancer de rayons ;
+- la préparation des envois sur un fil à nous (vitesse).
+
 **Au 27/11 à 7 h 30** : **version à donner scarlettport `145bde0`**, même commande. Par rapport à
 5 h 45 :
 - tout le rendu est gardé hors lancer de rayons (pas de DXR sur la carte) et reflets en espace

@@ -4,6 +4,33 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 27/11/2026 (7 h 30 – 8 h 30) — traduction des shaders corrigée, lancer de rayons du jeu essayé
+
+- **Le lancer de rayons du jeu ne passe pas par DXR** (notes d'avatarmanz, `docs/fork-ray-tracing.md`).
+  Son parcours est du calcul ordinaire, et seul le test de nœud est une instruction matérielle,
+  que notre traducteur émule déjà (`bvh.rs`, `intersect.rs`). « Impossible sur la RX 5600 XT »
+  était donc faux. Essai `VICTORY_BVH_BUILDER=1` avec les groupes lancer de rayons et reflets
+  (8 h) : le constructeur tourne (53 programmes avec leurs pipelines), mais **le jeu plante
+  pendant le chargement** (`title+0x4f38ba5`, lecture à −1). Il faudrait l'accès à la mémoire
+  du jeu par adresse d'avatarmanz, bien plus complet. Non repris pour l'instant.
+- `d86412a` : correctifs de traduction d'avatarmanz `9a6c829` (après VIctory da82e444, 4243a96a,
+  a1a2077a) :
+  - codes normalisés convertis au flottant le plus proche, pour qu'un indice de matériau ne
+    retombe plus au code d'en dessous ;
+  - données d16 des vues entières gardées bit à bit (le réseau des visages en dépend) ;
+  - drapeau des vues non ordonnées hors pixel et calcul.
+
+  **Leur changement des niveaux de cube est écarté** : avec lui, les yeux des gros plans
+  devenaient noirs (`diagnostics\shaders\yeux-traduction.png`). Tous les shaders retraduits :
+  25 563, aucun refus, 10 498 pipelines. Partie de 7 h 53 : carte gardée, yeux normaux
+  (`diagnosticsaces\yeux-sans-cube.png`), enseignes de la rue lisibles.
+- **Validation de 8 h 04 (`d86412a`) : carte perdue à 3,5 min** (défaut de page à l'adresse
+  basse 0x4e38000, famille connue liée au volume de création de textures). **Seconde validation
+  de 15 min (8 h 15) : 4,36 images/s, 95 % sous 267 ms, ni perte de carte ni plantage.** Avec le
+  correctif des textures orphelines : 1 perte en 52 min de monde au total aujourd'hui.
+- Visages au début de la cinématique : texturés ou noirs selon la partie (minutage du
+  chargement). Les 20 s de rattrapage ne suffisent pas pour le diner.
+
 ## 27/11/2026 (5 h 50 – 7 h 30) — mission « restauration des shaders » : audit, rendu complet, marche en jeu
 
 - Point de restauration : tag `restore/2026-11-27-0550` (scarlettport `906f7f0`). Travail de
