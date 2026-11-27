@@ -14,7 +14,13 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
   verrou.
 - `c9cd850` : les pages changées des tas réparties sur 4 fils par défaut
   (`VICTORY_SYNC_THREADS`, 1 : le fil d'envoi seul) : la synchronisation prend 45 ms par image
-  au lieu de 93. Partie de 7 min (22 h 11) : **5,29 images/s**, médiane 183 ms, carte gardée.
+  au lieu de 93. Partie de 7 min (22 h 11) : **5,29 images/s**, médiane 183 ms, carte gardée ;
+  mais la partie de 20 min de 22 h 47 a perdu la carte vers 14 min (5,4 images/s).
+- `b9764f5` : retour à un fil par défaut ; 20 min à 23 h 20 : **4,95 images/s**, médiane
+  200 ms, carte gardée. Option `VICTORY_SYNC_AHEAD=1` (la synchronisation pendant la
+  préparation des listes, non mesurée).
+- Écarté : constantes des tables lues dans la copie sur la carte (carte perdue), copies et
+  instantanés sur plusieurs fils du fork amont (rien), 8 fils (carte perdue à 3 min).
 - Le plantage du jeu `title+0x4dbd74d` est expliqué (doc 14) ; la couche de débogage de
   Direct3D ne trouve aucune faute côté processeur dans les pertes de carte.
 

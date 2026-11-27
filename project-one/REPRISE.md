@@ -9,7 +9,11 @@ du tas de vues ; 4,91 images/s, médiane 200 ms, 10 min sans perte de carte. Pla
 `title+0x4dbd74d` expliqué (doc 14, réglages où le jeu prend de l'avance seulement). Pertes de
 carte des variantes rapides : aucune faute côté processeur selon la couche de débogage ;
 adresses dans aucun objet connu. Puis `c9cd850` : la synchronisation sur 4 fils par défaut, 5,29
-images/s, médiane 183 ms, carte gardée (22 h 11). Suite : l'attente du fil d'envoi sur les
+images/s, médiane 183 ms, carte gardée (22 h 11) ; **mais la partie de 20 min de 22 h 47 a
+perdu la carte vers la 14e minute** (5,4 images/s jusque-là, adresse dans aucun objet connu) :
+pas encore livrable tel quel. Partie de 20 min avec `VICTORY_SYNC_THREADS=1` (le niveau de
+`f5fc552`) à 23 h 20 : 4,95 images/s, médiane 200 ms, carte gardée. **Version à donner :
+`b9764f5`** (un fil par défaut ; `VICTORY_SYNC_THREADS=4` et `VICTORY_SYNC_AHEAD=1` en option). Suite : l'attente du fil d'envoi sur les
 remplissages de constantes (45 ms par image ; le journal note leur mémoire) et la recopie (80 ms).
 
 **Au 26/11 à 22 h 35 (fin de soirée de travail seul)** : version stable de la branche
