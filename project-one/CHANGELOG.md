@@ -44,6 +44,21 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - Reste visible : au début de chaque scène, 22 000 à 26 000 textures attendent. La tenue
   passe du noir au rouge puis à l'orange, et des bâtiments restent blancs quelques secondes
   dans la rue. C'est la vitesse de chargement.
+- **scarlet-fps lancé tel quel ici (10 h 34 – 10 h 45), à la demande de l'utilisateur.**
+  Compilé (`cargo build --release --bin victory`), cache séparé
+  (`%LOCALAPPDATA%\victory\cache-scarletfps`), `scripts\play-3070.ps1 -Console series-x`. Il
+  tourne sans mesh shaders (repli), mais ne tient pas sur ce PC (16 Go de RAM, RX 5600 XT
+  6 Go ; il demande 32 Go et une carte NVIDIA). Trois essais :
+  - avec préparation des shaders : carte réinitialisée (`0x887A0007`) au début de la
+    cinématique ;
+  - sans préparation : plus de mémoire (`0x8007000E`) au début de la cinématique ;
+  - `-MipDrop 2`, moins de mémoire carte : échec dès les menus (464 Mo de RAM libre).
+
+  Journaux : `victory-logs\scarletfps-*.txt`. Ce qu'il apporte est repris dans notre version :
+  - garder la texture affichée (`1f0cbd4`) ;
+  - la rotation BC7, venue de la même source ;
+  - la limite de recopie, `150778a`, désactivée tant qu'on n'a pas choisi une valeur
+    (`VICTORY_GPU_BACK_MAX_KB=1024` pour l'essayer).
 - Dépôts reçus : **Vice-Tay** (TaynanGT) et **scarlet-fps** (clankenjoyer), GPL-3.0 tous les
   deux. Vice-Tay demande les mesh shaders (absents de la RX 5600 XT) : on n'en reprend que des
   morceaux. À essayer : la limite de recopie de scarlet-fps (`VICTORY_GPU_BACK_MAX_KB`). Chez
