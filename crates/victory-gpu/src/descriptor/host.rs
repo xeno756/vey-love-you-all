@@ -1932,6 +1932,17 @@ impl HostHeap {
                 }
             }
         }
+        // (PROJECT ONE, 27/11) Whether the queue has room for slots put back,
+        // by the slots due in it: in the world 19,000 to 25,000 of the queue
+        // are slots whose memory the title has not loaded, which wait and
+        // are not served, so by the queue's length nothing was ever put back
+        // ("0 put back since the start") while 5,000-8,000 views with their
+        // memory there showed nothing: characters' faces black for minutes
+        // (run of 27/11 6:44, a cellmate in the prison).
+        let room = put_back && !unmade.is_empty() && {
+            let textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
+            textures.census(frame)[1] < SHORT as u64
+        };
         for (index, i, generation, other) in unmade {
             let Some(View::Placed(false, resource, desc)) = view_at(i, generation) else {
                 continue;
@@ -1977,13 +1988,11 @@ impl HostHeap {
                     &desc[..10]
                 );
             }
-            if put_back && back < MOST && matches!(claim, Claim::Own | Claim::Free) {
+            if room && back < MOST && matches!(claim, Claim::Own | Claim::Free) {
                 let mut textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
-                if textures.slots.len() < SHORT {
-                    textures.written(index, frame, frame + 1, false);
-                    back += 1;
-                    SWEPT[10].fetch_add(1, Relaxed);
-                }
+                textures.written(index, frame, frame + 1, false);
+                back += 1;
+                SWEPT[10].fetch_add(1, Relaxed);
             }
         }
     }
@@ -4459,8 +4468,17 @@ mod tests {
         host.sweep_part(0..8, handle, 50, false, &mut counts);
         assert_eq!(counts, [2, 0, 0, 0, 0, 0, 1, 1, 0, 0]);
         assert_eq!(queued(), []);
+        // (PROJECT ONE) A queue long with slots waiting for their memory
+        // (not due) still takes it back: by the slots due, not the length.
+        {
+            let mut textures = host.textures.lock().unwrap();
+            for index in 1000..6000 {
+                textures.written(index, 50, 1_000_000, false);
+            }
+        }
         host.sweep_part(0..8, handle, 50, true, &mut counts);
-        assert_eq!(queued(), [1]);
+        let due: Vec<u32> = host.texture_slots_due(60, 8).0.into_iter().map(|d| d.0).collect();
+        assert_eq!(due, [1]);
     }
 
     /// Memory the runtime maps under a slot's texture makes the slot due
