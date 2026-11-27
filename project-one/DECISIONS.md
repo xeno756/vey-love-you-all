@@ -4,6 +4,9 @@ Prises le 25/11/2026 pour avancer sans poser de question. Chacune se change en l
 
 | # | Question | Décision | Raison |
 |---|---|---|---|
+| 55 | Le profil console Series S (essai, « par tous les moyens ») ? | Mesuré une fois, écarté : la mémoire manque à l'entrée du monde (0x8007000E), la carte décroche. | La règle Series X reste ; il faudrait d'abord comprendre pourquoi ce profil demande plus de mémoire partagée chez nous. |
+| 54 | Lumière ambiante des scènes sans lumière indirecte ? | 0,15 au lieu de 0,02 (`d951587`). | Captures : la cellule passe de presque noire à naturelle ; garder la lumière indirecte donne du magenta partout. |
+| 53 | Le marquage des cases de table par défaut ? | Non, en option (`VICTORY_TABLE_SLOTS=1`). | +27 % mais 4 pertes de carte en 16 min contre 0 en 39 min sans ; la stabilité passe avant. |
 | 52 | Garder le port #2 dans `performance` après la partie de 16 h 41 ? | Non (`255c2ba`) : mot `marques` à part. Remplace la décision 48. | +16 % d'images par seconde, mais des descripteurs périmés mesurés (150 à 450 par image sur 16 pages) et la carte perdue à 14 min : la stabilité et l'image passent avant (règle de la mission). |
 | 51 | Le profil console Series S du README (`--console series-s`) ? | Pas sans ton oui. | Ta règle du 25/11 : la version Series X seulement. C'est pourtant le plus gros gain du README (27 à 29 images/s, 18 Go au lieu de 27). |
 | 50 | `VICTORY_LATE_WAIT_LISTS=512` du README ? | Non : `performance` met déjà 256. | Partie de 14 h 56 : 0,0 ms d'attente pour « listes en l'air » ; la limite ne joue pas chez nous. |

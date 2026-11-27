@@ -3,6 +3,26 @@
 Où en est PROJECT ONE et comment continuer, si une session s'arrête en cours de route.
 Mis à jour le 25/11/2026.
 
+**Au 26/11 à 19 h 30** : version stable par défaut (marquage éteint) ~5 images/s ;
+`VICTORY_TABLE_SLOTS=1` donne 6,3 à 7 images/s mais 4 pertes de carte en 16 min (objets
+libérés encore lus, cause non trouvée) : en option seulement (`39f8fca`). Port #1 impossible
+tel quel (tas de 174 Mo en 3 vues hors ordre de section ; Direct3D refuse 2 vues en un tas).
+`vitesse:1` : rien. Visages noirs en cinématique : la lumière indirecte écartée (garbage
+magenta si gardée, `VICTORY_KEEP_INDIRECT=1`) ; `VICTORY_AMBIENT_FILL=0.15` rend la cellule
+belle mais les visages restent noirs piquetés de blanc en extérieur : capture de diagnostic
+en cours (`..ictory-captures`, cibles de rendu des images 40-140 après le monde).
+
+**Au 26/11 à 18 h 45 (travail de nuit, seul, l'utilisateur dort)** : objectif fixé par
+l'utilisateur : 15 images/s stables, jamais sous 10, cinématique et monde parfaits, qualité
+gardée. Je lance moi-même `banc.ps1` (autorisé depuis 17 h 25). Fait sur la branche
+fusionnée : `3052ba9` (cases de table notées, lecture des cases faites sans verrou, table des
+vues en lecture partagée ; 6,4 à 7 images/s contre 5) ; trois pertes de la carte venaient du
+marquage des vues de tampons à adresse (les programmes qui les prennent par index lisent la
+table d'adresses par case) : corrigé en les excluant (non encore commité). Port #1
+(`VICTORY_PORT_CONSTANTS=1`, constantes sur place) écrit dans `port_constants.rs`, éteint,
+à mesurer ensuite pour la recopie (70 à 90 ms par image). Captures de la fenêtre :
+`..ictory-logs\outils\capture-fenetre.ps1`.
+
 **Au 26/11 à 17 h 20** : le port #2 a donné 5,1 images par seconde à 16 h 41, mais avec des
 descripteurs périmés et la carte perdue à 14 min : retiré de `performance` (`255c2ba`, mot
 `marques`). La mémoire du PC est pleine (BLOCKERS 44). Suite : une partie sans `marques`

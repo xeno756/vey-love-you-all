@@ -4,6 +4,25 @@ Branche `project-one/integration` du fork de VIctory par fxceless. Étiquettes :
 - `project-one/baseline` : le fork tel que cloné (`7b0f736`) ;
 - `project-one/upstream-a803c87` : le fork à jour sur lequel PROJECT ONE est rebasé.
 
+## 26/11/2026 (17 h 25 – 21 h 35) — nuit de travail seul, parties lancées par moi
+
+Une quarantaine de parties (`banc.ps1`), captures de la fenêtre et une capture de diagnostic
+des tampons de rendu de la cinématique d'ouverture.
+
+- **Stable par défaut** : ~4,5 à 5 images/s, 12 min sans perte de carte (`d951587`).
+- `3052ba9`, `39f8fca` : clés des cases lisibles sans verrou, table des vues en lecture
+  partagée ; le marquage des cases de table (`VICTORY_TABLE_SLOTS=1`) donne 6,3 à 7 images/s
+  mais perd la carte (4 fois en 16 min) : en option.
+- `d951587` : lumière ambiante 0,15 (cellule éclairée naturellement) ; les textures de
+  personnages refaites plus fines faisaient un bruit blanc sur la peau : en option
+  (`VICTORY_DETAIL_TEXTURES=1`).
+- `01cfafa` : les textures choisies par index sont créées en parallèle (débit doublé).
+- **Visages noirs en cinématique : pas résolu.** Les textures de la peau sont prises par index
+  depuis les constantes du matériau ; environ 19 000 textures attendent que le jeu charge leur
+  mémoire.
+- Écarté après mesure : port #1 (le tas de 174 Mo est en 3 vues hors ordre), `vitesse:1`,
+  lumière indirecte gardée (magenta), profil console Series S (mémoire insuffisante).
+
 ## 26/11/2026 (17 h 20) — le port #2 retiré de `performance`
 
 Partie de l'utilisateur de 16 h 41 (14 min), avec le port #2 :
