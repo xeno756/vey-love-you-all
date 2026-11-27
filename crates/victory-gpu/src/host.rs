@@ -6814,6 +6814,22 @@ impl HostList {
         address: usize,
         len: usize,
     ) {
+        // (PROJECT ONE, from scarlet-fps 1ee1a7f's victory-fps build, GPL-3.0)
+        // `VICTORY_GPU_BACK_MAX_KB=n`: a range over n KiB is not copied back
+        // and nothing waits for it (0: none is); what shaders write there
+        // stays on the card. Unset: every range, as before. The copy back
+        // took 105 ms of a 240 ms frame here (runs of 27/11).
+        static MOST: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+        let most = *MOST.get_or_init(|| {
+            let most = std::env::var("VICTORY_GPU_BACK_MAX_KB").ok().and_then(|v| v.trim().parse::<usize>().ok());
+            if let Some(kb) = most {
+                tracing::info!("shader writes of ranges over {kb} KiB are not copied back into title memory (VICTORY_GPU_BACK_MAX_KB)");
+            }
+            most.map(|kb| kb << 10)
+        });
+        if most.is_some_and(|most| most == 0 || len > most) {
+            return;
+        }
         self.deferred()
             .copies
             .push(Step::GpuWrite(shadow.clone(), address, len));
