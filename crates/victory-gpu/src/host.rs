@@ -3000,6 +3000,24 @@ fn blocked_by(
                     if any_written(src, src + len) {
                         if count {
                             LATE_STATS[16].fetch_add(1, Ordering::Relaxed);
+                            // (PROJECT ONE) What the title fills its
+                            // constants from while shaders in the air write
+                            // it (45 ms a frame of waiting, run of 26/11
+                            // 21:58): its host copy, and whether a view
+                            // there could read the card's bytes instead.
+                            static SAID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                            if SAID.fetch_add(1, Ordering::Relaxed) < 24 {
+                                let copy = crate::shadow::find(src as u64, len as u64);
+                                tracing::info!(
+                                    "a fill of upload memory waits for shaders in the air: title {src:#x}+{len:#x}, \
+                                     host copy {:?}, its card address {}",
+                                    copy.as_ref().map(|s| s.span()),
+                                    copy.as_ref().map_or("none".to_owned(), |s| {
+                                        let gpu = s.gpu(src as u64);
+                                        format!("{gpu:#x} ({}256-byte aligned)", if gpu % 256 == 0 { "" } else { "not " })
+                                    }),
+                                );
+                            }
                         }
                         return Some(WHY_READ);
                     }
