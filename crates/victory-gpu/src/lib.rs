@@ -77,6 +77,8 @@ pub mod splash;
 #[cfg(windows)]
 mod texture;
 #[cfg(windows)]
+mod port_constants;
+#[cfg(windows)]
 pub mod port_descriptors;
 #[cfg(windows)]
 mod watch;

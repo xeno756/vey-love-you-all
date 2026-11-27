@@ -168,6 +168,15 @@ pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
     }
 }
 
+/// (PROJECT ONE) Something placed elsewhere (`crate::port_constants`) in
+/// the same form: counted as [`place_for`] counts, so that [`gone`] takes
+/// it off again and [`title_memory_freeing`] lets it go.
+pub(crate) fn counted(window: bool, bytes: u64) {
+    let at = if window { 0 } else { 2 };
+    STATS[at].fetch_add(1, Ordering::Relaxed);
+    STATS[at + 1].fetch_add(bytes, Ordering::Relaxed);
+}
+
 /// What [`place_for`] gave is gone.
 pub(crate) fn gone(window: bool, bytes: u64) {
     let at = if window { 0 } else { 2 };
@@ -182,6 +191,7 @@ pub(crate) fn gone(window: bool, bytes: u64) {
 /// the runtime to call before the title's own `VirtualFree` once it takes
 /// that call over.
 pub fn title_memory_freeing(at: usize, len: usize) {
+    crate::port_constants::forget(at, len);
     if STATS[0].load(Ordering::Relaxed) + STATS[2].load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -392,6 +402,55 @@ fn cover_in(views: &BTreeMap<usize, (usize, usize, u64)>, at: usize, len: usize)
 /// [`Cover`] of `[at, at + len)` by the title's views as they are now.
 pub(crate) fn cover(at: usize, len: usize) -> Cover {
     cover_in(&views().views, at, len)
+}
+
+/// (PROJECT ONE) The title's views over `[at, at + len)` (address, bytes,
+/// section, offset), the first `most`, for a log line.
+pub(crate) fn views_over(at: usize, len: usize, most: usize) -> String {
+    let v = views();
+    let end = at.saturating_add(len);
+    let first = v.views.range(..=at).next_back().map_or(at, |(&a, _)| a);
+    v.views
+        .range(first..end)
+        .take(most)
+        .map(|(&a, &(n, s, o))| format!("{a:#x}+{n:#x}=s{s:#x}@{o:#x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// (PROJECT ONE, after avatarmanz/VIctory-7900XTX, GPL-3.0-or-later) The
+/// whole stretch of views around `[at, at + len)` that follow one another in
+/// memory and in one section alike, if the range is one run of a section
+/// ([`Cover::Run`]): its first address, its bytes, the section and the
+/// offset of its first byte in it (`crate::port_constants`).
+pub(crate) fn stretch(at: usize, len: usize) -> Option<(usize, usize, usize, u64)> {
+    let v = views();
+    stretch_in(&v.views, at, len)
+}
+
+fn stretch_in(views: &BTreeMap<usize, (usize, usize, u64)>, at: usize, len: usize) -> Option<(usize, usize, usize, u64)> {
+    let Cover::Run(section, offset) = cover_in(views, at, len) else {
+        return None;
+    };
+    // Every view of the stretch has the same address less section offset.
+    let delta = at as i128 - offset as i128;
+    let follows = |a: usize, s: usize, o: u64| s == section && a as i128 - o as i128 == delta;
+    let (&first, &(n, _, _)) = views.range(..=at).next_back()?;
+    let mut start = first;
+    for (&a, &(n, s, o)) in views.range(..first).rev() {
+        if a + n != start || !follows(a, s, o) {
+            break;
+        }
+        start = a;
+    }
+    let mut stop = first + n;
+    for (&a, &(n, s, o)) in views.range(first + 1..) {
+        if a != stop || !follows(a, s, o) {
+            break;
+        }
+        stop = a + n;
+    }
+    Some((start, stop - start, section, (start as i128 - delta) as u64))
 }
 
 /// Whether `[at, at + len)` is private memory, all committed and
@@ -1124,6 +1183,63 @@ mod tests {
             mem::VirtualProtect(base.cast(), K64, mem::PAGE_READONLY, &mut old);
             assert!(!private_whole(base as usize, 2 * K64), "a guarded page");
             mem::VirtualFree(base.cast(), 0, mem::MEM_RELEASE);
+        }
+    }
+
+    /// (PROJECT ONE) Whether a range of ours made of two views of one
+    /// section, mapped next to each other in an order other than the
+    /// section's, opens as ONE heap (`From::Part`), and the card then reads
+    /// the bytes in our address order: what renderer port #1 needs where the
+    /// title's views of its heap are not in the section's order.
+    #[test]
+    fn warp_two_views_out_of_order_open_as_one_heap() {
+
+        let Some(device) = warp() else { return };
+        if device.cast::<ID3D12Device13>().is_err() {
+            return;
+        }
+        // SAFETY (the whole test): the section, placeholder and views made here.
+        unsafe {
+            let process = windows_sys::Win32::System::Threading::GetCurrentProcess();
+            let section = mem::CreateFileMappingW(
+                windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                mem::PAGE_READWRITE | mem::SEC_RESERVE,
+                0,
+                (4 * K64) as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            let hole = mem::VirtualAlloc2(process, std::ptr::null(), 4 * K64, mem::MEM_RESERVE | mem::MEM_RESERVE_PLACEHOLDER, mem::PAGE_NOACCESS, std::ptr::null_mut(), 0).cast::<u8>();
+            assert!(!hole.is_null());
+            assert!(mem::VirtualFree(hole.cast(), 2 * K64, mem::MEM_RELEASE | mem::MEM_PRESERVE_PLACEHOLDER) != 0);
+            // Ours: first the section's pages 2-3, then its pages 0-1.
+            let mut views = Vec::new();
+            for (at, offset) in [(0usize, 2 * K64), (2 * K64, 0usize)] {
+                let view = mem::MapViewOfFile3(section, process, hole.add(at).cast(), offset as u64, 2 * K64, mem::MEM_REPLACE_PLACEHOLDER, mem::PAGE_READWRITE, std::ptr::null_mut(), 0);
+                assert!(!view.Value.is_null(), "{}", std::io::Error::last_os_error());
+                assert!(!mem::VirtualAlloc(view.Value, 2 * K64, mem::MEM_COMMIT, mem::PAGE_READWRITE).is_null());
+                views.push(view);
+            }
+            for (i, b) in std::slice::from_raw_parts_mut(hole, 4 * K64).iter_mut().enumerate() {
+                *b = (i / K64) as u8 + 1;
+            }
+            let opened = open(&device, From::Part(hole as usize, 4 * K64));
+            eprintln!("two views out of the section's order, one heap: {:?}", opened.as_ref().map(|_| ()));
+            if let Ok(heap) = opened {
+                let buffer = place(&device, &heap, 0, (4 * K64) as u64).expect("a buffer in it");
+                let mut rig = Rig::new(&device).unwrap();
+                let got = rig.fetch(&buffer, 0, 4 * K64).unwrap();
+                let pages: Vec<u8> = (0..4).map(|p| got[p * K64]).collect();
+                eprintln!("the card reads pages in our order: {pages:?}");
+                assert_eq!(pages, [1, 2, 3, 4]);
+            }
+            for view in views {
+                mem::UnmapViewOfFile2(process, view, mem::MEM_PRESERVE_PLACEHOLDER);
+            }
+            mem::VirtualFree(hole.cast(), 0, mem::MEM_RELEASE);
+            mem::VirtualFree(hole.add(2 * K64).cast(), 0, mem::MEM_RELEASE);
+            windows_sys::Win32::Foundation::CloseHandle(section);
         }
     }
 

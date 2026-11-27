@@ -525,11 +525,14 @@ pub(crate) static HEAP_VIEWS_ELSEWHERE: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_BUFFER_PASSES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_BUFFER_MICROS: AtomicU64 = AtomicU64::new(0);
 
-/// (PROJECT ONE) `VICTORY_TABLE_SLOTS=0`: a draw's table notes only its
-/// texture views' slots as a table's, as before (`State::tables`).
+/// (PROJECT ONE) `VICTORY_TABLE_SLOTS=1`: a draw's table notes all its
+/// slots but buffer views with an address as a table's (`State::tables`).
+/// Off by default: faster (sync 70-110 -> 13 ms a frame), but the card was
+/// lost in 3 runs of 3 with it and `attentes-textures` (26/11 18:07-18:34),
+/// in none of the runs without it; cause not found.
 fn table_slots() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_TABLE_SLOTS").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| std::env::var_os("VICTORY_TABLE_SLOTS").is_some_and(|v| v == "1"))
 }
 /// (PROJECT ONE) Of [`HEAP_BUFFER_MICROS`]: the slots made, the copies brought
 /// up to date, the textures (microseconds).
@@ -2815,19 +2818,27 @@ impl State {
             for k in 0..n {
                 let index = first + k;
                 let used = entries.iter().find(|u| u.table_offset_dwords / 8 == k);
-                // (PROJECT ONE) The title's slot is a table's whatever it
-                // holds: the draw makes what it reads of it in its dynamic
-                // slots, so the copied records' sync and the pass over buffer
-                // views need not make it in place (before, only texture
-                // views were noted, and 12,000-13,000 constant and buffer
-                // views a frame were made twice for nothing: run of 26/11
-                // 18:00). `VICTORY_TABLE_SLOTS=0`: as before.
+                // (PROJECT ONE) The title's slot is a table's, unless it holds
+                // a texture view (noted below as before, when the draw reads
+                // it) or a buffer view with an address: the draw makes what it reads
+                // of it in its dynamic slots, so the copied records' sync
+                // need not make it in place (before, only texture views were
+                // noted). A buffer view with an address stays as before: the
+                // programs that pick one by index read its address from the
+                // host's table by slot and walk the memory behind it, which
+                // the pass over buffer views keeps up to date (noted as
+                // tables too, run of 26/11 18:07 lost the card three times
+                // in four runs). On with `VICTORY_TABLE_SLOTS=1` only.
+                let view = crate::descriptor::view(table + u64::from(k) * 32);
                 if let Some(title) = title_first
                     && table_slots()
+                    && view.as_ref().is_none_or(|v| {
+                        crate::descriptor::host::buffer_range(v).is_none() && !crate::descriptor::host::is_texture_view(v)
+                    })
                 {
                     host.table_slot_made(title + k);
                 }
-                match crate::descriptor::view(table + u64::from(k) * 32) {
+                match view {
                     Some(View::Constant(address, size)) => {
                         let Some((gpu, to)) = list.scratch(u64::from(size)) else {
                             host.make_null(index);

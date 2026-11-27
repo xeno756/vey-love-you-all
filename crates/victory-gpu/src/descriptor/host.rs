@@ -2048,6 +2048,11 @@ impl HostHeap {
                 }
                 if !tables && self.tabled_lately(index as u32, frame) {
                     COPIED_TABLED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // Not made in place, but its entries in the tables by
+                    // slot are the record's (`note_words`).
+                    let word = |n: usize| u32::from_le_bytes(record[4 * n..4 * n + 4].try_into().unwrap_or([0; 4]));
+                    let view = (word(0) == VIEW_TAG).then(|| view_at(word(1), word(2))).flatten();
+                    let _ = self.note_words(index as u32, view.as_ref());
                     continue;
                 }
                 *last = print;
@@ -2192,6 +2197,31 @@ impl HostHeap {
                 textures.remove(slot);
             }
         }
+        let stride = self.note_words(index, view);
+        let mut buffers = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
+        let was = if stride.is_some() {
+            buffers.insert(index);
+            true
+        } else {
+            buffers.remove(&index)
+        };
+        if was {
+            self.changed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(index);
+        }
+        stale
+    }
+
+    /// Writes title slot `index`'s entries in the host's tables by slot that
+    /// translated shaders read (the descriptor's console dwords, the buffer
+    /// view's stride and title address) from `view`; returns the stride.
+    /// (PROJECT ONE) Also for a slot left to the draws reading it through
+    /// tables ([`HostHeap::mirror_copied_page`]): a shader that reads a
+    /// descriptor's dwords as an address would read a stale one otherwise
+    /// (runs of 26/11 18:07-18:34 lost the card so).
+    fn note_words(&self, index: u32, view: Option<&View>) -> Option<u32> {
         if let Some((_, _, data)) = &self.words
             && index < victory_shader::emit::SLOT_STRIDES_COUNT
         {
@@ -2221,20 +2251,7 @@ impl HostHeap {
                 at.add(1).write_volatile((address >> 32) as u32);
             }
         }
-        let mut buffers = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
-        let was = if stride.is_some() {
-            buffers.insert(index);
-            true
-        } else {
-            buffers.remove(&index)
-        };
-        if was {
-            self.changed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(index);
-        }
-        stale
+        stride
     }
 
     /// Gives back `n` dynamic slots from `first` (an index [`dynamic`]
